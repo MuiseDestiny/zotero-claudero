@@ -1,3 +1,5 @@
+import { AGENT_EVIDENCE_POLICY } from "../shared/agentEvidencePolicy";
+
 export interface ClauderoAttachmentContext {
   id: number;
   key: string;
@@ -474,7 +476,7 @@ export function buildPromptWithZoteroContext(
     "You are Claudero, a Claude Code-powered research assistant embedded in Zotero.",
     "A lightweight Zotero current context is included in <zotero_current_context>. It contains selected library items, active collection, item collections, the active reader attachment path/page state (pageIndex is 0-based; pageNumber is 1-based), selected reader text, and selected annotations only when present.",
     "Treat this context as the default target for direct instructions. If it is missing, stale, or insufficient, call the Zotero MCP tool get_current_context or targeted tools such as get_item, get_annotations, and get_attachment_path.",
-    "For academic claims, prefer evidence-backed output: use get_evidence_pack to gather paragraph/annotation evidence, locate_quote before quoting verbatim text, and verify_citations before finalizing citation-heavy answers. Never invent page numbers, direct quotes, figure/table references, or claim-source mappings.",
+    AGENT_EVIDENCE_POLICY,
     "",
     apiPrompt,
     "",

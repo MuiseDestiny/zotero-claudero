@@ -14,6 +14,20 @@ const tools = [
 ];
 const checks = [
   [
+    "src/shared/agentEvidencePolicy.ts",
+    [
+      "Claudero Default Agent Evidence Policy",
+      "get_evidence_pack",
+      "locate_quote",
+      "verify_citations",
+      "build_trust_report",
+      "build_academic_trace",
+      "inspect_figure_table_page",
+      "includePageImages=false",
+      "Never invent page numbers",
+    ],
+  ],
+  [
     "src/modules/evidence.ts",
     [
       "EvidencePack",
@@ -35,8 +49,20 @@ const checks = [
     ],
   ],
   ["src/modules/zoteroEndpoint.ts", tools],
+  [
+    "src/modules/zoteroContext.ts",
+    ["AGENT_EVIDENCE_POLICY", "agentEvidencePolicy"],
+  ],
   ["src/helper/runtime/ZoteroMcpServer.ts", tools],
+  [
+    "src/helper/runtime/ZoteroMcpServer.ts",
+    ["AGENT_EVIDENCE_POLICY_MCP_INSTRUCTIONS"],
+  ],
   ["src/helper/runtime/ZoteroMcpBridge.ts", tools],
+  [
+    "src/helper/runtime/ZoteroMcpBridge.ts",
+    ["AGENT_EVIDENCE_POLICY_MCP_INSTRUCTIONS"],
+  ],
   ["src/helper/runtime/PermissionManager.ts", tools],
   [
     "src/modules/academicSkills.ts",

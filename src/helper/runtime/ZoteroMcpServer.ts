@@ -1,5 +1,6 @@
 import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { AGENT_EVIDENCE_POLICY_MCP_INSTRUCTIONS } from "../../shared/agentEvidencePolicy";
 import type { PermissionManager } from "./PermissionManager";
 
 type ToolContent =
@@ -148,8 +149,7 @@ export function createZoteroMcpServer(
       "A lightweight current Zotero context is already included in each user request. Use get_current_context only when you need a refresh or when the included context is insufficient.",
       "Use Zotero MCP tools for semantic library state, annotations, attachment paths, evidence packs, citation verification, and safe writes.",
       "For full PDF text, tables, formulas, or layout, get the attachment path and read the local PDF directly with Python instead of asking Zotero MCP for full text.",
-      "For scholarly answers, call get_evidence_pack before making factual claims, locate_quote before quoting, build_trust_report before finalizing claim-heavy output, and build_academic_trace when the answer should be reproducible. Mark unsupported claims instead of inventing citations.",
-      "For figure/table claims, call inspect_figure_table_page when page-level visual evidence is needed; use the rendered page image as the source of truth for caption and visual-content checks.",
+      AGENT_EVIDENCE_POLICY_MCP_INSTRUCTIONS,
       "Read tools can be called directly.",
       "Write tools require user approval before the tool handler performs the operation.",
       "After a successful write, briefly state what changed in one sentence and do not print operation IDs.",

@@ -735,7 +735,7 @@ A lightweight current Zotero context is already included with each user request.
 If you need fresh or deeper Zotero data, use MCP tools: get_current_context, get_item, search_items, get_annotations, get_attachment_path, get_evidence_pack, locate_quote, verify_citations, build_trust_report, build_academic_trace, inspect_figure_table_page, write_tags, create_note, set_field, undo_last, list_history.
 ${dataDirLines}
 Keep MCP usage minimal: use Zotero tools for semantic library state and safe writes; use local file/Python reads for heavy PDF understanding.
-For scholarly answers, prefer get_evidence_pack before making factual claims, use locate_quote before quoting, verify_citations and build_trust_report before finalizing claim-heavy output, and build_academic_trace when the answer should be reproducible. Mark unsupported claims instead of inventing citations.
+Follow the default Agent Evidence Policy included in the prompt when deciding whether to gather evidence, locate quotes, verify claims, build trust reports, or inspect page images.
 Before ANY write operation, confirm with the user or explain what will change.
 Write operations are protected by Claudero's approval dialog and may be denied by the user.
 After a successful write, briefly state what changed in one sentence. Do not print operationId or ask whether to undo.
