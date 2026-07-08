@@ -42,6 +42,13 @@
       ></html:button>
       <html:button
         type="button"
+        id="claudero-pref-tab-skills"
+        class="claudero-pref-tab"
+        data-panel="skills"
+        data-l10n-id="pref-tab-skills"
+      ></html:button>
+      <html:button
+        type="button"
         id="claudero-pref-tab-diagnostics"
         class="claudero-pref-tab"
         data-panel="diagnostics"
@@ -57,6 +64,11 @@
       type="hidden"
       id="zotero-prefpane-__addonRef__-mcpServers"
       preference="mcpServers"
+    ></html:input>
+    <html:input
+      type="hidden"
+      id="zotero-prefpane-__addonRef__-academicSkills"
+      preference="academicSkills"
     ></html:input>
     <vbox id="claudero-pref-panel-general" class="claudero-pref-panel">
       <html:label
@@ -251,6 +263,52 @@
       ></html:div>
       <html:div
         id="claudero-pref-mcp-status"
+        class="claudero-pref-status"
+      ></html:div>
+    </vbox>
+    <vbox
+      id="claudero-pref-panel-skills"
+      class="claudero-pref-panel"
+      hidden="true"
+    >
+      <hbox class="claudero-pref-skills-actions">
+        <html:input
+          type="text"
+          id="claudero-pref-skills-test-input"
+          data-l10n-id="pref-skills-test-placeholder"
+        ></html:input>
+        <html:button
+          type="button"
+          id="claudero-pref-skills-test"
+          data-l10n-id="pref-skills-test"
+        ></html:button>
+      </hbox>
+      <html:div
+        id="claudero-pref-skills-test-result"
+        class="claudero-pref-status"
+      ></html:div>
+      <html:div
+        id="claudero-pref-skills-list"
+        class="claudero-pref-skills-list"
+      ></html:div>
+      <html:label
+        for="claudero-pref-skills-import"
+        data-l10n-id="pref-skills-import"
+      ></html:label>
+      <html:textarea
+        id="claudero-pref-skills-import"
+        rows="8"
+        data-l10n-id="pref-skills-import-placeholder"
+      ></html:textarea>
+      <hbox class="claudero-pref-skills-actions">
+        <html:button
+          type="button"
+          id="claudero-pref-skills-import-button"
+          data-l10n-id="pref-skills-import-button"
+        ></html:button>
+      </hbox>
+      <html:div
+        id="claudero-pref-skills-status"
         class="claudero-pref-status"
       ></html:div>
     </vbox>

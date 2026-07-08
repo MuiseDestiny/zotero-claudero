@@ -3014,6 +3014,93 @@ toolbarbutton.claudero-header-action:hover {
   white-space: nowrap;
 }
 
+.claudero-pref-skills-actions {
+  gap: 6px;
+  align-items: center;
+}
+
+.claudero-pref-skills-actions html|input {
+  flex: 1 1 auto;
+}
+
+.claudero-pref-skills-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 38em;
+  max-width: 100%;
+}
+
+.claudero-pref-skill-card {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+.claudero-pref-skill-card.disabled {
+  opacity: 0.62;
+}
+
+.claudero-pref-skill-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.claudero-pref-skill-title {
+  min-width: 0;
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.claudero-pref-skill-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--fill-secondary);
+  font-size: 11px;
+}
+
+.claudero-pref-skill-badge.update-available {
+  color: #9a3412;
+  background: #ffedd5;
+}
+
+.claudero-pref-skill-badge.modified {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.claudero-pref-skill-badge.disabled {
+  color: #6b7280;
+  background: #f3f4f6;
+}
+
+.claudero-pref-skill-desc,
+.claudero-pref-skill-meta {
+  margin-top: 4px;
+  color: var(--fill-secondary);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.claudero-pref-skill-meta {
+  overflow-wrap: anywhere;
+}
+
+.claudero-pref-skill-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.claudero-pref-skill-actions html|button {
+  padding: 3px 7px;
+}
+
 .claudero-pref-diagnostics-actions {
   gap: 6px;
 }

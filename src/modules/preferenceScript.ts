@@ -22,6 +22,17 @@ import {
   setZoteroMcpEnabled,
   type ManagedMcpServerConfig,
 } from "./mcpSettings";
+import {
+  getAcademicSkillRecords,
+  importAcademicSkillFromText,
+  matchAcademicSkillIntent,
+  resetAcademicSkillToBuiltin,
+  saveAcademicSkillOverride,
+  setAcademicSkillEnabled,
+  updateAcademicSkillToBuiltin,
+  type AcademicSkill,
+  type AcademicSkillRecord,
+} from "./academicSkills";
 import { getPref, setPref } from "../utils/prefs";
 
 export async function registerPrefsScripts(window: Window) {
@@ -53,6 +64,7 @@ export async function registerPrefsScripts(window: Window) {
       "claude",
       "codex",
       "mcp",
+      "skills",
       "diagnostics",
     ].includes(name)
       ? name
@@ -77,6 +89,7 @@ export async function registerPrefsScripts(window: Window) {
   bindProviderEnvironment(doc, "codex");
   bindCodexSettings(doc);
   bindMcpSettings(doc);
+  bindAcademicSkills(doc);
   bindDiagnostics(doc);
   showPanel(String(getPref("settingsProvider") || "general"));
 }
@@ -478,6 +491,220 @@ function bindMcpSettings(doc: Document): void {
     next[name] = { enabled: true, type: "sse", url };
     saveManaged(next);
   });
+}
+
+function bindAcademicSkills(doc: Document): void {
+  const list = doc.querySelector<HTMLElement>("#claudero-pref-skills-list");
+  const status = doc.querySelector<HTMLElement>("#claudero-pref-skills-status");
+  const testInput = doc.querySelector<HTMLInputElement>(
+    "#claudero-pref-skills-test-input",
+  );
+  const testButton = doc.querySelector<HTMLButtonElement>(
+    "#claudero-pref-skills-test",
+  );
+  const testResult = doc.querySelector<HTMLElement>(
+    "#claudero-pref-skills-test-result",
+  );
+  const importText = doc.querySelector<HTMLTextAreaElement>(
+    "#claudero-pref-skills-import",
+  );
+  const importButton = doc.querySelector<HTMLButtonElement>(
+    "#claudero-pref-skills-import-button",
+  );
+  const win = doc.defaultView;
+  if (!list) return;
+
+  const createHtml = <K extends keyof HTMLElementTagNameMap>(
+    tag: K,
+    className?: string,
+  ): HTMLElementTagNameMap[K] => {
+    const el = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      tag,
+    ) as HTMLElementTagNameMap[K];
+    if (className) el.className = className;
+    return el;
+  };
+
+  const setStatus = (message: string, kind: "success" | "error" | "" = "") => {
+    if (!status) return;
+    status.classList.remove("success", "error");
+    if (kind) status.classList.add(kind);
+    status.textContent = message;
+  };
+
+  const shortList = (values: string[] | undefined, fallback = "-") =>
+    values && values.length > 0 ? values.join(", ") : fallback;
+
+  const requirementsText = (record: AcademicSkillRecord): string => {
+    const req = record.skill.contextRequirements;
+    return [
+      `items: ${req.selectedItems || "optional"}`,
+      req.pdfText ? `pdf: ${req.pdfText}` : "",
+      req.annotations ? `annotations: ${req.annotations}` : "",
+      req.notes ? `notes: ${req.notes}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  };
+
+  const toolsText = (record: AcademicSkillRecord): string => {
+    const tools = record.skill.toolPolicy;
+    const enabled = [
+      tools.zoteroMcp ? "Zotero MCP" : "",
+      tools.allowZoteroWrite ? "write notes" : "",
+      tools.allowWebSearch ? "web" : "",
+      tools.allowScripts ? "scripts" : "",
+    ].filter(Boolean);
+    return enabled.length ? enabled.join(", ") : "read-only prompt";
+  };
+
+  const editSkill = (record: AcademicSkillRecord) => {
+    const raw = win?.prompt(
+      `Edit academic skill "${record.skill.title}" JSON`,
+      JSON.stringify(record.skill, null, 2),
+    );
+    if (raw === null || raw === undefined) return;
+    try {
+      const parsed = JSON.parse(raw) as AcademicSkill;
+      if (!parsed.id || !parsed.title) {
+        throw new Error("Skill JSON must include id and title.");
+      }
+      saveAcademicSkillOverride(parsed, record.enabled);
+      setStatus(`Saved ${parsed.title}`, "success");
+      renderList();
+    } catch (error) {
+      setStatus(
+        error instanceof Error
+          ? `Invalid skill JSON: ${error.message}`
+          : "Invalid skill JSON",
+        "error",
+      );
+    }
+  };
+
+  const makeButton = (label: string, onClick: () => void) => {
+    const button = createHtml("button") as HTMLButtonElement;
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", onClick);
+    return button;
+  };
+
+  const renderList = () => {
+    list.replaceChildren();
+    const records = getAcademicSkillRecords();
+    for (const record of records) {
+      const card = createHtml("div", "claudero-pref-skill-card");
+      if (!record.enabled) card.classList.add("disabled");
+
+      const head = createHtml("div", "claudero-pref-skill-head");
+      const title = createHtml("div", "claudero-pref-skill-title");
+      title.textContent = record.skill.title;
+      const badge = createHtml("span", "claudero-pref-skill-badge");
+      badge.classList.add(record.status);
+      badge.textContent = record.status.replace("-", " ");
+      head.append(title, badge);
+
+      const desc = createHtml("div", "claudero-pref-skill-desc");
+      desc.textContent = record.skill.description;
+
+      const meta = createHtml("div", "claudero-pref-skill-meta");
+      meta.textContent = [
+        record.skill.category,
+        requirementsText(record),
+        `output: ${record.skill.outputContract.format}`,
+        `tools: ${toolsText(record)}`,
+      ].join(" · ");
+
+      const examples = createHtml("div", "claudero-pref-skill-meta");
+      examples.textContent = `Examples: ${shortList(record.skill.intentExamples.slice(0, 3))}`;
+
+      const actions = createHtml("div", "claudero-pref-skill-actions");
+      actions.append(
+        makeButton(record.enabled ? "Disable" : "Enable", () => {
+          setAcademicSkillEnabled(record.id, !record.enabled);
+          renderList();
+        }),
+        makeButton("Edit", () => editSkill(record)),
+      );
+      if (record.stored) {
+        actions.append(
+          makeButton("Reset", () => {
+            if (!win?.confirm(`Reset "${record.skill.title}" to builtin?`))
+              return;
+            resetAcademicSkillToBuiltin(record.id);
+            setStatus(`Reset ${record.skill.title}`, "success");
+            renderList();
+          }),
+        );
+      }
+      if (record.updateAvailable) {
+        actions.append(
+          makeButton("Update", () => {
+            if (
+              !win?.confirm(
+                `Update "${record.skill.title}" to the latest builtin template and discard local edits?`,
+              )
+            ) {
+              return;
+            }
+            updateAcademicSkillToBuiltin(record.id);
+            setStatus(`Updated ${record.skill.title}`, "success");
+            renderList();
+          }),
+        );
+      }
+
+      card.append(head, desc, meta, examples, actions);
+      list.appendChild(card);
+    }
+  };
+
+  testButton?.addEventListener("click", () => {
+    const query = testInput?.value.trim() || "";
+    if (!testResult) return;
+    if (!query) {
+      testResult.textContent = "Enter a prompt to test skill routing.";
+      return;
+    }
+    const skills = getAcademicSkillRecords()
+      .filter((record) => record.enabled)
+      .map((record) => record.skill);
+    const match = matchAcademicSkillIntent(query, skills);
+    testResult.classList.remove("success", "error");
+    if (!match) {
+      testResult.textContent =
+        "No academic skill matched; this will run as normal chat.";
+      return;
+    }
+    testResult.classList.add("success");
+    testResult.textContent = `Matched ${match.skill.title} (${match.confidence.toFixed(2)}): ${match.matchedTerms.join(", ")}`;
+  });
+
+  importButton?.addEventListener("click", () => {
+    const raw = importText?.value.trim() || "";
+    if (!raw) {
+      setStatus("Paste skill content before importing.", "error");
+      return;
+    }
+    try {
+      const skill = importAcademicSkillFromText(raw);
+      saveAcademicSkillOverride(skill, false);
+      if (importText) importText.value = "";
+      setStatus(`Imported ${skill.title} as disabled`, "success");
+      renderList();
+    } catch (error) {
+      setStatus(
+        error instanceof Error
+          ? `Import failed: ${error.message}`
+          : "Import failed",
+        "error",
+      );
+    }
+  });
+
+  renderList();
 }
 
 interface DiagnosticsPayload {
