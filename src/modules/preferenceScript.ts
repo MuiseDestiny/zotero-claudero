@@ -623,32 +623,60 @@ function bindAcademicSkills(doc: Document): void {
   const renderList = () => {
     list.replaceChildren();
     const records = getAcademicSkillRecords();
-    for (const record of records) {
-      const card = createHtml("div", "claudero-pref-skill-card");
-      if (!record.enabled) card.classList.add("disabled");
+    const shell = createHtml("div", "claudero-pref-skills-table-shell");
+    const table = createHtml("table", "claudero-pref-skills-table");
+    const thead = createHtml("thead");
+    const headRow = createHtml("tr");
+    for (const label of [
+      "Skill",
+      "Status",
+      "Category",
+      "Context",
+      "Output",
+      "Tools",
+      "Actions",
+    ]) {
+      const th = createHtml("th");
+      th.textContent = label;
+      headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
 
-      const head = createHtml("div", "claudero-pref-skill-head");
+    const tbody = createHtml("tbody");
+    for (const record of records) {
+      const row = createHtml("tr", "claudero-pref-skill-row");
+      if (!record.enabled) row.classList.add("disabled");
+
+      const titleCell = createHtml("td", "claudero-pref-skill-title-cell");
       const title = createHtml("div", "claudero-pref-skill-title");
       title.textContent = record.skill.title;
+      const source = createHtml("div", "claudero-pref-skill-source");
+      source.textContent = record.skill.source?.type || "custom";
+      titleCell.append(title, source);
+
+      const statusCell = createHtml("td");
+      const enabledBadge = createHtml("span", "claudero-pref-skill-badge");
+      enabledBadge.classList.add(record.enabled ? "enabled" : "disabled");
+      enabledBadge.textContent = record.enabled ? "enabled" : "disabled";
       const badge = createHtml("span", "claudero-pref-skill-badge");
       badge.classList.add(record.status);
       badge.textContent = record.status.replace("-", " ");
-      head.append(title, badge);
+      statusCell.append(enabledBadge, badge);
 
-      const desc = createHtml("div", "claudero-pref-skill-desc");
-      desc.textContent = record.skill.description;
+      const categoryCell = createHtml("td");
+      categoryCell.textContent = record.skill.category;
 
-      const meta = createHtml("div", "claudero-pref-skill-meta");
-      meta.textContent = [
-        record.skill.category,
-        requirementsText(record),
-        `output: ${record.skill.outputContract.format}`,
-        `tools: ${toolsText(record)}`,
-      ].join(" · ");
+      const contextCell = createHtml("td");
+      contextCell.textContent = requirementsText(record);
 
-      const examples = createHtml("div", "claudero-pref-skill-meta");
-      examples.textContent = `Examples: ${shortList(record.skill.intentExamples.slice(0, 3))}`;
+      const outputCell = createHtml("td");
+      outputCell.textContent = record.skill.outputContract.format;
 
+      const toolsCell = createHtml("td");
+      toolsCell.textContent = toolsText(record);
+
+      const actionsCell = createHtml("td", "claudero-pref-skill-actions-cell");
       const actions = createHtml("div", "claudero-pref-skill-actions");
       actions.append(
         makeButton(record.enabled ? "Disable" : "Enable", () => {
@@ -684,10 +712,34 @@ function bindAcademicSkills(doc: Document): void {
           }),
         );
       }
+      actionsCell.appendChild(actions);
 
-      card.append(head, desc, meta, examples, actions);
-      list.appendChild(card);
+      row.append(
+        titleCell,
+        statusCell,
+        categoryCell,
+        contextCell,
+        outputCell,
+        toolsCell,
+        actionsCell,
+      );
+      tbody.appendChild(row);
+
+      const detailRow = createHtml("tr", "claudero-pref-skill-detail-row");
+      if (!record.enabled) detailRow.classList.add("disabled");
+      const detailCell = createHtml("td", "claudero-pref-skill-detail-cell");
+      detailCell.colSpan = 7;
+      const desc = createHtml("div", "claudero-pref-skill-desc");
+      desc.textContent = record.skill.description;
+      const examples = createHtml("div", "claudero-pref-skill-meta");
+      examples.textContent = `Examples: ${shortList(record.skill.intentExamples.slice(0, 3))}`;
+      detailCell.append(desc, examples);
+      detailRow.appendChild(detailCell);
+      tbody.appendChild(detailRow);
     }
+    table.appendChild(tbody);
+    shell.appendChild(table);
+    list.appendChild(shell);
   };
 
   testButton?.addEventListener("click", () => {

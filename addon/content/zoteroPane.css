@@ -2916,14 +2916,16 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-stack {
   gap: 8px;
+  width: min(72em, 100%);
 }
 
 .claudero-pref-card {
-  width: 42em;
+  width: min(68em, 100%);
   max-width: 100%;
   border: var(--material-panedivider);
   border-radius: 8px;
-  overflow: visible;
+  overflow: hidden;
+  background: var(--material-background, #fff);
 }
 
 .claudero-pref-tabs-wrapper {
@@ -2950,7 +2952,7 @@ toolbarbutton.claudero-header-action:hover {
   border-radius: 0 !important;
   max-height: none !important;
   margin: 0 !important;
-  padding: 11px 10px !important;
+  padding: 11px 12px !important;
   background: transparent !important;
   color: var(--fill-secondary, #666) !important;
   cursor: pointer !important;
@@ -2983,11 +2985,12 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-tab-content {
-  padding: 1em 1.2em;
+  padding: 1.1em 1.25em;
+  background: var(--material-background, #fff);
 }
 
 .claudero-pref-panel {
-  gap: 8px;
+  gap: 9px;
 }
 
 .claudero-pref-stack html|input,
@@ -3142,11 +3145,99 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-skills-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 38em;
+  width: 100%;
   max-width: 100%;
+}
+
+.claudero-pref-skills-table-shell {
+  width: 100%;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, currentColor 13%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 3%, transparent);
+}
+
+.claudero-pref-skills-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 11.5px;
+}
+
+.claudero-pref-skills-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--material-mix-quarternary, #f5f5f5);
+}
+
+.claudero-pref-skills-table th {
+  padding: 8px 8px;
+  border-bottom: 1px solid var(--material-panedivider);
+  color: var(--fill-secondary, #666);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.claudero-pref-skills-table td {
+  min-width: 0;
+  padding: 7px 8px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 9%, transparent);
+  color: var(--fill-primary, #222);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+}
+
+.claudero-pref-skills-table th:nth-child(1),
+.claudero-pref-skills-table td:nth-child(1) {
+  width: 18%;
+}
+
+.claudero-pref-skills-table th:nth-child(2),
+.claudero-pref-skills-table td:nth-child(2) {
+  width: 13%;
+}
+
+.claudero-pref-skills-table th:nth-child(3),
+.claudero-pref-skills-table td:nth-child(3) {
+  width: 10%;
+}
+
+.claudero-pref-skills-table th:nth-child(4),
+.claudero-pref-skills-table td:nth-child(4) {
+  width: 22%;
+}
+
+.claudero-pref-skills-table th:nth-child(5),
+.claudero-pref-skills-table td:nth-child(5) {
+  width: 10%;
+}
+
+.claudero-pref-skills-table th:nth-child(6),
+.claudero-pref-skills-table td:nth-child(6) {
+  width: 13%;
+}
+
+.claudero-pref-skills-table th:nth-child(7),
+.claudero-pref-skills-table td:nth-child(7) {
+  width: 14%;
+}
+
+.claudero-pref-skill-row:hover td,
+.claudero-pref-skill-row:hover + .claudero-pref-skill-detail-row td {
+  background: color-mix(
+    in srgb,
+    var(--toolbarbutton-active-color, #1a6eb5) 5%,
+    transparent
+  );
+}
+
+.claudero-pref-skill-row.disabled,
+.claudero-pref-skill-detail-row.disabled {
+  opacity: 0.62;
 }
 
 .claudero-pref-skill-card {
@@ -3170,15 +3261,33 @@ toolbarbutton.claudero-header-action:hover {
   min-width: 0;
   font-weight: 600;
   font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-pref-skill-source {
+  margin-top: 2px;
+  color: var(--fill-secondary);
+  font-size: 10.5px;
+  text-transform: lowercase;
 }
 
 .claudero-pref-skill-badge {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  margin: 0 3px 3px 0;
   padding: 1px 6px;
   border-radius: 999px;
   background: color-mix(in srgb, currentColor 10%, transparent);
   color: var(--fill-secondary);
   font-size: 11px;
+}
+
+.claudero-pref-skill-badge.enabled {
+  color: #267246;
+  background: color-mix(in srgb, #267246 13%, transparent);
 }
 
 .claudero-pref-skill-badge.update-available {
@@ -3198,13 +3307,19 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-skill-desc,
 .claudero-pref-skill-meta {
-  margin-top: 4px;
   color: var(--fill-secondary);
   font-size: 11.5px;
   line-height: 1.35;
 }
 
+.claudero-pref-skill-detail-cell {
+  padding-top: 0 !important;
+  color: var(--fill-secondary) !important;
+  background: color-mix(in srgb, currentColor 2.5%, transparent);
+}
+
 .claudero-pref-skill-meta {
+  margin-top: 3px;
   overflow-wrap: anywhere;
 }
 
@@ -3212,11 +3327,15 @@ toolbarbutton.claudero-header-action:hover {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 8px;
+}
+
+.claudero-pref-skill-actions-cell {
+  white-space: normal;
 }
 
 .claudero-pref-skill-actions html|button {
-  padding: 3px 7px;
+  padding: 2px 6px;
+  font-size: 11.5px;
 }
 
 .claudero-pref-diagnostics-actions {
