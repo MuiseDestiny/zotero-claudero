@@ -2,7 +2,12 @@ import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { PermissionManager } from "./PermissionManager";
 
-const WRITE_ACTIONS = new Set(["write_tags", "create_note", "set_field", "undo_last"]);
+const WRITE_ACTIONS = new Set([
+  "write_tags",
+  "create_note",
+  "set_field",
+  "undo_last",
+]);
 
 function permissionSummary(action: string): string {
   switch (action) {
@@ -29,18 +34,26 @@ export function createZoteroMcpServer(
       if (permissionManager.isRemembered(toolName)) {
         // Previously approved for this helper session.
       } else {
-      const requestId = Math.random().toString(36).slice(2, 11);
-      const decision = await permissionManager.request({
-        id: requestId,
-        toolName,
-        input: { action, ...args },
-      });
-      if (!decision.allowed) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: "Operation denied by user" }) }],
-        };
-      }
-      if (decision.remember) permissionManager.remember(toolName);
+        const requestId = Math.random().toString(36).slice(2, 11);
+        const decision = await permissionManager.request({
+          id: requestId,
+          toolName,
+          input: { action, ...args },
+        });
+        if (!decision.allowed) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  success: false,
+                  error: "Operation denied by user",
+                }),
+              },
+            ],
+          };
+        }
+        if (decision.remember) permissionManager.remember(toolName);
       }
     }
 
@@ -59,8 +72,9 @@ export function createZoteroMcpServer(
     alwaysLoad: true,
     instructions: [
       "A lightweight current Zotero context is already included in each user request. Use get_current_context only when you need a refresh or when the included context is insufficient.",
-      "Use Zotero MCP tools for semantic library state, annotations, attachment paths, and safe writes.",
+      "Use Zotero MCP tools for semantic library state, annotations, attachment paths, evidence packs, citation verification, and safe writes.",
       "For full PDF text, tables, formulas, or layout, get the attachment path and read the local PDF directly with Python instead of asking Zotero MCP for full text.",
+      "For scholarly answers, call get_evidence_pack before making factual claims, locate_quote before quoting, and verify_citations before finalizing claim-heavy output. Mark unsupported claims instead of inventing citations.",
       "Read tools can be called directly.",
       "Write tools require user approval before the tool handler performs the operation.",
       "After a successful write, briefly state what changed in one sentence and do not print operation IDs.",
@@ -68,29 +82,35 @@ export function createZoteroMcpServer(
     tools: [
       {
         name: "get_current_context",
-        description: "Refresh the lightweight current Zotero context: selected library items, active reader attachment path, selected reader text, and selected annotations.",
+        description:
+          "Refresh the lightweight current Zotero context: selected library items, active reader attachment path, selected reader text, and selected annotations.",
         inputSchema: {},
         handler: () => call("get_current_context", {}),
       },
       {
         name: "get_item",
-        description: "Get full metadata, notes, and attachments for a Zotero item by item ID.",
+        description:
+          "Get full metadata, notes, and attachments for a Zotero item by item ID.",
         inputSchema: { itemId: z.number() },
         handler: (args) => call("get_item", args),
       },
       {
         name: "search_items",
-        description: "Search the Zotero library by title, author, tag, full text, or general query.",
+        description:
+          "Search the Zotero library by title, author, tag, full text, or general query.",
         inputSchema: {
           query: z.string(),
-          field: z.enum(["any", "title", "author", "tag", "fulltext"]).optional(),
+          field: z
+            .enum(["any", "title", "author", "tag", "fulltext"])
+            .optional(),
           limit: z.number().optional(),
         },
         handler: (args) => call("search_items", args),
       },
       {
         name: "get_annotations",
-        description: "Get Zotero annotations for a regular item, attachment item, or annotation item. Use this for Zotero-created highlights and notes.",
+        description:
+          "Get Zotero annotations for a regular item, attachment item, or annotation item. Use this for Zotero-created highlights and notes.",
         inputSchema: {
           itemId: z.number().optional(),
           attachmentId: z.number().optional(),
@@ -100,7 +120,8 @@ export function createZoteroMcpServer(
       },
       {
         name: "get_attachment_path",
-        description: "Resolve a Zotero attachment local file path. Pass attachmentId, or itemId to pick the item's primary PDF/attachment.",
+        description:
+          "Resolve a Zotero attachment local file path. Pass attachmentId, or itemId to pick the item's primary PDF/attachment.",
         inputSchema: {
           itemId: z.number().optional(),
           attachmentId: z.number().optional(),
@@ -108,8 +129,53 @@ export function createZoteroMcpServer(
         handler: (args) => call("get_attachment_path", args),
       },
       {
+        name: "get_evidence_pack",
+        description:
+          "Build a citation-ready evidence pack for a Zotero item or attachment: ranked paragraphs, annotation provenance, page/open-pdf locators, and figure/table caption candidates. Use before scholarly synthesis or note generation.",
+        inputSchema: {
+          itemId: z.number().optional(),
+          attachmentId: z.number().optional(),
+          query: z.string().optional(),
+          maxParagraphs: z.number().optional(),
+          includeAnnotations: z.boolean().optional(),
+        },
+        handler: (args) => call("get_evidence_pack", args),
+      },
+      {
+        name: "locate_quote",
+        description:
+          "Locate a direct quote in Zotero evidence and return provenance: evidence id, page, paragraph/annotation, and zotero://open-pdf URI when available. Use before quoting text verbatim.",
+        inputSchema: {
+          quote: z.string(),
+          itemId: z.number().optional(),
+          attachmentId: z.number().optional(),
+          maxMatches: z.number().optional(),
+        },
+        handler: (args) => call("locate_quote", args),
+      },
+      {
+        name: "verify_citations",
+        description:
+          "Verify claim-to-source support against Zotero evidence. Returns verified/weak/unverified status, confidence, best evidence, and a claimSourceMap. Use before finalizing citation-heavy academic output.",
+        inputSchema: {
+          itemId: z.number().optional(),
+          attachmentId: z.number().optional(),
+          claims: z.array(
+            z.object({
+              claim: z.string(),
+              quote: z.string().optional(),
+              itemId: z.number().optional(),
+              attachmentId: z.number().optional(),
+              pageIndex: z.number().optional(),
+            }),
+          ),
+        },
+        handler: (args) => call("verify_citations", args),
+      },
+      {
         name: "write_tags",
-        description: "Add or remove tags on a Zotero item. Requires user approval before execution.",
+        description:
+          "Add or remove tags on a Zotero item. Requires user approval before execution.",
         inputSchema: {
           itemId: z.number(),
           add: z.array(z.string()).optional(),
@@ -119,19 +185,26 @@ export function createZoteroMcpServer(
       },
       {
         name: "create_note",
-        description: "Create a note under a Zotero item. Requires user approval before execution.",
+        description:
+          "Create a note under a Zotero item. Requires user approval before execution.",
         inputSchema: { parentId: z.number(), content: z.string() },
         handler: (args) => call("create_note", args),
       },
       {
         name: "set_field",
-        description: "Set a Zotero metadata field on an item. Requires user approval before execution.",
-        inputSchema: { itemId: z.number(), field: z.string(), value: z.string() },
+        description:
+          "Set a Zotero metadata field on an item. Requires user approval before execution.",
+        inputSchema: {
+          itemId: z.number(),
+          field: z.string(),
+          value: z.string(),
+        },
         handler: (args) => call("set_field", args),
       },
       {
         name: "undo_last",
-        description: "Undo the latest reversible Zotero write operation, or a specific operation. Requires user approval before execution.",
+        description:
+          "Undo the latest reversible Zotero write operation, or a specific operation. Requires user approval before execution.",
         inputSchema: { operationId: z.string().optional() },
         handler: (args) => call("undo_last", args),
       },

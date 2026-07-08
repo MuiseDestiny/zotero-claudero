@@ -15,8 +15,18 @@ interface PendingPermissionRequest {
 }
 
 export type ToolDecision =
-  | { behavior: "allow"; updatedInput: Record<string, unknown>; updatedPermissions?: unknown[]; toolUseID?: string }
-  | { behavior: "deny"; message: string; interrupt?: boolean; toolUseID?: string };
+  | {
+      behavior: "allow";
+      updatedInput: Record<string, unknown>;
+      updatedPermissions?: unknown[];
+      toolUseID?: string;
+    }
+  | {
+      behavior: "deny";
+      message: string;
+      interrupt?: boolean;
+      toolUseID?: string;
+    };
 
 export interface ToolOptions {
   signal: AbortSignal;
@@ -29,13 +39,22 @@ const READ_ONLY_ZOTERO_ACTIONS = new Set([
   "search_items",
   "get_annotations",
   "get_attachment_path",
+  "get_evidence_pack",
+  "locate_quote",
+  "verify_citations",
   "list_history",
 ]);
 
-function isReadOnlyZoteroCall(toolName: string, toolInput: Record<string, unknown>): boolean {
+function isReadOnlyZoteroCall(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): boolean {
   if (toolName !== "Bash") return false;
   const command = toolInput.command;
-  if (typeof command !== "string" || !command.includes("127.0.0.1:23119/claudero")) {
+  if (
+    typeof command !== "string" ||
+    !command.includes("127.0.0.1:23119/claudero")
+  ) {
     return false;
   }
   const action = command.match(/"action"\s*:\s*"(\w+)"/)?.[1];
@@ -99,22 +118,42 @@ export class PermissionManager {
   ) => Promise<ToolDecision> {
     return async (toolName, toolInput, toolOptions) => {
       if (isReadOnlyZoteroCall(toolName, toolInput)) {
-        return { behavior: "allow", updatedInput: toolInput, toolUseID: toolOptions.toolUseID };
+        return {
+          behavior: "allow",
+          updatedInput: toolInput,
+          toolUseID: toolOptions.toolUseID,
+        };
       }
       if (this.isRemembered(toolName)) {
-        return { behavior: "allow", updatedInput: toolInput, toolUseID: toolOptions.toolUseID };
+        return {
+          behavior: "allow",
+          updatedInput: toolInput,
+          toolUseID: toolOptions.toolUseID,
+        };
       }
 
       const requestId = Math.random().toString(36).slice(2, 11);
-      const permissionPromise = this.request({ id: requestId, toolName, input: toolInput });
-      const abortHandler = () => { this.cancel(requestId); };
-      toolOptions.signal.addEventListener("abort", abortHandler, { once: true });
+      const permissionPromise = this.request({
+        id: requestId,
+        toolName,
+        input: toolInput,
+      });
+      const abortHandler = () => {
+        this.cancel(requestId);
+      };
+      toolOptions.signal.addEventListener("abort", abortHandler, {
+        once: true,
+      });
 
       try {
         const decision = await permissionPromise;
         if (decision.allowed) {
           if (decision.remember) this.remember(toolName);
-          return { behavior: "allow", updatedInput: toolInput, toolUseID: toolOptions.toolUseID };
+          return {
+            behavior: "allow",
+            updatedInput: toolInput,
+            toolUseID: toolOptions.toolUseID,
+          };
         }
         return { behavior: "deny", message: "Operation denied by user" };
       } finally {

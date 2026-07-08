@@ -31,7 +31,7 @@ import {
 
 // Bump whenever the helper protocol changes so a stale helper process left
 // running from a previous plugin version is detected and restarted by the client.
-const HELPER_VERSION = 22;
+const HELPER_VERSION = 23;
 
 type HelperProvider = "claude" | "codex";
 

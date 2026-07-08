@@ -75,7 +75,9 @@ function getCreatorName(creator: CreatorLike): string {
 
 function truncateContextText(value: string, maxLength: number): string {
   const text = value.trim();
-  return text.length > maxLength ? `${text.slice(0, maxLength)}... [truncated]` : text;
+  return text.length > maxLength
+    ? `${text.slice(0, maxLength)}... [truncated]`
+    : text;
 }
 
 function stripHtml(value: string): string {
@@ -86,7 +88,6 @@ function stripHtml(value: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
-
 
 type CollectionLike = {
   id?: number;
@@ -106,7 +107,11 @@ function getLibraryName(libraryID?: number): string {
 }
 
 function getCollection(collectionID: number): CollectionLike | null {
-  try { return (Zotero.Collections as any).get(collectionID) || null; } catch { return null; }
+  try {
+    return (Zotero.Collections as any).get(collectionID) || null;
+  } catch {
+    return null;
+  }
 }
 
 function getCollectionName(collection: CollectionLike | null): string {
@@ -122,13 +127,16 @@ function getCollectionPath(collection: CollectionLike | null): string {
     seen.add(current.id);
     const name = getCollectionName(current);
     if (name) names.unshift(name);
-    const parentID: number = typeof current.parentID === "number" ? current.parentID : 0;
+    const parentID: number =
+      typeof current.parentID === "number" ? current.parentID : 0;
     current = parentID ? getCollection(parentID) : null;
   }
   return names.join(" / ");
 }
 
-function serializeCollection(collection: CollectionLike | null): ClauderoCollectionContext | undefined {
+function serializeCollection(
+  collection: CollectionLike | null,
+): ClauderoCollectionContext | undefined {
   if (!collection?.id) return undefined;
   return {
     id: collection.id,
@@ -141,7 +149,8 @@ function serializeCollection(collection: CollectionLike | null): ClauderoCollect
 
 function getItemCollections(item: Zotero.Item): ClauderoCollectionContext[] {
   try {
-    const ids = typeof item.getCollections === "function" ? item.getCollections() : [];
+    const ids =
+      typeof item.getCollections === "function" ? item.getCollections() : [];
     return ids
       .map((id: number) => serializeCollection(getCollection(id)))
       .filter(Boolean) as ClauderoCollectionContext[];
@@ -150,18 +159,27 @@ function getItemCollections(item: Zotero.Item): ClauderoCollectionContext[] {
   }
 }
 
-function getActiveCollectionContext(pane: any): ClauderoCollectionContext | undefined {
+function getActiveCollectionContext(
+  pane: any,
+): ClauderoCollectionContext | undefined {
   try {
-    const collection = (pane as any).getSelectedCollection?.()
-      || (pane as any).collectionsView?.getSelectedCollection?.();
+    const collection =
+      (pane as any).getSelectedCollection?.() ||
+      (pane as any).collectionsView?.getSelectedCollection?.();
     if (collection) return serializeCollection(collection);
-  } catch { /* best effort */ }
+  } catch {
+    /* best effort */
+  }
 
   try {
-    const collectionID = (pane as any).collectionsView?.selection?.focused
-      || (pane as any).collectionsView?.selectedID;
-    if (typeof collectionID === "number") return serializeCollection(getCollection(collectionID));
-  } catch { /* best effort */ }
+    const collectionID =
+      (pane as any).collectionsView?.selection?.focused ||
+      (pane as any).collectionsView?.selectedID;
+    if (typeof collectionID === "number")
+      return serializeCollection(getCollection(collectionID));
+  } catch {
+    /* best effort */
+  }
 
   return undefined;
 }
@@ -170,7 +188,9 @@ function getCurrentReaderObject(): any | null {
   try {
     const win = Zotero.getMainWindow() as Window & {
       Zotero_Tabs?: { selectedID?: string; selectedType?: string };
-      Zotero?: typeof Zotero & { Reader?: { getByTabID?: (tabID: string | undefined) => unknown } };
+      Zotero?: typeof Zotero & {
+        Reader?: { getByTabID?: (tabID: string | undefined) => unknown };
+      };
     };
     if (win.Zotero_Tabs?.selectedType !== "reader") return null;
     return win.Zotero?.Reader?.getByTabID?.(win.Zotero_Tabs.selectedID) || null;
@@ -179,20 +199,30 @@ function getCurrentReaderObject(): any | null {
   }
 }
 
-function getCurrentReaderStats(): { pageIndex?: number; pageNumber?: number; pageLabel?: string; pagesCount?: number } {
+function getCurrentReaderStats(): {
+  pageIndex?: number;
+  pageNumber?: number;
+  pageLabel?: string;
+  pagesCount?: number;
+} {
   try {
     const reader = getCurrentReaderObject() as any;
     if (!reader) return {};
     const Cu = (globalThis as any).Components?.utils;
     const rawInternal = reader._internalReader;
-    const internal = Cu?.waiveXrays && rawInternal ? Cu.waiveXrays(rawInternal) : rawInternal;
-    const stats = internal?._state?.primaryViewStats || internal?._state?.primaryViewState;
-    const pageIndex = typeof stats?.pageIndex === "number" ? stats.pageIndex : undefined;
+    const internal =
+      Cu?.waiveXrays && rawInternal ? Cu.waiveXrays(rawInternal) : rawInternal;
+    const stats =
+      internal?._state?.primaryViewStats || internal?._state?.primaryViewState;
+    const pageIndex =
+      typeof stats?.pageIndex === "number" ? stats.pageIndex : undefined;
     return {
       pageIndex,
       pageNumber: typeof pageIndex === "number" ? pageIndex + 1 : undefined,
-      pageLabel: typeof stats?.pageLabel === "string" ? stats.pageLabel : undefined,
-      pagesCount: typeof stats?.pagesCount === "number" ? stats.pagesCount : undefined,
+      pageLabel:
+        typeof stats?.pageLabel === "string" ? stats.pageLabel : undefined,
+      pagesCount:
+        typeof stats?.pagesCount === "number" ? stats.pagesCount : undefined,
     };
   } catch {
     return {};
@@ -212,13 +242,20 @@ async function getAttachmentContext(
     path = (await attachment.getFilePathAsync()) || undefined;
     if (!path) path = (attachment as any).getFilePath?.() || undefined;
   } catch {
-    try { path = (attachment as any).getFilePath?.() || undefined; } catch { path = undefined; }
+    try {
+      path = (attachment as any).getFilePath?.() || undefined;
+    } catch {
+      path = undefined;
+    }
   }
 
   return {
     id: attachment.id,
     key: attachment.key,
-    iconName: (attachment as unknown as { getItemTypeIconName?: () => string }).getItemTypeIconName?.() || undefined,
+    iconName:
+      (
+        attachment as unknown as { getItemTypeIconName?: () => string }
+      ).getItemTypeIconName?.() || undefined,
     title: attachment.getDisplayTitle(),
     contentType: attachment.attachmentContentType || "",
     path,
@@ -227,9 +264,11 @@ async function getAttachmentContext(
 
 export async function getSelectedZoteroContext(): Promise<ClauderoSelectionContext> {
   const pane = Zotero.getActiveZoteroPane();
-  const tabs = (Zotero.getMainWindow() as Window & {
-    Zotero_Tabs?: { selectedType?: string; selectedID?: string };
-  }).Zotero_Tabs;
+  const tabs = (
+    Zotero.getMainWindow() as Window & {
+      Zotero_Tabs?: { selectedType?: string; selectedID?: string };
+    }
+  ).Zotero_Tabs;
   const selectedType = tabs?.selectedType || "";
   const selectedTabID = tabs?.selectedID || "";
   const selected = selectedType === "library" ? pane.getSelectedItems() : [];
@@ -239,7 +278,11 @@ export async function getSelectedZoteroContext(): Promise<ClauderoSelectionConte
       resolvedItems.push(item);
     } else if (item.isAttachment?.()) {
       const parent = item.parentItem;
-      if (parent && parent.isRegularItem() && !resolvedItems.some(i => i.id === parent.id)) {
+      if (
+        parent &&
+        parent.isRegularItem() &&
+        !resolvedItems.some((i) => i.id === parent.id)
+      ) {
         resolvedItems.push(parent);
       }
     }
@@ -261,10 +304,15 @@ export async function getSelectedZoteroContext(): Promise<ClauderoSelectionConte
       date: (item.getField("date", true, true) as string) || "",
       publicationTitle:
         (item.getField("publicationTitle", false, true) as string) || "",
-      abstractNote: stripHtml((item.getField("abstractNote") as string) || "").slice(0, 800),
+      abstractNote: stripHtml(
+        (item.getField("abstractNote") as string) || "",
+      ).slice(0, 800),
       url: (item.getField("url") as string) || "",
       DOI: (item.getField("DOI") as string) || "",
-      tags: item.getTags().map((tag) => tag.tag).slice(0, 30),
+      tags: item
+        .getTags()
+        .map((tag) => tag.tag)
+        .slice(0, 30),
       attachments,
       collections: getItemCollections(item),
     });
@@ -291,7 +339,9 @@ export function getCurrentReaderFilePath(): string {
   }
 }
 
-function getCurrentReaderAttachmentContext(): ClauderoAttachmentContext | undefined {
+function getCurrentReaderAttachmentContext():
+  | ClauderoAttachmentContext
+  | undefined {
   const item = getCurrentReaderItem();
   if (!item) return undefined;
   const parent = item.parentItem;
@@ -300,11 +350,16 @@ function getCurrentReaderAttachmentContext(): ClauderoAttachmentContext | undefi
     id: typeof item.id === "number" ? item.id : 0,
     key: typeof item.key === "string" ? item.key : "",
     _item: item,
-    iconName: (item as unknown as { getItemTypeIconName?: () => string }).getItemTypeIconName?.() || undefined,
-    title: typeof item.getDisplayTitle === "function" ? item.getDisplayTitle() : "",
-    contentType: typeof item.attachmentContentType === "string"
-      ? item.attachmentContentType
-      : "",
+    iconName:
+      (
+        item as unknown as { getItemTypeIconName?: () => string }
+      ).getItemTypeIconName?.() || undefined,
+    title:
+      typeof item.getDisplayTitle === "function" ? item.getDisplayTitle() : "",
+    contentType:
+      typeof item.attachmentContentType === "string"
+        ? item.attachmentContentType
+        : "",
     path: getCurrentReaderFilePath() || undefined,
     parentItemID: parent?.id,
     parentItemKey: parent?.key,
@@ -316,9 +371,17 @@ function getCurrentReaderAttachmentContext(): ClauderoAttachmentContext | undefi
   };
 }
 
-export function getCurrentReaderItem(): (Zotero.Item & { getFilePath?: () => string }) | null {
+export function getCurrentReaderItem():
+  | (Zotero.Item & { getFilePath?: () => string })
+  | null {
   try {
-    return (getCurrentReaderObject() as { _item?: Zotero.Item & { getFilePath?: () => string } } | null)?._item ?? null;
+    return (
+      (
+        getCurrentReaderObject() as {
+          _item?: Zotero.Item & { getFilePath?: () => string };
+        } | null
+      )?._item ?? null
+    );
   } catch {
     return null;
   }
@@ -354,7 +417,9 @@ export function getSelectedReaderAnnotations(): ClauderoAnnotationContext[] {
       };
     };
     if (win.Zotero_Tabs?.selectedType !== "reader") return [];
-    const reader = win.Zotero?.Reader?.getByTabID?.(win.Zotero_Tabs.selectedID) as any;
+    const reader = win.Zotero?.Reader?.getByTabID?.(
+      win.Zotero_Tabs.selectedID,
+    ) as any;
     if (!reader) return [];
     // _internalReader lives in the reader iframe's compartment; accessing its
     // properties (and the _selectedAnnotationIDs array) from privileged code
@@ -369,22 +434,31 @@ export function getSelectedReaderAnnotations(): ClauderoAnnotationContext[] {
     try {
       const len = Number(rawKeys?.length) || 0;
       for (let i = 0; i < len; i++) keys.push(String(rawKeys[i]));
-    } catch { return []; }
+    } catch {
+      return [];
+    }
     if (!keys.length) return [];
     return keys.flatMap((key: string) => {
       try {
-        const item = Zotero.Items.getByLibraryAndKey(reader._item?.libraryID, key) as any;
+        const item = Zotero.Items.getByLibraryAndKey(
+          reader._item?.libraryID,
+          key,
+        ) as any;
         if (!item) return [];
-        return [{
-          text: (item.annotationText || "").trim(),
-          comment: item.annotationComment || undefined,
-          type: item.annotationType || "highlight",
-          color: item.annotationColor || undefined,
-          pageIndex: item.annotationPosition
-            ? JSON.parse(item.annotationPosition).pageIndex
-            : undefined,
-        }];
-      } catch { return []; }
+        return [
+          {
+            text: (item.annotationText || "").trim(),
+            comment: item.annotationComment || undefined,
+            type: item.annotationType || "highlight",
+            color: item.annotationColor || undefined,
+            pageIndex: item.annotationPosition
+              ? JSON.parse(item.annotationPosition).pageIndex
+              : undefined,
+          },
+        ];
+      } catch {
+        return [];
+      }
     });
   } catch {
     return [];
@@ -400,6 +474,7 @@ export function buildPromptWithZoteroContext(
     "You are Claudero, a Claude Code-powered research assistant embedded in Zotero.",
     "A lightweight Zotero current context is included in <zotero_current_context>. It contains selected library items, active collection, item collections, the active reader attachment path/page state (pageIndex is 0-based; pageNumber is 1-based), selected reader text, and selected annotations only when present.",
     "Treat this context as the default target for direct instructions. If it is missing, stale, or insufficient, call the Zotero MCP tool get_current_context or targeted tools such as get_item, get_annotations, and get_attachment_path.",
+    "For academic claims, prefer evidence-backed output: use get_evidence_pack to gather paragraph/annotation evidence, locate_quote before quoting verbatim text, and verify_citations before finalizing citation-heavy answers. Never invent page numbers, direct quotes, figure/table references, or claim-source mappings.",
     "",
     apiPrompt,
     "",

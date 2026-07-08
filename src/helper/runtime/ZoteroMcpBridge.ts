@@ -11,8 +11,9 @@ const WRITE_ACTIONS = new Set([
 
 const INSTRUCTIONS = [
   "A lightweight current Zotero context is already included in each user request. Use get_current_context only when you need a refresh or when the included context is insufficient.",
-  "Use Zotero MCP tools for semantic library state, annotations, attachment paths, and safe writes.",
+  "Use Zotero MCP tools for semantic library state, annotations, attachment paths, evidence packs, citation verification, and safe writes.",
   "For full PDF text, tables, formulas, or layout, get the attachment path and read the local PDF directly with Python instead of asking Zotero MCP for full text.",
+  "For scholarly answers, call get_evidence_pack before making factual claims, locate_quote before quoting, and verify_citations before finalizing claim-heavy output. Mark unsupported claims instead of inventing citations.",
   "Read tools can be called directly.",
   "Write tools require user approval before the tool handler performs the operation.",
   "After a successful write, briefly state what changed in one sentence and do not print operation IDs.",
@@ -124,6 +125,59 @@ function tools(): JsonRecord[] {
       }),
     },
     {
+      name: "get_evidence_pack",
+      description:
+        "Build a citation-ready evidence pack for a Zotero item or attachment: ranked paragraphs, annotation provenance, page/open-pdf locators, and figure/table caption candidates. Use before scholarly synthesis or note generation.",
+      inputSchema: toolSchema({
+        itemId: { type: "number" },
+        attachmentId: { type: "number" },
+        query: { type: "string" },
+        maxParagraphs: { type: "number" },
+        includeAnnotations: { type: "boolean" },
+      }),
+    },
+    {
+      name: "locate_quote",
+      description:
+        "Locate a direct quote in Zotero evidence and return provenance: evidence id, page, paragraph/annotation, and zotero://open-pdf URI when available. Use before quoting text verbatim.",
+      inputSchema: toolSchema(
+        {
+          quote: { type: "string" },
+          itemId: { type: "number" },
+          attachmentId: { type: "number" },
+          maxMatches: { type: "number" },
+        },
+        ["quote"],
+      ),
+    },
+    {
+      name: "verify_citations",
+      description:
+        "Verify claim-to-source support against Zotero evidence. Returns verified/weak/unverified status, confidence, best evidence, and a claimSourceMap. Use before finalizing citation-heavy academic output.",
+      inputSchema: toolSchema(
+        {
+          itemId: { type: "number" },
+          attachmentId: { type: "number" },
+          claims: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                claim: { type: "string" },
+                quote: { type: "string" },
+                itemId: { type: "number" },
+                attachmentId: { type: "number" },
+                pageIndex: { type: "number" },
+              },
+              required: ["claim"],
+              additionalProperties: false,
+            },
+          },
+        },
+        ["claims"],
+      ),
+    },
+    {
       name: "write_tags",
       description:
         "Add or remove tags on a Zotero item. Requires user approval before execution.",
@@ -183,10 +237,7 @@ function result(id: number | string | undefined, value: unknown): void {
   writeFrame({ jsonrpc: "2.0", id, result: value });
 }
 
-function errorResponse(
-  id: number | string | undefined,
-  message: string,
-): void {
+function errorResponse(id: number | string | undefined, message: string): void {
   if (id === undefined) return;
   writeFrame({ jsonrpc: "2.0", id, error: { code: -32603, message } });
 }

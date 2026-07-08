@@ -129,7 +129,7 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
     routingGuidance:
       "Use when the user asks to summarize, digest, outline, or understand one selected paper or the current PDF.",
     category: "reading",
-    builtinVersion: 1,
+    builtinVersion: 2,
     intentExamples: [
       "summarize this paper",
       "帮我总结这篇论文",
@@ -161,8 +161,8 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
     },
     promptTemplate: {
       system:
-        "You are running Claudero's summarize-paper academic workflow. Ground the answer in Zotero metadata, PDF text, selected text, and annotations when available. Do not invent details that are not present in the context.",
-      task: "Summarize the paper using the output sections exactly. If evidence is missing, say what is missing instead of guessing.",
+        "You are running Claudero's summarize-paper academic workflow. Ground the answer in Zotero metadata, PDF text, selected text, annotations, and get_evidence_pack results when available. Do not invent details that are not present in the context.",
+      task: "Summarize the paper using the output sections exactly. Include evidence locations for key findings and limitations. If evidence is missing, say what is missing instead of guessing.",
     },
     source: { type: "builtin" },
   },
@@ -174,7 +174,7 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
     routingGuidance:
       "Use when the user asks about methods, methodology, experiment design, sample, dataset, variables, measures, procedure, or analysis strategy.",
     category: "extraction",
-    builtinVersion: 1,
+    builtinVersion: 2,
     intentExamples: [
       "extract the methods",
       "提取方法部分",
@@ -218,8 +218,8 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
     },
     promptTemplate: {
       system:
-        "You are running Claudero's extract-methods academic workflow. Extract methods from the provided Zotero/PDF context and keep claims tied to evidence.",
-      task: "Return the method extraction using the output sections exactly. Include page, quote, annotation, or metadata clues when available.",
+        "You are running Claudero's extract-methods academic workflow. Extract methods from the provided Zotero/PDF context and get_evidence_pack results, and keep claims tied to evidence.",
+      task: "Return the method extraction using the output sections exactly. Include page, quote, annotation, paragraph id, or metadata clues when available. Use locate_quote before direct quotes.",
     },
     source: { type: "builtin" },
   },
@@ -231,7 +231,7 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
     routingGuidance:
       "Use when the user asks to compare multiple papers, build a literature matrix, synthesize selected references, or contrast methods/findings.",
     category: "comparison",
-    builtinVersion: 1,
+    builtinVersion: 2,
     intentExamples: [
       "compare these papers",
       "做一个文献矩阵",
@@ -275,8 +275,66 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
     },
     promptTemplate: {
       system:
-        "You are running Claudero's literature-matrix academic workflow. Compare selected Zotero items using only available context and clearly mark missing evidence.",
-      task: "Create a Markdown table using the output columns exactly, followed by a concise synthesis of patterns, disagreements, and gaps.",
+        "You are running Claudero's literature-matrix academic workflow. Compare selected Zotero items using only available context and get_evidence_pack results, clearly marking missing evidence.",
+      task: "Create a Markdown table using the output columns exactly, followed by a concise synthesis of patterns, disagreements, and gaps. Add compact evidence locations for high-value claims, and use verify_citations when claims are citation-heavy.",
+    },
+    source: { type: "builtin" },
+  },
+  {
+    id: "verify-citations",
+    title: "Verify Citations",
+    description:
+      "Checks direct quotes, factual claims, page references, figure/table references, and claim-to-source support against Zotero evidence.",
+    routingGuidance:
+      "Use when the user asks to verify citations, check quotes, validate page references, audit evidence, map claims to sources, or inspect figure/table references.",
+    category: "verification",
+    builtinVersion: 1,
+    intentExamples: [
+      "verify these citations",
+      "检查这些引用是否可靠",
+      "核查这段综述的来源",
+      "map claims to sources",
+      "check this quote and page number",
+    ],
+    negativeExamples: ["summarize this paper", "compare these papers"],
+    keywords: [
+      "verify",
+      "verification",
+      "citation",
+      "citations",
+      "quote",
+      "provenance",
+      "claim",
+      "source",
+      "page",
+      "figure",
+      "table",
+      "核查",
+      "验证",
+      "引用",
+      "引文",
+      "来源",
+      "证据",
+      "页码",
+      "图表",
+    ],
+    contextRequirements: {
+      selectedItems: "optional",
+      pdfText: "preferred",
+      annotations: "optional",
+      notes: "optional",
+    },
+    toolPolicy: DEFAULT_TOOL_POLICY,
+    outputContract: {
+      format: "markdown-table",
+      target: "chat",
+      language: "auto",
+      columns: ["Claim", "Status", "Evidence", "Location", "Issue", "Fix"],
+    },
+    promptTemplate: {
+      system:
+        "You are running Claudero's verify-citations academic workflow. Use get_evidence_pack, locate_quote, and verify_citations to audit claims against Zotero evidence. Never invent page numbers, quotes, or sources.",
+      task: "Return a verification table. Mark each claim as verified, weak, or unverified. Include evidence id, page/openUri when available, quote provenance for direct quotes, and a concrete fix for weak or unsupported claims.",
     },
     source: { type: "builtin" },
   },
