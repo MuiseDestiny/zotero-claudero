@@ -73,9 +73,17 @@ export async function registerPrefsScripts(window: Window) {
   const updateTabIndicator = () => {
     if (!tabNav || !tabIndicator) return;
     const active = tabs.find((tab) => tab.dataset.active === "true");
-    if (!active) return;
+    if (!active) {
+      delete tabNav.dataset.indicatorReady;
+      return;
+    }
     tabIndicator.style.left = `${active.offsetLeft}px`;
     tabIndicator.style.width = `${active.offsetWidth}px`;
+    if (active.offsetWidth > 0) {
+      tabNav.dataset.indicatorReady = "true";
+    } else {
+      delete tabNav.dataset.indicatorReady;
+    }
   };
   const scheduleTabIndicatorUpdate = () => {
     updateTabIndicator();
