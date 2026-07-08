@@ -35,6 +35,11 @@ import {
 } from "./academicSkills";
 import { getPref, setPref } from "../utils/prefs";
 
+type XulValueElement = HTMLElement & {
+  value: string;
+  disabled?: boolean;
+};
+
 export async function registerPrefsScripts(window: Window) {
   const doc = window.document;
   const testButton = doc.querySelector<HTMLButtonElement>(
@@ -54,10 +59,21 @@ export async function registerPrefsScripts(window: Window) {
 
   const tabs = Array.from(
     doc.querySelectorAll(".claudero-pref-tab"),
-  ) as HTMLButtonElement[];
+  ) as HTMLElement[];
   const panels = Array.from(
     doc.querySelectorAll(".claudero-pref-panel"),
   ) as HTMLElement[];
+  const tabNav = doc.querySelector<HTMLElement>("#claudero-pref-tabs-nav");
+  const tabIndicator = doc.querySelector<HTMLElement>(
+    "#claudero-pref-tab-indicator",
+  );
+  const updateTabIndicator = () => {
+    if (!tabNav || !tabIndicator) return;
+    const active = tabs.find((tab) => tab.dataset.active === "true");
+    if (!active) return;
+    tabIndicator.style.left = `${active.offsetLeft}px`;
+    tabIndicator.style.width = `${active.offsetWidth}px`;
+  };
   const showPanel = (name: string) => {
     const normalized = [
       "general",
@@ -70,18 +86,22 @@ export async function registerPrefsScripts(window: Window) {
       ? name
       : "general";
     setPref("settingsProvider", normalized);
-    tabs.forEach((tab) =>
-      tab.classList.toggle("active", tab.dataset.panel === normalized),
-    );
+    tabs.forEach((tab) => {
+      const active = tab.dataset.panel === normalized;
+      tab.dataset.active = active ? "true" : "false";
+    });
     panels.forEach((panel) => {
       panel.hidden = panel.id !== `claudero-pref-panel-${normalized}`;
     });
+    updateTabIndicator();
+    window.requestAnimationFrame(updateTabIndicator);
   };
   tabs.forEach((tab) => {
     tab.addEventListener("click", () =>
       showPanel(tab.dataset.panel || "general"),
     );
   });
+  window.addEventListener("resize", updateTabIndicator);
 
   bindProviderPath(doc, "claude");
   bindProviderPath(doc, "codex");
@@ -92,6 +112,7 @@ export async function registerPrefsScripts(window: Window) {
   bindAcademicSkills(doc);
   bindDiagnostics(doc);
   showPanel(String(getPref("settingsProvider") || "general"));
+  window.setTimeout(updateTabIndicator, 0);
 }
 
 async function readHelperToken(): Promise<string> {
@@ -134,19 +155,26 @@ function bindProviderEnvironment(doc: Document, provider: AiProvider): void {
 }
 
 function bindCodexSettings(doc: Document): void {
-  const installation = doc.querySelector<HTMLSelectElement>(
+  const installation = doc.querySelector<XulValueElement>(
     "#claudero-pref-codex-installation",
   );
   const distro = doc.querySelector<HTMLInputElement>(
     "#claudero-pref-codex-wsl-distro",
   );
-  const safeMode = doc.querySelector<HTMLSelectElement>(
+  const safeMode = doc.querySelector<XulValueElement>(
     "#claudero-pref-codex-safe-mode",
   );
+  const bindValueCommit = (
+    element: XulValueElement,
+    handler: () => void,
+  ): void => {
+    element.addEventListener("command", handler);
+    element.addEventListener("change", handler);
+  };
 
   if (installation) {
     installation.value = getCodexInstallationMethod();
-    installation.addEventListener("change", () => {
+    bindValueCommit(installation, () => {
       setCodexInstallationMethod(installation.value);
       if (distro) distro.disabled = installation.value !== "wsl";
     });
@@ -159,7 +187,7 @@ function bindCodexSettings(doc: Document): void {
   }
   if (safeMode) {
     safeMode.value = getCodexSafeMode();
-    safeMode.addEventListener("change", () => {
+    bindValueCommit(safeMode, () => {
       setCodexSafeMode(safeMode.value);
     });
   }

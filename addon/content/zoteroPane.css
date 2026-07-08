@@ -2848,24 +2848,72 @@ toolbarbutton.claudero-header-action:hover {
   gap: 8px;
 }
 
+.claudero-pref-card {
+  width: 42em;
+  max-width: 100%;
+  border: var(--material-panedivider);
+  border-radius: 8px;
+  overflow: visible;
+}
+
+.claudero-pref-tabs-wrapper {
+  position: relative;
+  border-radius: 8px 8px 0 0;
+  overflow: hidden;
+}
+
 .claudero-pref-tabs {
   display: flex;
-  gap: 6px;
-  margin: 4px 0 8px;
+  position: relative;
+  align-items: stretch;
+  border-bottom: 1px solid var(--material-panedivider);
+  background: var(--material-mix-quarternary, #f5f5f5);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
 
 .claudero-pref-tab {
-  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-  border-radius: 6px;
-  padding: 5px 10px;
-  background: color-mix(in srgb, currentColor 5%, transparent);
-  color: inherit;
+  appearance: none !important;
+  flex: 0 0 auto;
+  border: none !important;
+  border-radius: 0 !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 11px 10px !important;
+  background: transparent !important;
+  color: var(--fill-secondary, #666) !important;
+  cursor: pointer !important;
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+  white-space: nowrap !important;
 }
 
-.claudero-pref-tab.active {
-  background: AccentColor;
-  border-color: AccentColor;
-  color: AccentColorText;
+.claudero-pref-tab:hover {
+  color: var(--fill-primary, #333) !important;
+}
+
+.claudero-pref-tab[data-active="true"] {
+  color: var(--toolbarbutton-active-color, #1a6eb5) !important;
+  font-weight: 500 !important;
+}
+
+#claudero-pref-tab-indicator {
+  position: absolute;
+  bottom: 1px;
+  left: 0;
+  width: 0;
+  height: 3px;
+  border-radius: 9999px;
+  background: var(--toolbarbutton-active-color, #1a6eb5);
+  pointer-events: none;
+  transition:
+    left 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.claudero-pref-tab-content {
+  padding: 1em 1.2em;
 }
 
 .claudero-pref-panel {
@@ -2874,7 +2922,7 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-stack html|input,
 .claudero-pref-stack html|textarea,
-.claudero-pref-stack html|select {
+.claudero-pref-stack menulist {
   width: 38em;
   max-width: 100%;
   box-sizing: border-box;
