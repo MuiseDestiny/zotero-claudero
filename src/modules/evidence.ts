@@ -12,6 +12,7 @@ export interface EvidenceLocator {
   annotationKey?: string;
   position?: EvidencePosition;
   openUri?: string;
+  evidenceUri?: string;
 }
 
 export interface EvidencePosition {
@@ -534,6 +535,35 @@ function makeOpenPdfUri(
   return `zotero://open-pdf/library/items/${attachment.key}${suffix ? `?${suffix}` : ""}`;
 }
 
+function makeEvidenceUri(
+  locator: Omit<EvidenceLocator, "evidenceUri">,
+): string | undefined {
+  if (!locator.attachmentId) return undefined;
+  const compactLocator = {
+    itemId: locator.itemId,
+    itemKey: locator.itemKey,
+    attachmentId: locator.attachmentId,
+    attachmentKey: locator.attachmentKey,
+    title: locator.title,
+    sourceType: locator.sourceType,
+    pageIndex: locator.pageIndex,
+    pageNumber: locator.pageNumber,
+    paragraphIndex: locator.paragraphIndex,
+    annotationId: locator.annotationId,
+    annotationKey: locator.annotationKey,
+    openUri: locator.openUri,
+    position: locator.position
+      ? {
+          pageIndex: locator.position.pageIndex,
+          rects: locator.position.rects?.slice(0, 48),
+        }
+      : undefined,
+  };
+  return `claudero-evidence:${encodeURIComponent(
+    JSON.stringify(compactLocator),
+  )}`;
+}
+
 function itemMetadata(item: Zotero.Item): EvidencePack["item"] {
   return {
     id: item.id,
@@ -555,26 +585,28 @@ function paragraphEvidence(options: {
   idPrefix: string;
   position?: EvidencePosition;
 }): EvidenceParagraph {
+  const locator: Omit<EvidenceLocator, "evidenceUri"> = {
+    itemId: options.item.id,
+    itemKey: options.item.key,
+    attachmentId: options.attachment?.id,
+    attachmentKey: options.attachment?.key,
+    title:
+      options.item.getDisplayTitle?.() ||
+      String(options.item.getField("title") || ""),
+    sourceType: options.sourceType,
+    pageIndex: options.pageIndex,
+    pageNumber:
+      typeof options.pageIndex === "number" ? options.pageIndex + 1 : undefined,
+    paragraphIndex: options.paragraphIndex,
+    position: options.position,
+    openUri: makeOpenPdfUri(options.attachment, options.pageIndex),
+  };
   return {
     id: `${options.idPrefix}-${options.paragraphIndex + 1}`,
     text: compact(options.text, 2400),
     locator: {
-      itemId: options.item.id,
-      itemKey: options.item.key,
-      attachmentId: options.attachment?.id,
-      attachmentKey: options.attachment?.key,
-      title:
-        options.item.getDisplayTitle?.() ||
-        String(options.item.getField("title") || ""),
-      sourceType: options.sourceType,
-      pageIndex: options.pageIndex,
-      pageNumber:
-        typeof options.pageIndex === "number"
-          ? options.pageIndex + 1
-          : undefined,
-      paragraphIndex: options.paragraphIndex,
-      position: options.position,
-      openUri: makeOpenPdfUri(options.attachment, options.pageIndex),
+      ...locator,
+      evidenceUri: makeEvidenceUri(locator),
     },
   };
 }
@@ -716,15 +748,23 @@ function extractFigureTableCandidates(
   return candidates.slice(0, 20);
 }
 
-function parseAnnotationPosition(position: unknown): { pageIndex?: number } {
-  if (typeof position !== "string" || !position) return {};
+function parseAnnotationPosition(
+  position: unknown,
+): EvidencePosition | undefined {
+  if (typeof position !== "string" || !position) return undefined;
   try {
-    const parsed = JSON.parse(position) as { pageIndex?: number };
+    const parsed = JSON.parse(position) as EvidencePosition;
     return typeof parsed.pageIndex === "number"
-      ? { pageIndex: parsed.pageIndex }
-      : {};
+      ? {
+          pageIndex: parsed.pageIndex,
+          rects: Array.isArray(parsed.rects)
+            ? compactRects(parsed.rects)
+            : undefined,
+          lines: Array.isArray(parsed.lines) ? parsed.lines : undefined,
+        }
+      : undefined;
   } catch {
-    return {};
+    return undefined;
   }
 }
 
@@ -767,23 +807,27 @@ async function annotationEvidence(
         .filter(Boolean)
         .join("\n");
       if (!text) continue;
+      const locator: Omit<EvidenceLocator, "evidenceUri"> = {
+        itemId: item.id,
+        itemKey: item.key,
+        attachmentId: att.id,
+        attachmentKey: att.key,
+        title: item.getDisplayTitle?.() || String(item.getField("title") || ""),
+        sourceType: "annotation",
+        pageIndex: page?.pageIndex,
+        pageNumber:
+          typeof page?.pageIndex === "number" ? page.pageIndex + 1 : undefined,
+        annotationId: annotation.id,
+        annotationKey: annotation.key,
+        position: page,
+        openUri: makeOpenPdfUri(att, page?.pageIndex, annotation.key),
+      };
       out.push({
         id: `anno-${annotation.id}`,
         text: compact(text, 1800),
         locator: {
-          itemId: item.id,
-          itemKey: item.key,
-          attachmentId: att.id,
-          attachmentKey: att.key,
-          title:
-            item.getDisplayTitle?.() || String(item.getField("title") || ""),
-          sourceType: "annotation",
-          pageIndex: page.pageIndex,
-          pageNumber:
-            typeof page.pageIndex === "number" ? page.pageIndex + 1 : undefined,
-          annotationId: annotation.id,
-          annotationKey: annotation.key,
-          openUri: makeOpenPdfUri(att, page.pageIndex, annotation.key),
+          ...locator,
+          evidenceUri: makeEvidenceUri(locator),
         },
       });
     }

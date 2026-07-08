@@ -31,6 +31,25 @@ const markdownRenderer: MarkdownIt = new MarkdownIt({
   errorColor: "#be4246",
 });
 
+const evidenceScheme = "claudero-evidence:";
+
+interface EvidenceLinkLocator {
+  itemId?: number;
+  attachmentId?: number;
+  title?: string;
+  sourceType?: string;
+  pageIndex?: number;
+  pageNumber?: number;
+  paragraphIndex?: number;
+  annotationId?: number;
+  annotationKey?: string;
+  openUri?: string;
+  position?: {
+    pageIndex?: number;
+    rects?: number[][];
+  };
+}
+
 function normalizeMathDelimiters(text: string): string {
   // Protect code blocks and inline code from conversion.
   const parts = text.split(/(```[\s\S]*?```|`[^`\n]+`)/g);
@@ -51,10 +70,17 @@ $$
     .join("");
 }
 
+function evidenceMarkerLabel(value: string): string | null {
+  const match = value
+    .trim()
+    .match(
+      /^\[?((?:para|anno|fig|figure|table|claim|evidence)-[A-Za-z0-9_.:-]+)\]?$/i,
+    );
+  return match ? `[${match[1]}]` : null;
+}
+
 function isEvidenceMarker(value: string): boolean {
-  return /^\[(?:para|anno|fig|figure|table|claim|evidence)-[A-Za-z0-9_.:-]+\]$/i.test(
-    value.trim(),
-  );
+  return !!evidenceMarkerLabel(value);
 }
 
 function createEvidenceChip(doc: Document, marker: string): HTMLElement {
@@ -70,24 +96,182 @@ function createEvidenceChip(doc: Document, marker: string): HTMLElement {
   return chip;
 }
 
+function parseEvidenceLocator(href: string): EvidenceLinkLocator | null {
+  if (!href.startsWith(evidenceScheme)) return null;
+  try {
+    const encoded = href.slice(evidenceScheme.length);
+    const parsed = JSON.parse(decodeURIComponent(encoded));
+    return parsed && typeof parsed === "object"
+      ? (parsed as EvidenceLinkLocator)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function evidenceLocatorTitle(
+  marker: string,
+  locator?: EvidenceLinkLocator | null,
+): string {
+  if (!locator) {
+    return `${marker} evidence marker. Use the cited evidence tool output for provenance.`;
+  }
+  const parts = [
+    marker,
+    locator.sourceType ? `source: ${locator.sourceType}` : "",
+    typeof locator.pageNumber === "number"
+      ? `page: ${locator.pageNumber}`
+      : typeof locator.pageIndex === "number"
+        ? `page: ${locator.pageIndex + 1}`
+        : "",
+    typeof locator.paragraphIndex === "number"
+      ? `paragraph: ${locator.paragraphIndex + 1}`
+      : "",
+    locator.annotationKey ? `annotation: ${locator.annotationKey}` : "",
+  ].filter(Boolean);
+  return `${parts.join("\n")}\nClick to open the source location.`;
+}
+
+function removeEvidencePopover(doc: Document): void {
+  doc.querySelector(".claudero-evidence-popover")?.remove();
+}
+
+function showEvidencePopover(
+  doc: Document,
+  trigger: Element,
+  marker: string,
+  locator: EvidenceLinkLocator,
+): void {
+  removeEvidencePopover(doc);
+  const card = doc.createElement("div");
+  card.className = "claudero-evidence-popover";
+
+  const label = doc.createElement("div");
+  label.className = "claudero-evidence-popover-label";
+  label.textContent = marker;
+  card.appendChild(label);
+
+  const details = doc.createElement("div");
+  details.className = "claudero-evidence-popover-details";
+  const page =
+    typeof locator.pageNumber === "number"
+      ? locator.pageNumber
+      : typeof locator.pageIndex === "number"
+        ? locator.pageIndex + 1
+        : undefined;
+  details.textContent = [
+    locator.sourceType ? `Source: ${locator.sourceType}` : "",
+    typeof page === "number" ? `Page: ${page}` : "",
+    typeof locator.paragraphIndex === "number"
+      ? `Paragraph: ${locator.paragraphIndex + 1}`
+      : "",
+    locator.annotationKey ? `Annotation: ${locator.annotationKey}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  card.appendChild(details);
+
+  if (locator.title) {
+    const title = doc.createElement("div");
+    title.className = "claudero-evidence-popover-title";
+    title.textContent = locator.title;
+    card.appendChild(title);
+  }
+
+  const hint = doc.createElement("div");
+  hint.className = "claudero-evidence-popover-hint";
+  hint.textContent = "Click to open in Zotero Reader";
+  card.appendChild(hint);
+
+  doc.body.appendChild(card);
+  const rect = trigger.getBoundingClientRect();
+  const cardRect = card.getBoundingClientRect();
+  const view = doc.defaultView;
+  const maxLeft = Math.max(8, (view?.innerWidth || 0) - cardRect.width - 8);
+  const left = Math.min(Math.max(8, rect.left), maxLeft);
+  const top =
+    rect.top > cardRect.height + 16
+      ? rect.top - cardRect.height - 8
+      : rect.bottom + 8;
+  card.style.left = `${left}px`;
+  card.style.top = `${Math.max(8, top)}px`;
+}
+
+async function openEvidenceLocator(
+  doc: Document,
+  locator: EvidenceLinkLocator,
+  href: string,
+): Promise<void> {
+  const zotero = (
+    globalThis as unknown as {
+      Zotero?: {
+        Reader?: {
+          open?: (
+            attachmentId: number,
+            options?: Record<string, unknown>,
+          ) => Promise<unknown> | unknown;
+        };
+        launchURL?: (url: string) => void;
+      };
+    }
+  ).Zotero;
+  const attachmentId = Number(locator.attachmentId || 0);
+  const position =
+    locator.position && typeof locator.position.pageIndex === "number"
+      ? locator.position
+      : typeof locator.pageIndex === "number"
+        ? { pageIndex: locator.pageIndex }
+        : undefined;
+
+  if (attachmentId && zotero?.Reader?.open) {
+    await zotero.Reader.open(attachmentId, position ? { position } : undefined);
+    return;
+  }
+  if (locator.openUri && zotero?.launchURL) {
+    zotero.launchURL(locator.openUri);
+    return;
+  }
+  doc.defaultView?.open(locator.openUri || href);
+}
+
 function enhanceEvidenceMarkers(container: HTMLElement): void {
   const doc = container.ownerDocument;
   container.querySelectorAll("a[href]").forEach((link) => {
     const href = link.getAttribute("href") || "";
-    if (isEvidenceMarker(link.textContent || "")) {
+    const locator = parseEvidenceLocator(href);
+    const text = link.textContent || "";
+    const markerLabel = evidenceMarkerLabel(text);
+    const marker = markerLabel || "[evidence]";
+    if (markerLabel || locator) {
       link.classList.add("claudero-evidence-chip", "linked");
+      link.setAttribute("title", evidenceLocatorTitle(marker, locator));
+    }
+    if (locator) {
+      link.addEventListener("mouseenter", () =>
+        showEvidencePopover(doc, link, marker, locator),
+      );
+      link.addEventListener("mouseleave", () => removeEvidencePopover(doc));
+      link.addEventListener("focus", () =>
+        showEvidencePopover(doc, link, marker, locator),
+      );
+      link.addEventListener("blur", () => removeEvidencePopover(doc));
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        void openEvidenceLocator(doc, locator, href);
+      });
+      return;
     }
     if (href.startsWith("zotero://")) {
       link.addEventListener("click", (event) => {
         event.preventDefault();
-        try {
-          (
-            globalThis as unknown as {
-              Zotero?: { launchURL?: (url: string) => void };
-            }
-          ).Zotero?.launchURL?.(href);
-        } catch {
-          // Fall back to the default browser handling if Zotero.launchURL is unavailable.
+        const launcher = (
+          globalThis as unknown as {
+            Zotero?: { launchURL?: (url: string) => void };
+          }
+        ).Zotero?.launchURL;
+        if (launcher) {
+          launcher(href);
+        } else {
           doc.defaultView?.open(href);
         }
       });

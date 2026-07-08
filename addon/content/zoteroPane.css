@@ -1174,6 +1174,51 @@ toolbarbutton.claudero-header-action:hover {
   text-decoration: none;
 }
 
+.claudero-message-body a.claudero-evidence-chip:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-blue) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.claudero-evidence-popover {
+  position: fixed;
+  z-index: 2147483647;
+  box-sizing: border-box;
+  width: min(340px, calc(100vw - 16px));
+  padding: 9px 10px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 7px;
+  background: var(--material-background);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  color: var(--fill-primary);
+  font-size: 12px;
+  line-height: 1.42;
+  pointer-events: none;
+}
+
+.claudero-evidence-popover-label {
+  color: var(--accent-blue);
+  font-weight: 700;
+}
+
+.claudero-evidence-popover-details {
+  margin-top: 4px;
+  color: var(--fill-secondary);
+}
+
+.claudero-evidence-popover-title {
+  margin-top: 6px;
+  overflow: hidden;
+  color: var(--fill-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-evidence-popover-hint {
+  margin-top: 6px;
+  color: color-mix(in srgb, var(--fill-secondary) 76%, transparent);
+  font-size: 11px;
+}
+
 .claudero-message-body blockquote {
   margin: 10px 0;
   padding: 8px 10px;
