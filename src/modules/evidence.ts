@@ -40,6 +40,14 @@ export interface EvidenceFigureTableCandidate {
   label: string;
   caption: string;
   locator: EvidenceLocator;
+  pageContext?: EvidenceFigureTableContext;
+}
+
+export interface EvidenceFigureTableContext {
+  before: string[];
+  after: string[];
+  samePageEvidenceIds: string[];
+  rects?: number[][];
 }
 
 export interface EvidencePack {
@@ -723,11 +731,38 @@ function rankParagraphs(
   return scored.slice(0, Math.max(1, Math.min(maxParagraphs, 50)));
 }
 
+function figureTablePageContext(
+  paragraphs: EvidenceParagraph[],
+  index: number,
+): EvidenceFigureTableContext | undefined {
+  const paragraph = paragraphs[index];
+  const pageIndex = paragraph.locator.pageIndex;
+  if (typeof pageIndex !== "number") return undefined;
+  const samePage = paragraphs.filter(
+    (entry) => entry.locator.pageIndex === pageIndex,
+  );
+  const before = paragraphs
+    .slice(Math.max(0, index - 2), index)
+    .filter((entry) => entry.locator.pageIndex === pageIndex)
+    .map((entry) => compact(entry.text, 420));
+  const after = paragraphs
+    .slice(index + 1, index + 3)
+    .filter((entry) => entry.locator.pageIndex === pageIndex)
+    .map((entry) => compact(entry.text, 420));
+
+  return {
+    before,
+    after,
+    samePageEvidenceIds: samePage.map((entry) => entry.id).slice(0, 16),
+    rects: paragraph.locator.position?.rects?.slice(0, 48),
+  };
+}
+
 function extractFigureTableCandidates(
   paragraphs: EvidenceParagraph[],
 ): EvidenceFigureTableCandidate[] {
   const candidates: EvidenceFigureTableCandidate[] = [];
-  for (const paragraph of paragraphs) {
+  for (const [index, paragraph] of paragraphs.entries()) {
     const firstLine =
       paragraph.text
         .split(/\n/)
@@ -743,6 +778,7 @@ function extractFigureTableCandidates(
       label: `${match[1]} ${match[2]}`,
       caption: compact(paragraph.text, 900),
       locator: paragraph.locator,
+      pageContext: figureTablePageContext(paragraphs, index),
     });
   }
   return candidates.slice(0, 20);
@@ -948,7 +984,7 @@ export async function buildEvidencePack(payload: {
       "Use evidence ids such as [para-3] or [anno-ABC] while drafting, then cite the locator page/openUri in final prose.",
       "Direct quotes must appear verbatim in an evidence paragraph or annotation; otherwise label them as paraphrases.",
       "Prefer paragraph or annotation evidence over item-level metadata for empirical claims.",
-      "For figure/table claims, cite a figure/table candidate caption and verify the surrounding PDF page when possible.",
+      "For figure/table claims, cite the figure/table candidate caption plus pageContext.before/after when the claim depends on surrounding interpretation.",
     ],
   };
 }
