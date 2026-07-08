@@ -134,7 +134,23 @@ export interface CitationVerification {
   status: "verified" | "weak" | "unverified";
   confidence: number;
   evidence?: EvidenceParagraph;
+  visualInspection?: CitationVisualInspectionHint;
   warnings: string[];
+}
+
+export interface CitationVisualInspectionHint {
+  required: boolean;
+  reason: string;
+  tool: "inspect_figure_table_page";
+  arguments: {
+    itemId?: number;
+    attachmentId?: number;
+    pageIndex?: number;
+    pageNumber?: number;
+    label?: string;
+    caption?: string;
+    claim: string;
+  };
 }
 
 interface TextPage {
@@ -1479,6 +1495,75 @@ function extractClaimsFromText(text: string): CitationClaimInput[] {
   return claims.slice(0, 30);
 }
 
+function figureTableReference(
+  text: string,
+): { label: string; kind: string } | null {
+  const match = String(text || "").match(
+    /\b((?:fig(?:ure)?\.?|table|图|表)\s*[0-9ivxlcdm一二三四五六七八九十百]+)\b/iu,
+  );
+  if (!match) return null;
+  const kind = /^tab|^表/i.test(match[1]) ? "table" : "figure";
+  return {
+    label: match[1].replace(/\s+/g, " ").trim(),
+    kind,
+  };
+}
+
+function bestFigureTableCandidate(
+  pack: EvidencePack,
+  ref: { label: string; kind: string },
+  claimInput: CitationClaimInput,
+  claim: string,
+): EvidenceFigureTableCandidate | undefined {
+  return [...pack.figuresTables]
+    .map((candidate) => ({
+      candidate,
+      score:
+        scoreFigureTableCandidate(candidate, {
+          label: ref.label,
+          claim,
+          pageIndex: claimInput.pageIndex,
+        }) + (candidate.kind === ref.kind ? 1 : 0),
+    }))
+    .sort((a, b) => b.score - a.score)[0]?.candidate;
+}
+
+function visualInspectionHint(options: {
+  pack: EvidencePack;
+  claimInput: CitationClaimInput;
+  claim: string;
+  ref: { label: string; kind: string };
+}): CitationVisualInspectionHint {
+  const candidate = bestFigureTableCandidate(
+    options.pack,
+    options.ref,
+    options.claimInput,
+    options.claim,
+  );
+  return {
+    required: true,
+    reason:
+      "Claim references a figure/table; verify the rendered PDF page visually before treating the claim as fully supported.",
+    tool: "inspect_figure_table_page",
+    arguments: {
+      itemId: options.claimInput.itemId || options.pack.item.id,
+      attachmentId:
+        options.claimInput.attachmentId || options.pack.attachment?.id,
+      pageIndex:
+        typeof options.claimInput.pageIndex === "number"
+          ? options.claimInput.pageIndex
+          : candidate?.locator.pageIndex,
+      pageNumber:
+        typeof options.claimInput.pageIndex === "number"
+          ? options.claimInput.pageIndex + 1
+          : candidate?.locator.pageNumber,
+      label: options.ref.label,
+      caption: candidate?.caption,
+      claim: options.claim,
+    },
+  };
+}
+
 export async function verifyCitationClaims(payload: {
   claims: CitationClaimInput[];
   text?: string;
@@ -1529,6 +1614,15 @@ export async function verifyCitationClaims(payload: {
       continue;
     }
     pack.warnings.forEach((warning) => warnings.add(warning));
+    const visualRef = figureTableReference(claim);
+    const visualInspection = visualRef
+      ? visualInspectionHint({
+          pack,
+          claimInput,
+          claim,
+          ref: visualRef,
+        })
+      : undefined;
     const candidates = [...pack.paragraphs, ...pack.annotations]
       .map((paragraph) => {
         const score = scoreText(paragraph.text, query);
@@ -1560,10 +1654,20 @@ export async function verifyCitationClaims(payload: {
       status,
       confidence: Number(confidence.toFixed(3)),
       evidence: evidence && confidence > 0 ? evidence : undefined,
+      visualInspection,
       warnings:
-        status === "verified"
+        status === "verified" && !visualInspection
           ? []
-          : ["Available evidence does not strongly support this claim."],
+          : [
+              ...(status === "verified"
+                ? []
+                : ["Available evidence does not strongly support this claim."]),
+              ...(visualInspection
+                ? [
+                    "Figure/table claim requires visual inspection before final acceptance.",
+                  ]
+                : []),
+            ],
     });
     claimSourceMap[claim] =
       evidence && confidence > 0 ? evidence.locator : null;
