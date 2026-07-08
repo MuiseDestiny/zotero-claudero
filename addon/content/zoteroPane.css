@@ -3020,6 +3020,7 @@ toolbarbutton.claudero-header-action:hover {
 .claudero-pref-row html|textarea,
 .claudero-pref-row menulist,
 .claudero-pref-row html|code {
+  -moz-box-flex: 1;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -3040,8 +3041,8 @@ toolbarbutton.claudero-header-action:hover {
 .claudero-pref-row html|input,
 .claudero-pref-row html|textarea,
 .claudero-pref-row menulist {
-  width: auto;
-  max-width: none;
+  width: 100% !important;
+  max-width: none !important;
 }
 
 .claudero-pref-stack html|code {
@@ -3054,7 +3055,7 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-row html|code {
-  width: auto;
+  width: 100%;
   max-width: none;
 }
 
@@ -3201,10 +3202,10 @@ toolbarbutton.claudero-header-action:hover {
   width: 100%;
   max-height: 420px;
   overflow: auto;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: auto;
   border: 1px solid color-mix(in srgb, currentColor 13%, transparent);
   border-radius: 8px;
-  background: color-mix(in srgb, currentColor 3%, transparent);
+  background: var(--material-mix-quarternary, #f5f5f5);
 }
 
 .claudero-pref-skills-table {
@@ -3219,17 +3220,6 @@ toolbarbutton.claudero-header-action:hover {
   top: 0;
   z-index: 1;
   background: var(--material-mix-quarternary, #f5f5f5);
-}
-
-.claudero-pref-skills-table thead::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: -18px;
-  bottom: 0;
-  width: 18px;
-  background: var(--material-mix-quarternary, #f5f5f5);
-  border-bottom: 1px solid var(--material-panedivider);
 }
 
 .claudero-pref-skills-table th {
