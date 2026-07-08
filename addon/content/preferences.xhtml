@@ -40,6 +40,13 @@
         data-panel="mcp"
         data-l10n-id="pref-tab-mcp"
       ></html:button>
+      <html:button
+        type="button"
+        id="claudero-pref-tab-diagnostics"
+        class="claudero-pref-tab"
+        data-panel="diagnostics"
+        data-l10n-id="pref-tab-diagnostics"
+      ></html:button>
     </hbox>
     <html:input
       type="hidden"
@@ -238,8 +245,39 @@
           data-l10n-id="pref-mcp-add-http"
         ></html:button>
       </hbox>
-      <html:div id="claudero-pref-mcp-list" class="claudero-pref-mcp-list"></html:div>
-      <html:div id="claudero-pref-mcp-status" class="claudero-pref-status"></html:div>
+      <html:div
+        id="claudero-pref-mcp-list"
+        class="claudero-pref-mcp-list"
+      ></html:div>
+      <html:div
+        id="claudero-pref-mcp-status"
+        class="claudero-pref-status"
+      ></html:div>
+    </vbox>
+    <vbox
+      id="claudero-pref-panel-diagnostics"
+      class="claudero-pref-panel"
+      hidden="true"
+    >
+      <hbox class="claudero-pref-diagnostics-actions">
+        <html:button
+          type="button"
+          id="claudero-pref-diagnostics-refresh"
+          data-l10n-id="pref-diagnostics-refresh"
+        ></html:button>
+      </hbox>
+      <html:div
+        id="claudero-pref-diagnostics-summary"
+        class="claudero-pref-diagnostics"
+      ></html:div>
+      <html:pre
+        id="claudero-pref-diagnostics-trace"
+        class="claudero-pref-diagnostics-trace"
+      ></html:pre>
+      <html:div
+        id="claudero-pref-diagnostics-status"
+        class="claudero-pref-status"
+      ></html:div>
     </vbox>
   </vbox>
 </groupbox>

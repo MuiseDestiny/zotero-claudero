@@ -48,7 +48,13 @@ export async function registerPrefsScripts(window: Window) {
     doc.querySelectorAll(".claudero-pref-panel"),
   ) as HTMLElement[];
   const showPanel = (name: string) => {
-    const normalized = ["general", "claude", "codex", "mcp"].includes(name)
+    const normalized = [
+      "general",
+      "claude",
+      "codex",
+      "mcp",
+      "diagnostics",
+    ].includes(name)
       ? name
       : "general";
     setPref("settingsProvider", normalized);
@@ -71,7 +77,19 @@ export async function registerPrefsScripts(window: Window) {
   bindProviderEnvironment(doc, "codex");
   bindCodexSettings(doc);
   bindMcpSettings(doc);
+  bindDiagnostics(doc);
   showPanel(String(getPref("settingsProvider") || "general"));
+}
+
+async function readHelperToken(): Promise<string> {
+  const tokenPath = [Zotero.Profile.dir, "claudero", "helper", ".token"].join(
+    "/",
+  );
+  try {
+    return (await (IOUtils as any).readUTF8(tokenPath)).trim();
+  } catch {
+    return "";
+  }
 }
 
 function bindProviderPath(doc: Document, provider: AiProvider): void {
@@ -162,17 +180,6 @@ function bindMcpSettings(doc: Document): void {
     return el;
   };
 
-  const readHelperToken = async (): Promise<string> => {
-    const tokenPath = [Zotero.Profile.dir, "claudero", "helper", ".token"].join(
-      "/",
-    );
-    try {
-      return (await (IOUtils as any).readUTF8(tokenPath)).trim();
-    } catch {
-      return "";
-    }
-  };
-
   const testMcpServer = async (
     config: ManagedMcpServerConfig,
   ): Promise<{
@@ -200,7 +207,7 @@ function bindMcpSettings(doc: Document): void {
     if (!response.ok) {
       throw new Error(`Helper returned ${response.status}`);
     }
-    return (await response.json() as unknown) as {
+    return (await response.json()) as unknown as {
       success: boolean;
       serverName?: string;
       serverVersion?: string;
@@ -238,7 +245,9 @@ function bindMcpSettings(doc: Document): void {
       status.classList.add("success");
     } catch (error) {
       status.textContent =
-        error instanceof Error ? `Invalid MCP JSON: ${error.message}` : "Invalid MCP JSON";
+        error instanceof Error
+          ? `Invalid MCP JSON: ${error.message}`
+          : "Invalid MCP JSON";
       status.classList.add("error");
     }
   };
@@ -251,9 +260,7 @@ function bindMcpSettings(doc: Document): void {
     }
   };
 
-  const saveManaged = (
-    value: Record<string, ManagedMcpServerConfig>,
-  ): void => {
+  const saveManaged = (value: Record<string, ManagedMcpServerConfig>): void => {
     if (!servers) return;
     servers.value = serializeManagedMcpServers(value);
     setCustomMcpServersRaw(servers.value);
@@ -282,10 +289,7 @@ function bindMcpSettings(doc: Document): void {
     const managed = readManaged();
     const entries = Object.entries(managed);
     if (entries.length === 0) {
-      const empty = doc.createElementNS(
-        "http://www.w3.org/1999/xhtml",
-        "div",
-      );
+      const empty = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
       empty.className = "claudero-pref-mcp-empty";
       empty.textContent = "No MCP servers configured.";
       list.appendChild(empty);
@@ -348,23 +352,29 @@ function bindMcpSettings(doc: Document): void {
               for (const tool of toolRows) {
                 const toolRow = createHtml("div", "claudero-pref-mcp-tool-row");
                 const body = createHtml("div", "claudero-pref-mcp-tool-body");
-                const toolName = createHtml("div", "claudero-pref-mcp-tool-name");
+                const toolName = createHtml(
+                  "div",
+                  "claudero-pref-mcp-tool-name",
+                );
                 toolName.textContent = tool.name;
                 const desc = createHtml("div", "claudero-pref-mcp-tool-desc");
                 desc.textContent = tool.description || "";
                 body.append(toolName, desc);
-                const toggle = makeButton(tool.enabled ? "Disable" : "Enable", () => {
-                  const next = readManaged();
-                  const current = next[name] || {};
-                  const disabled = new Set(current.disabledTools || []);
-                  if (disabled.has(tool.name)) disabled.delete(tool.name);
-                  else disabled.add(tool.name);
-                  next[name] = {
-                    ...current,
-                    disabledTools: [...disabled].sort(),
-                  };
-                  saveManaged(next);
-                });
+                const toggle = makeButton(
+                  tool.enabled ? "Disable" : "Enable",
+                  () => {
+                    const next = readManaged();
+                    const current = next[name] || {};
+                    const disabled = new Set(current.disabledTools || []);
+                    if (disabled.has(tool.name)) disabled.delete(tool.name);
+                    else disabled.add(tool.name);
+                    next[name] = {
+                      ...current,
+                      disabledTools: [...disabled].sort(),
+                    };
+                    saveManaged(next);
+                  },
+                );
                 toolRow.append(body, toggle);
                 toolsPanel.appendChild(toolRow);
               }
@@ -460,10 +470,174 @@ function bindMcpSettings(doc: Document): void {
   addHttp?.addEventListener("click", () => {
     const name = win?.prompt("MCP server name", "remote")?.trim();
     if (!name) return;
-    const url = win?.prompt("HTTP/SSE URL", "http://127.0.0.1:3000/sse")?.trim();
+    const url = win
+      ?.prompt("HTTP/SSE URL", "http://127.0.0.1:3000/sse")
+      ?.trim();
     if (!url) return;
     const next = readManaged();
     next[name] = { enabled: true, type: "sse", url };
     saveManaged(next);
   });
+}
+
+interface DiagnosticsPayload {
+  helper?: {
+    version?: number;
+    activeProvider?: string;
+    active?: boolean;
+  };
+  runtimes?: Record<
+    string,
+    {
+      active?: boolean;
+      workspacePath?: string | null;
+      session?: {
+        threadId?: string;
+        sessionFilePath?: string;
+      } | null;
+    }
+  >;
+  trace?: {
+    traceId?: string;
+    startedAt?: number;
+    source?: {
+      provider?: string;
+      runtime?: string;
+      conversationId?: string;
+    };
+    eventCount?: number;
+    eventCounts?: Record<string, number>;
+    errors?: string[];
+    lastEvent?: {
+      sequence?: number;
+      event?: {
+        type?: string;
+      };
+    } | null;
+  } | null;
+}
+
+function bindDiagnostics(doc: Document): void {
+  const refresh = doc.querySelector<HTMLButtonElement>(
+    "#claudero-pref-diagnostics-refresh",
+  );
+  const status = doc.querySelector<HTMLElement>(
+    "#claudero-pref-diagnostics-status",
+  );
+  const summary = doc.querySelector<HTMLElement>(
+    "#claudero-pref-diagnostics-summary",
+  );
+  const trace = doc.querySelector<HTMLElement>(
+    "#claudero-pref-diagnostics-trace",
+  );
+  if (!summary && !trace) return;
+
+  const createHtml = <K extends keyof HTMLElementTagNameMap>(
+    tag: K,
+    className?: string,
+  ): HTMLElementTagNameMap[K] => {
+    const el = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      tag,
+    ) as HTMLElementTagNameMap[K];
+    if (className) el.className = className;
+    return el;
+  };
+
+  const renderRow = (label: string, value: unknown): HTMLElement => {
+    const row = createHtml("div", "claudero-pref-diagnostics-row");
+    const key = createHtml("span");
+    key.textContent = label;
+    const val = createHtml("span");
+    val.textContent =
+      value === undefined || value === null || value === ""
+        ? "-"
+        : String(value);
+    row.append(key, val);
+    return row;
+  };
+
+  const renderCard = (
+    title: string,
+    rows: Array<[string, unknown]>,
+  ): HTMLElement => {
+    const card = createHtml("div", "claudero-pref-diagnostics-card");
+    const heading = createHtml("div", "claudero-pref-diagnostics-card-title");
+    heading.textContent = title;
+    card.appendChild(heading);
+    for (const [label, value] of rows) {
+      card.appendChild(renderRow(label, value));
+    }
+    return card;
+  };
+
+  const load = async () => {
+    if (status) {
+      status.classList.remove("error", "success");
+      status.textContent = "Loading helper diagnostics...";
+    }
+    try {
+      const port = Number(getPref("helperPort") || 38660);
+      const token = await readHelperToken();
+      const response = await fetch(`http://127.0.0.1:${port}/diagnostics`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        throw new Error(`Helper returned ${response.status}`);
+      }
+      const data = (await response.json()) as DiagnosticsPayload;
+      summary?.replaceChildren(
+        renderCard("Helper", [
+          ["Version", data.helper?.version],
+          ["Active provider", data.helper?.activeProvider],
+          ["Runtime active", data.helper?.active],
+        ]),
+        renderCard("Claude", [
+          ["Active", data.runtimes?.claude?.active],
+          ["Workspace", data.runtimes?.claude?.workspacePath],
+        ]),
+        renderCard("Codex", [
+          ["Active", data.runtimes?.codex?.active],
+          ["Workspace", data.runtimes?.codex?.workspacePath],
+          ["Thread", data.runtimes?.codex?.session?.threadId],
+        ]),
+        renderCard("Latest trace", [
+          ["Trace ID", data.trace?.traceId],
+          ["Provider", data.trace?.source?.provider],
+          ["Events", data.trace?.eventCount],
+          ["Last event", data.trace?.lastEvent?.event?.type],
+          ["Errors", data.trace?.errors?.length || 0],
+        ]),
+      );
+      if (trace) {
+        trace.textContent = JSON.stringify(
+          {
+            source: data.trace?.source || null,
+            eventCounts: data.trace?.eventCounts || {},
+            lastEvent: data.trace?.lastEvent || null,
+            errors: data.trace?.errors || [],
+          },
+          null,
+          2,
+        );
+      }
+      if (status) {
+        status.textContent = "Helper diagnostics loaded";
+        status.classList.add("success");
+      }
+    } catch (error) {
+      summary?.replaceChildren();
+      if (trace) trace.textContent = "";
+      if (status) {
+        status.textContent =
+          error instanceof Error
+            ? `Diagnostics unavailable: ${error.message}`
+            : "Diagnostics unavailable";
+        status.classList.add("error");
+      }
+    }
+  };
+
+  refresh?.addEventListener("click", () => void load());
+  void load();
 }

@@ -13,10 +13,7 @@ import { transformClaudeMessage } from "./stream/transformClaudeMessage";
 import { PermissionManager } from "./runtime/PermissionManager";
 import { PersistentQueryManager } from "./runtime/PersistentQueryManager";
 import { CodexPersistentQueryManager } from "./runtime/CodexPersistentQueryManager";
-import {
-  testMcpServer,
-  type McpServerConfig,
-} from "./runtime/McpTester";
+import { testMcpServer, type McpServerConfig } from "./runtime/McpTester";
 import { runZoteroMcpStdioServer } from "./runtime/ZoteroMcpBridge";
 import {
   buildQueryOptions,
@@ -401,6 +398,53 @@ function queryManagerFor(provider: HelperProvider) {
 
 function activeQueryManager() {
   return queryManagerFor(activeProvider);
+}
+
+function traceSummary(trace: AgentEventTrace | null): unknown {
+  if (!trace) return null;
+  const eventCounts: Record<string, number> = {};
+  for (const envelope of trace.events) {
+    eventCounts[envelope.event.type] =
+      (eventCounts[envelope.event.type] || 0) + 1;
+  }
+  const errors = trace.events
+    .map((envelope) => envelope.event)
+    .filter(
+      (event): event is { type: "error"; error: string } =>
+        event.type === "error",
+    )
+    .map((event) => event.error);
+  return {
+    traceId: trace.traceId,
+    startedAt: trace.startedAt,
+    source: trace.source,
+    eventCount: trace.events.length,
+    eventCounts,
+    errors,
+    lastEvent: trace.events.at(-1) || null,
+  };
+}
+
+function diagnosticsPayload(): unknown {
+  return {
+    helper: {
+      version: HELPER_VERSION,
+      activeProvider,
+      active: activeQueryManager().isActive,
+    },
+    runtimes: {
+      claude: {
+        active: claudeQueryManager.isActive,
+        workspacePath: claudeQueryManager.workspacePath,
+      },
+      codex: {
+        active: codexQueryManager.isActive,
+        workspacePath: codexQueryManager.workspacePath,
+        session: codexQueryManager.getSessionState(),
+      },
+    },
+    trace: traceSummary(latestAgentTrace),
+  };
 }
 
 async function initializeProviderFromPayload(
@@ -925,6 +969,11 @@ async function route(
     } else {
       sendJson(res, 204, "");
     }
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/diagnostics") {
+    sendJson(res, 200, diagnosticsPayload());
     return;
   }
 

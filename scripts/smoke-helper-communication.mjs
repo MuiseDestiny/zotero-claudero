@@ -382,6 +382,19 @@ async function runProvider(baseUrl, provider) {
     trace.events?.some((event) => event.event?.type === "done"),
     `${provider}: trace did not record done event`,
   );
+  const diagnostics = await getJson(baseUrl, "/diagnostics");
+  assert(
+    diagnostics.helper?.activeProvider === provider,
+    `${provider}: diagnostics activeProvider mismatch`,
+  );
+  assert(
+    diagnostics.trace?.traceId === trace.traceId,
+    `${provider}: diagnostics trace did not match /trace/latest`,
+  );
+  assert(
+    diagnostics.trace?.eventCounts?.done >= 1,
+    `${provider}: diagnostics did not include done event count`,
+  );
 
   if (!full) return;
 
