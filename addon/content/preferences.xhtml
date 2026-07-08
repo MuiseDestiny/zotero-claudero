@@ -75,7 +75,10 @@
           preference="academicSkills"
         ></html:input>
         <vbox id="claudero-pref-panel-general" class="claudero-pref-panel">
-          <html:div class="claudero-pref-row">
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="zotero-prefpane-__addonRef__-nodePath"
@@ -83,13 +86,18 @@
             ></html:label>
             <html:input
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               type="text"
               id="zotero-prefpane-__addonRef__-nodePath"
               preference="nodePath"
               placeholder="/opt/homebrew/bin/node"
             ></html:input>
-          </html:div>
-          <html:div class="claudero-pref-row">
+          </hbox>
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="zotero-prefpane-__addonRef__-provider"
@@ -97,6 +105,8 @@
             ></html:label>
             <menulist
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               native="true"
               id="zotero-prefpane-__addonRef__-provider"
               preference="provider"
@@ -106,8 +116,11 @@
                 <menuitem value="codex" label="Codex" />
               </menupopup>
             </menulist>
-          </html:div>
-          <html:div class="claudero-pref-row">
+          </hbox>
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="zotero-prefpane-__addonRef__-workspacePath"
@@ -115,13 +128,18 @@
             ></html:label>
             <html:input
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               type="text"
               id="zotero-prefpane-__addonRef__-workspacePath"
               preference="workspacePath"
               placeholder="Leave empty to use the Zotero profile"
             ></html:input>
-          </html:div>
-          <html:div class="claudero-pref-row">
+          </hbox>
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="zotero-prefpane-__addonRef__-helperPort"
@@ -129,14 +147,19 @@
             ></html:label>
             <html:input
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               type="number"
               id="zotero-prefpane-__addonRef__-helperPort"
               preference="helperPort"
               min="1024"
               max="65535"
             ></html:input>
-          </html:div>
-          <html:div class="claudero-pref-row">
+          </hbox>
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="zotero-prefpane-__addonRef__-proxy"
@@ -144,13 +167,18 @@
             ></html:label>
             <html:input
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               type="text"
               id="zotero-prefpane-__addonRef__-proxy"
               preference="proxy"
               placeholder="http://127.0.0.1:7890 (leave empty to disable)"
             ></html:input>
-          </html:div>
-          <html:div class="claudero-pref-row claudero-pref-row-tall">
+          </hbox>
+          <hbox
+            class="claudero-pref-row claudero-pref-row-tall"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="zotero-prefpane-__addonRef__-environmentVariables"
@@ -158,26 +186,34 @@
             ></html:label>
             <html:textarea
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               id="zotero-prefpane-__addonRef__-environmentVariables"
               preference="environmentVariables"
               rows="5"
               placeholder="PATH=/opt/homebrew/bin:/usr/local/bin:$PATH"
             ></html:textarea>
-          </html:div>
-          <html:div class="claudero-pref-row claudero-pref-row-actions">
+          </hbox>
+          <hbox
+            class="claudero-pref-row claudero-pref-row-actions"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:span class="claudero-pref-row-label"></html:span>
             <html:button
               id="claudero-test-helper"
               data-l10n-id="pref-test"
             ></html:button>
-          </html:div>
+          </hbox>
         </vbox>
         <vbox
           id="claudero-pref-panel-claude"
           class="claudero-pref-panel"
           hidden="true"
         >
-          <html:div class="claudero-pref-row">
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               data-l10n-id="pref-current-host"
@@ -185,9 +221,14 @@
             <html:code
               id="claudero-pref-host-key"
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
             ></html:code>
-          </html:div>
-          <html:div class="claudero-pref-row">
+          </hbox>
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="claudero-pref-claude-path"
@@ -195,12 +236,17 @@
             ></html:label>
             <html:input
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               type="text"
               id="claudero-pref-claude-path"
               placeholder="/Users/you/.claude/local/claude"
             ></html:input>
-          </html:div>
-          <html:div class="claudero-pref-row claudero-pref-row-tall">
+          </hbox>
+          <hbox
+            class="claudero-pref-row claudero-pref-row-tall"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="claudero-pref-claude-env"
@@ -208,18 +254,23 @@
             ></html:label>
             <html:textarea
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               id="claudero-pref-claude-env"
               rows="5"
               placeholder="ANTHROPIC_API_KEY=..."
             ></html:textarea>
-          </html:div>
+          </hbox>
         </vbox>
         <vbox
           id="claudero-pref-panel-codex"
           class="claudero-pref-panel"
           hidden="true"
         >
-          <html:div class="claudero-pref-row">
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               data-l10n-id="pref-current-host"
@@ -227,9 +278,14 @@
             <html:code
               id="claudero-pref-host-key-codex"
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
             ></html:code>
-          </html:div>
-          <html:div class="claudero-pref-row">
+          </hbox>
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="claudero-pref-codex-path"
@@ -237,12 +293,17 @@
             ></html:label>
             <html:input
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               type="text"
               id="claudero-pref-codex-path"
               placeholder="/opt/homebrew/bin/codex"
             ></html:input>
-          </html:div>
-          <html:div class="claudero-pref-row">
+          </hbox>
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="claudero-pref-codex-installation"
@@ -250,6 +311,8 @@
             ></html:label>
             <menulist
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               native="true"
               id="claudero-pref-codex-installation"
             >
@@ -264,8 +327,11 @@
                 />
               </menupopup>
             </menulist>
-          </html:div>
-          <html:div class="claudero-pref-row">
+          </hbox>
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="claudero-pref-codex-wsl-distro"
@@ -273,12 +339,17 @@
             ></html:label>
             <html:input
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               type="text"
               id="claudero-pref-codex-wsl-distro"
               placeholder="Ubuntu"
             ></html:input>
-          </html:div>
-          <html:div class="claudero-pref-row">
+          </hbox>
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="claudero-pref-codex-safe-mode"
@@ -286,6 +357,8 @@
             ></html:label>
             <menulist
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               native="true"
               id="claudero-pref-codex-safe-mode"
             >
@@ -300,8 +373,11 @@
                 />
               </menupopup>
             </menulist>
-          </html:div>
-          <html:div class="claudero-pref-row claudero-pref-row-tall">
+          </hbox>
+          <hbox
+            class="claudero-pref-row claudero-pref-row-tall"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="claudero-pref-codex-env"
@@ -309,25 +385,33 @@
             ></html:label>
             <html:textarea
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               id="claudero-pref-codex-env"
               rows="5"
               placeholder="OPENAI_API_KEY=..."
             ></html:textarea>
-          </html:div>
+          </hbox>
         </vbox>
         <vbox
           id="claudero-pref-panel-mcp"
           class="claudero-pref-panel"
           hidden="true"
         >
-          <html:div class="claudero-pref-row">
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:span class="claudero-pref-row-label"></html:span>
             <checkbox
               id="claudero-pref-enable-zotero-mcp"
               data-l10n-id="pref-enable-zotero-mcp"
             />
-          </html:div>
-          <html:div class="claudero-pref-row claudero-pref-row-tall">
+          </hbox>
+          <hbox
+            class="claudero-pref-row claudero-pref-row-tall"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="claudero-pref-mcp-servers"
@@ -335,11 +419,13 @@
             ></html:label>
             <html:textarea
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               id="claudero-pref-mcp-servers"
               rows="12"
               placeholder='{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]}}}'
             ></html:textarea>
-          </html:div>
+          </hbox>
           <hbox class="claudero-pref-mcp-actions">
             <html:button
               type="button"
@@ -386,7 +472,10 @@
             id="claudero-pref-skills-list"
             class="claudero-pref-skills-list"
           ></html:div>
-          <html:div class="claudero-pref-row claudero-pref-row-tall">
+          <hbox
+            class="claudero-pref-row claudero-pref-row-tall"
+            style="display: flex; align-items: center; width: 100%"
+          >
             <html:label
               class="claudero-pref-row-label"
               for="claudero-pref-skills-import"
@@ -394,11 +483,13 @@
             ></html:label>
             <html:textarea
               class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
               id="claudero-pref-skills-import"
               rows="8"
               data-l10n-id="pref-skills-import-placeholder"
             ></html:textarea>
-          </html:div>
+          </hbox>
           <hbox class="claudero-pref-skills-actions">
             <html:button
               type="button"
