@@ -526,6 +526,18 @@ export function resetAcademicSkillToBuiltin(
   return next;
 }
 
+export function deleteCustomAcademicSkill(
+  id: string,
+  store = getAcademicSkillStore(),
+): AcademicSkillStore {
+  const hasBuiltin = BUILTIN_ACADEMIC_SKILLS.some((skill) => skill.id === id);
+  if (hasBuiltin) return store;
+  const next: AcademicSkillStore = { version: 1, skills: { ...store.skills } };
+  delete next.skills[id];
+  saveAcademicSkillStore(next);
+  return next;
+}
+
 export function updateAcademicSkillToBuiltin(
   id: string,
   store = getAcademicSkillStore(),

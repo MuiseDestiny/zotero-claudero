@@ -3461,6 +3461,14 @@ toolbarbutton.claudero-header-action:hover {
   font-size: 11.5px;
 }
 
+.claudero-pref-skill-actions html|button.claudero-pref-danger-button {
+  color: #b42318;
+}
+
+.claudero-pref-skill-actions html|button.claudero-pref-danger-button:hover {
+  background: color-mix(in srgb, #b42318 10%, transparent);
+}
+
 .claudero-pref-diagnostics-actions {
   gap: 6px;
 }

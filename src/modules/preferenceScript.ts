@@ -21,6 +21,7 @@ import {
   type ManagedMcpServerConfig,
 } from "./mcpSettings";
 import {
+  deleteCustomAcademicSkill,
   getAcademicSkillRecords,
   importAcademicSkillFromText,
   matchAcademicSkillIntent,
@@ -38,6 +39,15 @@ import { getPref, setPref } from "../utils/prefs";
 type XulValueElement = HTMLElement & {
   value: string;
   disabled?: boolean;
+};
+
+type MonacoWindow = Window & {
+  loadMonaco?: (options: Record<string, unknown>) => Promise<{
+    editor: {
+      getValue: () => string;
+      setValue: (value: string) => void;
+    };
+  }>;
 };
 
 export async function registerPrefsScripts(window: Window) {
@@ -567,27 +577,64 @@ function bindAcademicSkills(doc: Document): void {
     return enabled.length ? enabled.join(", ") : "read-only prompt";
   };
 
-  const editSkill = (record: AcademicSkillRecord) => {
-    const raw = win?.prompt(
-      `Edit academic skill "${record.skill.title}" JSON`,
-      JSON.stringify(record.skill, null, 2),
-    );
-    if (raw === null || raw === undefined) return;
+  const waitForMonaco = async (editorWin: MonacoWindow): Promise<void> => {
+    for (let i = 0; i < 100; i++) {
+      if (typeof editorWin.loadMonaco === "function") return;
+      await new Promise<void>((resolve) => {
+        win?.setTimeout(() => resolve(), 50);
+      });
+    }
+    throw new Error("Monaco editor did not load.");
+  };
+
+  const editSkill = async (record: AcademicSkillRecord) => {
+    if (!win) return;
+    const editorWin = win.openDialog(
+      "chrome://scaffold/content/monaco/monaco.html",
+      "claudero-skill-editor",
+      "chrome,centerscreen,dialog=no,resizable,scrollbars=yes,width=760,height=560",
+    ) as MonacoWindow | undefined;
+    if (!editorWin) return;
+    let saved = false;
     try {
-      const parsed = JSON.parse(raw) as AcademicSkill;
-      if (!parsed.id || !parsed.title) {
-        throw new Error("Skill JSON must include id and title.");
-      }
-      saveAcademicSkillOverride(parsed, record.enabled);
-      setStatus(`Saved ${parsed.title}`, "success");
-      renderList();
+      await waitForMonaco(editorWin);
+      const isDark = win.matchMedia?.("(prefers-color-scheme: dark)")?.matches;
+      const result = await editorWin.loadMonaco?.({
+        language: "json",
+        theme: `vs-${isDark ? "dark" : "light"}`,
+      });
+      const editor = result?.editor;
+      if (!editor) throw new Error("Monaco editor is unavailable.");
+      editor.setValue(JSON.stringify(record.skill, null, 2));
+      editorWin.addEventListener("unload", () => {
+        if (saved) return;
+        saved = true;
+        try {
+          const parsed = JSON.parse(editor.getValue()) as AcademicSkill;
+          if (!parsed.id || !parsed.title) {
+            throw new Error("Skill JSON must include id and title.");
+          }
+          saveAcademicSkillOverride(parsed, record.enabled);
+          setStatus(`Saved ${parsed.title}`, "success");
+          renderList();
+        } catch (error) {
+          setStatus(
+            error instanceof Error
+              ? `Invalid skill JSON: ${error.message}`
+              : "Invalid skill JSON",
+            "error",
+          );
+        }
+      });
+      editorWin.focus();
     } catch (error) {
       setStatus(
         error instanceof Error
-          ? `Invalid skill JSON: ${error.message}`
-          : "Invalid skill JSON",
+          ? `Could not open skill editor: ${error.message}`
+          : "Could not open skill editor",
         "error",
       );
+      editorWin.close();
     }
   };
 
@@ -702,6 +749,18 @@ function bindAcademicSkills(doc: Document): void {
             renderList();
           }),
         );
+      }
+      if (!record.builtin) {
+        const deleteButton = makeButton("Delete", () => {
+          if (!win?.confirm(`Delete imported skill "${record.skill.title}"?`)) {
+            return;
+          }
+          deleteCustomAcademicSkill(record.id);
+          setStatus(`Deleted ${record.skill.title}`, "success");
+          renderList();
+        });
+        deleteButton.classList.add("claudero-pref-danger-button");
+        actions.append(deleteButton);
       }
       actionsCell.appendChild(actions);
 
