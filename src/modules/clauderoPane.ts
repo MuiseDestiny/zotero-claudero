@@ -2306,19 +2306,6 @@ function attachMessageActions(
         ),
       );
     }
-    if (
-      getProviderCapabilities(normalizeProvider(state.providerSelect.value))
-        .supportsFork
-    ) {
-      meta.appendChild(
-        createMessageActionButton(
-          doc,
-          "fork",
-          "分叉",
-          () => void forkConversationAtTurn(state, options.turnIndex),
-        ),
-      );
-    }
   }
 
   stack.appendChild(meta);
