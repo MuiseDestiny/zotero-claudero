@@ -137,7 +137,7 @@ type ActivityMode =
 function permissionModeDescription(mode: PermissionMode): string {
   const provider = normalizeProvider(getPref("provider"));
   const capabilities = getProviderCapabilities(provider);
-  const agent = provider === "codex" ? "Codex" : "Claude";
+  const agent = providerLabel(provider);
   switch (mode) {
     case "auto":
       return `${agent} will use the default approval flow.`;
@@ -1083,14 +1083,12 @@ function getAttachmentDirectories(
 
 function getSelectedModel(state: PaneState): string {
   const provider = normalizeProvider(state.providerSelect.value);
-  return (
-    state.modelSelect.value || (provider === "codex" ? "gpt-5.5" : "sonnet")
-  );
+  return state.modelSelect.value || defaultModelForProvider(provider);
 }
 
 function getSelectedEffort(state: PaneState): string {
   const provider = normalizeProvider(state.providerSelect.value);
-  return state.effortSelect.value || (provider === "codex" ? "medium" : "high");
+  return state.effortSelect.value || defaultEffortForProvider(provider);
 }
 
 function stringifyValue(value: unknown): string {
@@ -2238,14 +2236,19 @@ function attachMessageActions(
         retryAssistantTurn(state, options.turnIndex),
       ),
     );
-    meta.appendChild(
-      createMessageActionButton(
-        doc,
-        "fork",
-        "分叉",
-        () => void forkConversationAtTurn(state, options.turnIndex),
-      ),
-    );
+    if (
+      getProviderCapabilities(normalizeProvider(state.providerSelect.value))
+        .supportsFork
+    ) {
+      meta.appendChild(
+        createMessageActionButton(
+          doc,
+          "fork",
+          "分叉",
+          () => void forkConversationAtTurn(state, options.turnIndex),
+        ),
+      );
+    }
     meta.appendChild(time);
   } else {
     const summaryChip = buildMessageContextSummaryChip(
@@ -2266,14 +2269,19 @@ function attachMessageActions(
         ),
       );
     }
-    meta.appendChild(
-      createMessageActionButton(
-        doc,
-        "fork",
-        "分叉",
-        () => void forkConversationAtTurn(state, options.turnIndex),
-      ),
-    );
+    if (
+      getProviderCapabilities(normalizeProvider(state.providerSelect.value))
+        .supportsFork
+    ) {
+      meta.appendChild(
+        createMessageActionButton(
+          doc,
+          "fork",
+          "分叉",
+          () => void forkConversationAtTurn(state, options.turnIndex),
+        ),
+      );
+    }
   }
 
   stack.appendChild(meta);
@@ -3224,6 +3232,17 @@ async function sendPrompt(
   const images = (overrideImages ?? state.pendingImages).map((img) => ({
     ...img,
   }));
+  const provider = normalizeProvider(state.providerSelect.value);
+  const capabilities = getProviderCapabilities(provider);
+  if (images.length > 0 && !capabilities.supportsImageAttachments) {
+    appendNoticeCard(
+      state,
+      "warning",
+      `${providerLabel(provider)} image attachments unsupported`,
+      "Switch provider or remove the images before sending.",
+    );
+    return;
+  }
   // A Zotero context is no longer required — allow chatting with just text
   // and/or pasted images.
   if ((!prompt && images.length === 0) || state.running) return;
@@ -3354,7 +3373,7 @@ async function sendPrompt(
     );
     const additionalDirectories = getAttachmentDirectories(context);
     for await (const event of queryClaudeHelper(fullPrompt, {
-      provider: normalizeProvider(state.providerSelect.value),
+      provider,
       model: getSelectedModel(state),
       effort: getSelectedEffort(state),
       additionalDirectories,

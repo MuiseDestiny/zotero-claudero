@@ -40,4 +40,11 @@ describe("provider registry", function () {
       ["gpt-5.4-mini", "gpt-5.5"],
     );
   });
+
+  it("serves UI defaults from provider registrations", function () {
+    assert.equal(getProviderRegistration("claude").defaultModel, "haiku");
+    assert.equal(getProviderRegistration("claude").defaultEffort, "high");
+    assert.equal(getProviderRegistration("codex").defaultModel, "gpt-5.5");
+    assert.equal(getProviderRegistration("codex").defaultEffort, "medium");
+  });
 });

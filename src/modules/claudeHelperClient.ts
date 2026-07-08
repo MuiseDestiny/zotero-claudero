@@ -1,5 +1,6 @@
 import { getPref, setPref } from "../utils/prefs";
 import {
+  getProviderCapabilities,
   getProviderRuntimePrefs,
   normalizeProvider,
   type AiProvider,
@@ -192,7 +193,15 @@ function buildProviderPayload(provider: AiProvider) {
   };
 }
 
-function buildMcpPayload(prompt = "") {
+function buildMcpPayload(provider: AiProvider, prompt = "") {
+  if (!getProviderCapabilities(provider).supportsMcpTools) {
+    return {
+      enableZoteroMcp: false,
+      zoteroEndpointUrl: undefined,
+      mcpServers: {},
+      mcpDisabledTools: [],
+    };
+  }
   let mcpServers: Record<string, unknown> = {};
   let mcpDisabledTools: string[] = [];
   try {
@@ -581,6 +590,7 @@ async function initializePersistentQuery(): Promise<void> {
 
   const port = Number(getPref("helperPort") || 38660);
   const token = await getOrCreateHelperToken();
+  const provider = normalizeProviderPref();
 
   const response = await fetch(`http://127.0.0.1:${port}/init`, {
     method: "POST",
@@ -590,10 +600,10 @@ async function initializePersistentQuery(): Promise<void> {
     },
     body: JSON.stringify({
       workspacePath: getWorkspacePath(),
-      ...buildProviderPayload(normalizeProviderPref()),
+      ...buildProviderPayload(provider),
       model: String(getPref("model") || "haiku") || undefined,
       effort: String(getPref("effort") || "high") || undefined,
-      ...buildMcpPayload(),
+      ...buildMcpPayload(provider),
     }),
   });
 
@@ -626,6 +636,11 @@ export async function* queryClaudeHelper(
 
   const port = Number(getPref("helperPort") || 38660);
   const token = await getOrCreateHelperToken();
+  const provider = options.provider || normalizeProviderPref();
+  const providerCapabilities = getProviderCapabilities(provider);
+  const images = providerCapabilities.supportsImageAttachments
+    ? options.images
+    : undefined;
 
   let response: Response;
 
@@ -641,7 +656,7 @@ export async function* queryClaudeHelper(
         },
         body: JSON.stringify({
           prompt,
-          ...buildProviderPayload(options.provider || normalizeProviderPref()),
+          ...buildProviderPayload(provider),
           // Always send the current claudePath/environment so the helper can
           // detect changes (e.g. a newly configured proxy) and restart the
           // persistent query instead of reusing a stale, geo-blocked session.
@@ -649,8 +664,8 @@ export async function* queryClaudeHelper(
           effort: options.effort,
           additionalDirectories: options.additionalDirectories,
           permissionMode: options.permissionMode,
-          ...buildMcpPayload(prompt),
-          images: options.images,
+          ...buildMcpPayload(provider, prompt),
+          images,
           conversationId: options.conversationId,
           providerState: options.providerState,
         }),
@@ -686,13 +701,13 @@ export async function* queryClaudeHelper(
     body: JSON.stringify({
       prompt,
       workspacePath: getWorkspacePath(),
-      ...buildProviderPayload(options.provider || normalizeProviderPref()),
+      ...buildProviderPayload(provider),
       model: options.model,
       effort: options.effort,
       additionalDirectories: options.additionalDirectories,
       permissionMode: options.permissionMode,
-      ...buildMcpPayload(prompt),
-      images: options.images,
+      ...buildMcpPayload(provider, prompt),
+      images,
       conversationId: options.conversationId,
       providerState: options.providerState,
     } satisfies ClauderoQueryRequest),
