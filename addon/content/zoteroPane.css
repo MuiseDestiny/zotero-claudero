@@ -643,6 +643,11 @@ toolbarbutton.claudero-header-action:hover {
   pointer-events: none;
 }
 
+.claudero-message-meta toolbarbutton[data-claudero-message-action="fork"] > svg,
+.claudero-message-meta button[data-claudero-message-action="fork"] > svg {
+  transform: rotate(90deg);
+}
+
 /* ── Message context: single summary pill ───────────────────────────────── */
 .claudero-message-context-summary {
   display: inline-flex;
