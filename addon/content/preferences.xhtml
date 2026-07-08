@@ -82,6 +82,7 @@
               data-l10n-id="pref-node-path"
             ></html:label>
             <html:input
+              class="claudero-pref-control"
               type="text"
               id="zotero-prefpane-__addonRef__-nodePath"
               preference="nodePath"
@@ -95,6 +96,7 @@
               data-l10n-id="pref-provider"
             ></html:label>
             <menulist
+              class="claudero-pref-control"
               native="true"
               id="zotero-prefpane-__addonRef__-provider"
               preference="provider"
@@ -112,6 +114,7 @@
               data-l10n-id="pref-workspace-path"
             ></html:label>
             <html:input
+              class="claudero-pref-control"
               type="text"
               id="zotero-prefpane-__addonRef__-workspacePath"
               preference="workspacePath"
@@ -125,6 +128,7 @@
               data-l10n-id="pref-helper-port"
             ></html:label>
             <html:input
+              class="claudero-pref-control"
               type="number"
               id="zotero-prefpane-__addonRef__-helperPort"
               preference="helperPort"
@@ -139,6 +143,7 @@
               data-l10n-id="pref-proxy"
             ></html:label>
             <html:input
+              class="claudero-pref-control"
               type="text"
               id="zotero-prefpane-__addonRef__-proxy"
               preference="proxy"
@@ -152,6 +157,7 @@
               data-l10n-id="pref-env"
             ></html:label>
             <html:textarea
+              class="claudero-pref-control"
               id="zotero-prefpane-__addonRef__-environmentVariables"
               preference="environmentVariables"
               rows="5"
@@ -176,7 +182,10 @@
               class="claudero-pref-row-label"
               data-l10n-id="pref-current-host"
             ></html:label>
-            <html:code id="claudero-pref-host-key"></html:code>
+            <html:code
+              id="claudero-pref-host-key"
+              class="claudero-pref-control"
+            ></html:code>
           </html:div>
           <html:div class="claudero-pref-row">
             <html:label
@@ -185,6 +194,7 @@
               data-l10n-id="pref-claude-path"
             ></html:label>
             <html:input
+              class="claudero-pref-control"
               type="text"
               id="claudero-pref-claude-path"
               placeholder="/Users/you/.claude/local/claude"
@@ -197,6 +207,7 @@
               data-l10n-id="pref-provider-env"
             ></html:label>
             <html:textarea
+              class="claudero-pref-control"
               id="claudero-pref-claude-env"
               rows="5"
               placeholder="ANTHROPIC_API_KEY=..."
@@ -213,7 +224,10 @@
               class="claudero-pref-row-label"
               data-l10n-id="pref-current-host"
             ></html:label>
-            <html:code id="claudero-pref-host-key-codex"></html:code>
+            <html:code
+              id="claudero-pref-host-key-codex"
+              class="claudero-pref-control"
+            ></html:code>
           </html:div>
           <html:div class="claudero-pref-row">
             <html:label
@@ -222,6 +236,7 @@
               data-l10n-id="pref-codex-path"
             ></html:label>
             <html:input
+              class="claudero-pref-control"
               type="text"
               id="claudero-pref-codex-path"
               placeholder="/opt/homebrew/bin/codex"
@@ -233,7 +248,11 @@
               for="claudero-pref-codex-installation"
               data-l10n-id="pref-codex-installation"
             ></html:label>
-            <menulist native="true" id="claudero-pref-codex-installation">
+            <menulist
+              class="claudero-pref-control"
+              native="true"
+              id="claudero-pref-codex-installation"
+            >
               <menupopup>
                 <menuitem
                   value="native"
@@ -253,6 +272,7 @@
               data-l10n-id="pref-codex-wsl-distro"
             ></html:label>
             <html:input
+              class="claudero-pref-control"
               type="text"
               id="claudero-pref-codex-wsl-distro"
               placeholder="Ubuntu"
@@ -264,7 +284,11 @@
               for="claudero-pref-codex-safe-mode"
               data-l10n-id="pref-codex-safe-mode"
             ></html:label>
-            <menulist native="true" id="claudero-pref-codex-safe-mode">
+            <menulist
+              class="claudero-pref-control"
+              native="true"
+              id="claudero-pref-codex-safe-mode"
+            >
               <menupopup>
                 <menuitem
                   value="workspace-write"
@@ -284,6 +308,7 @@
               data-l10n-id="pref-provider-env"
             ></html:label>
             <html:textarea
+              class="claudero-pref-control"
               id="claudero-pref-codex-env"
               rows="5"
               placeholder="OPENAI_API_KEY=..."
@@ -309,6 +334,7 @@
               data-l10n-id="pref-mcp-servers"
             ></html:label>
             <html:textarea
+              class="claudero-pref-control"
               id="claudero-pref-mcp-servers"
               rows="12"
               placeholder='{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]}}}'
@@ -367,6 +393,7 @@
               data-l10n-id="pref-skills-import"
             ></html:label>
             <html:textarea
+              class="claudero-pref-control"
               id="claudero-pref-skills-import"
               rows="8"
               data-l10n-id="pref-skills-import-placeholder"

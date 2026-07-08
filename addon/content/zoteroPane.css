@@ -3020,7 +3020,8 @@ toolbarbutton.claudero-header-action:hover {
 .claudero-pref-row html|input,
 .claudero-pref-row html|textarea,
 .claudero-pref-row menulist,
-.claudero-pref-row html|code {
+.claudero-pref-row html|code,
+.claudero-pref-control {
   flex: 1 1 0 !important;
   min-width: 0 !important;
 }
@@ -3040,7 +3041,8 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-row html|input,
 .claudero-pref-row html|textarea,
-.claudero-pref-row menulist {
+.claudero-pref-row menulist,
+.claudero-pref-control {
   display: block;
   width: 100% !important;
   max-width: none !important;
