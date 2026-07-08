@@ -2993,12 +2993,55 @@ toolbarbutton.claudero-header-action:hover {
   gap: 9px;
 }
 
+.claudero-pref-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.claudero-pref-row-tall {
+  align-items: flex-start;
+}
+
+.claudero-pref-row-label {
+  flex: 0 0 9.5em;
+  min-width: 0;
+  color: var(--fill-primary, #222);
+  overflow-wrap: anywhere;
+}
+
+.claudero-pref-row-tall .claudero-pref-row-label {
+  padding-top: 5px;
+}
+
+.claudero-pref-row html|input,
+.claudero-pref-row html|textarea,
+.claudero-pref-row menulist,
+.claudero-pref-row html|code {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.claudero-pref-row html|button,
+.claudero-pref-row checkbox {
+  flex: 0 0 auto;
+}
+
 .claudero-pref-stack html|input,
 .claudero-pref-stack html|textarea,
 .claudero-pref-stack menulist {
   width: 38em;
   max-width: 100%;
   box-sizing: border-box;
+}
+
+.claudero-pref-row html|input,
+.claudero-pref-row html|textarea,
+.claudero-pref-row menulist {
+  width: auto;
+  max-width: none;
 }
 
 .claudero-pref-stack html|code {
@@ -3008,6 +3051,11 @@ toolbarbutton.claudero-header-action:hover {
   padding: 3px 6px;
   border-radius: 4px;
   background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.claudero-pref-row html|code {
+  width: auto;
+  max-width: none;
 }
 
 .claudero-pref-status {

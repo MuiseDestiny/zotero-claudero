@@ -75,187 +75,245 @@
           preference="academicSkills"
         ></html:input>
         <vbox id="claudero-pref-panel-general" class="claudero-pref-panel">
-          <html:label
-            for="zotero-prefpane-__addonRef__-nodePath"
-            data-l10n-id="pref-node-path"
-          ></html:label>
-          <html:input
-            type="text"
-            id="zotero-prefpane-__addonRef__-nodePath"
-            preference="nodePath"
-            placeholder="/opt/homebrew/bin/node"
-          ></html:input>
-          <html:label
-            for="zotero-prefpane-__addonRef__-provider"
-            data-l10n-id="pref-provider"
-          ></html:label>
-          <menulist
-            native="true"
-            id="zotero-prefpane-__addonRef__-provider"
-            preference="provider"
-          >
-            <menupopup>
-              <menuitem value="claude" label="Claude Code" />
-              <menuitem value="codex" label="Codex" />
-            </menupopup>
-          </menulist>
-          <html:label
-            for="zotero-prefpane-__addonRef__-workspacePath"
-            data-l10n-id="pref-workspace-path"
-          ></html:label>
-          <html:input
-            type="text"
-            id="zotero-prefpane-__addonRef__-workspacePath"
-            preference="workspacePath"
-            placeholder="Leave empty to use the Zotero profile"
-          ></html:input>
-          <html:label
-            for="zotero-prefpane-__addonRef__-helperPort"
-            data-l10n-id="pref-helper-port"
-          ></html:label>
-          <html:input
-            type="number"
-            id="zotero-prefpane-__addonRef__-helperPort"
-            preference="helperPort"
-            min="1024"
-            max="65535"
-          ></html:input>
-          <html:label
-            for="zotero-prefpane-__addonRef__-proxy"
-            data-l10n-id="pref-proxy"
-          ></html:label>
-          <html:input
-            type="text"
-            id="zotero-prefpane-__addonRef__-proxy"
-            preference="proxy"
-            placeholder="http://127.0.0.1:7890 (leave empty to disable)"
-          ></html:input>
-          <html:label
-            for="zotero-prefpane-__addonRef__-environmentVariables"
-            data-l10n-id="pref-env"
-          ></html:label>
-          <html:textarea
-            id="zotero-prefpane-__addonRef__-environmentVariables"
-            preference="environmentVariables"
-            rows="5"
-            placeholder="PATH=/opt/homebrew/bin:/usr/local/bin:$PATH"
-          ></html:textarea>
-          <html:button
-            id="claudero-test-helper"
-            data-l10n-id="pref-test"
-          ></html:button>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              for="zotero-prefpane-__addonRef__-nodePath"
+              data-l10n-id="pref-node-path"
+            ></html:label>
+            <html:input
+              type="text"
+              id="zotero-prefpane-__addonRef__-nodePath"
+              preference="nodePath"
+              placeholder="/opt/homebrew/bin/node"
+            ></html:input>
+          </hbox>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              for="zotero-prefpane-__addonRef__-provider"
+              data-l10n-id="pref-provider"
+            ></html:label>
+            <menulist
+              native="true"
+              id="zotero-prefpane-__addonRef__-provider"
+              preference="provider"
+            >
+              <menupopup>
+                <menuitem value="claude" label="Claude Code" />
+                <menuitem value="codex" label="Codex" />
+              </menupopup>
+            </menulist>
+          </hbox>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              for="zotero-prefpane-__addonRef__-workspacePath"
+              data-l10n-id="pref-workspace-path"
+            ></html:label>
+            <html:input
+              type="text"
+              id="zotero-prefpane-__addonRef__-workspacePath"
+              preference="workspacePath"
+              placeholder="Leave empty to use the Zotero profile"
+            ></html:input>
+          </hbox>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              for="zotero-prefpane-__addonRef__-helperPort"
+              data-l10n-id="pref-helper-port"
+            ></html:label>
+            <html:input
+              type="number"
+              id="zotero-prefpane-__addonRef__-helperPort"
+              preference="helperPort"
+              min="1024"
+              max="65535"
+            ></html:input>
+          </hbox>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              for="zotero-prefpane-__addonRef__-proxy"
+              data-l10n-id="pref-proxy"
+            ></html:label>
+            <html:input
+              type="text"
+              id="zotero-prefpane-__addonRef__-proxy"
+              preference="proxy"
+              placeholder="http://127.0.0.1:7890 (leave empty to disable)"
+            ></html:input>
+          </hbox>
+          <hbox class="claudero-pref-row claudero-pref-row-tall">
+            <html:label
+              class="claudero-pref-row-label"
+              for="zotero-prefpane-__addonRef__-environmentVariables"
+              data-l10n-id="pref-env"
+            ></html:label>
+            <html:textarea
+              id="zotero-prefpane-__addonRef__-environmentVariables"
+              preference="environmentVariables"
+              rows="5"
+              placeholder="PATH=/opt/homebrew/bin:/usr/local/bin:$PATH"
+            ></html:textarea>
+          </hbox>
+          <hbox class="claudero-pref-row claudero-pref-row-actions">
+            <html:span class="claudero-pref-row-label"></html:span>
+            <html:button
+              id="claudero-test-helper"
+              data-l10n-id="pref-test"
+            ></html:button>
+          </hbox>
         </vbox>
         <vbox
           id="claudero-pref-panel-claude"
           class="claudero-pref-panel"
           hidden="true"
         >
-          <html:label data-l10n-id="pref-current-host"></html:label>
-          <html:code id="claudero-pref-host-key"></html:code>
-          <html:label
-            for="claudero-pref-claude-path"
-            data-l10n-id="pref-claude-path"
-          ></html:label>
-          <html:input
-            type="text"
-            id="claudero-pref-claude-path"
-            placeholder="/Users/you/.claude/local/claude"
-          ></html:input>
-          <html:label
-            for="claudero-pref-claude-env"
-            data-l10n-id="pref-provider-env"
-          ></html:label>
-          <html:textarea
-            id="claudero-pref-claude-env"
-            rows="5"
-            placeholder="ANTHROPIC_API_KEY=..."
-          ></html:textarea>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              data-l10n-id="pref-current-host"
+            ></html:label>
+            <html:code id="claudero-pref-host-key"></html:code>
+          </hbox>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              for="claudero-pref-claude-path"
+              data-l10n-id="pref-claude-path"
+            ></html:label>
+            <html:input
+              type="text"
+              id="claudero-pref-claude-path"
+              placeholder="/Users/you/.claude/local/claude"
+            ></html:input>
+          </hbox>
+          <hbox class="claudero-pref-row claudero-pref-row-tall">
+            <html:label
+              class="claudero-pref-row-label"
+              for="claudero-pref-claude-env"
+              data-l10n-id="pref-provider-env"
+            ></html:label>
+            <html:textarea
+              id="claudero-pref-claude-env"
+              rows="5"
+              placeholder="ANTHROPIC_API_KEY=..."
+            ></html:textarea>
+          </hbox>
         </vbox>
         <vbox
           id="claudero-pref-panel-codex"
           class="claudero-pref-panel"
           hidden="true"
         >
-          <html:label data-l10n-id="pref-current-host"></html:label>
-          <html:code id="claudero-pref-host-key-codex"></html:code>
-          <html:label
-            for="claudero-pref-codex-path"
-            data-l10n-id="pref-codex-path"
-          ></html:label>
-          <html:input
-            type="text"
-            id="claudero-pref-codex-path"
-            placeholder="/opt/homebrew/bin/codex"
-          ></html:input>
-          <html:label
-            for="claudero-pref-codex-installation"
-            data-l10n-id="pref-codex-installation"
-          ></html:label>
-          <menulist native="true" id="claudero-pref-codex-installation">
-            <menupopup>
-              <menuitem
-                value="native"
-                data-l10n-id="pref-codex-installation-native"
-              />
-              <menuitem
-                value="wsl"
-                data-l10n-id="pref-codex-installation-wsl"
-              />
-            </menupopup>
-          </menulist>
-          <html:label
-            for="claudero-pref-codex-wsl-distro"
-            data-l10n-id="pref-codex-wsl-distro"
-          ></html:label>
-          <html:input
-            type="text"
-            id="claudero-pref-codex-wsl-distro"
-            placeholder="Ubuntu"
-          ></html:input>
-          <html:label
-            for="claudero-pref-codex-safe-mode"
-            data-l10n-id="pref-codex-safe-mode"
-          ></html:label>
-          <menulist native="true" id="claudero-pref-codex-safe-mode">
-            <menupopup>
-              <menuitem
-                value="workspace-write"
-                data-l10n-id="pref-codex-safe-workspace"
-              />
-              <menuitem
-                value="read-only"
-                data-l10n-id="pref-codex-safe-readonly"
-              />
-            </menupopup>
-          </menulist>
-          <html:label
-            for="claudero-pref-codex-env"
-            data-l10n-id="pref-provider-env"
-          ></html:label>
-          <html:textarea
-            id="claudero-pref-codex-env"
-            rows="5"
-            placeholder="OPENAI_API_KEY=..."
-          ></html:textarea>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              data-l10n-id="pref-current-host"
+            ></html:label>
+            <html:code id="claudero-pref-host-key-codex"></html:code>
+          </hbox>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              for="claudero-pref-codex-path"
+              data-l10n-id="pref-codex-path"
+            ></html:label>
+            <html:input
+              type="text"
+              id="claudero-pref-codex-path"
+              placeholder="/opt/homebrew/bin/codex"
+            ></html:input>
+          </hbox>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              for="claudero-pref-codex-installation"
+              data-l10n-id="pref-codex-installation"
+            ></html:label>
+            <menulist native="true" id="claudero-pref-codex-installation">
+              <menupopup>
+                <menuitem
+                  value="native"
+                  data-l10n-id="pref-codex-installation-native"
+                />
+                <menuitem
+                  value="wsl"
+                  data-l10n-id="pref-codex-installation-wsl"
+                />
+              </menupopup>
+            </menulist>
+          </hbox>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              for="claudero-pref-codex-wsl-distro"
+              data-l10n-id="pref-codex-wsl-distro"
+            ></html:label>
+            <html:input
+              type="text"
+              id="claudero-pref-codex-wsl-distro"
+              placeholder="Ubuntu"
+            ></html:input>
+          </hbox>
+          <hbox class="claudero-pref-row">
+            <html:label
+              class="claudero-pref-row-label"
+              for="claudero-pref-codex-safe-mode"
+              data-l10n-id="pref-codex-safe-mode"
+            ></html:label>
+            <menulist native="true" id="claudero-pref-codex-safe-mode">
+              <menupopup>
+                <menuitem
+                  value="workspace-write"
+                  data-l10n-id="pref-codex-safe-workspace"
+                />
+                <menuitem
+                  value="read-only"
+                  data-l10n-id="pref-codex-safe-readonly"
+                />
+              </menupopup>
+            </menulist>
+          </hbox>
+          <hbox class="claudero-pref-row claudero-pref-row-tall">
+            <html:label
+              class="claudero-pref-row-label"
+              for="claudero-pref-codex-env"
+              data-l10n-id="pref-provider-env"
+            ></html:label>
+            <html:textarea
+              id="claudero-pref-codex-env"
+              rows="5"
+              placeholder="OPENAI_API_KEY=..."
+            ></html:textarea>
+          </hbox>
         </vbox>
         <vbox
           id="claudero-pref-panel-mcp"
           class="claudero-pref-panel"
           hidden="true"
         >
-          <checkbox
-            id="claudero-pref-enable-zotero-mcp"
-            data-l10n-id="pref-enable-zotero-mcp"
-          />
-          <html:label
-            for="claudero-pref-mcp-servers"
-            data-l10n-id="pref-mcp-servers"
-          ></html:label>
-          <html:textarea
-            id="claudero-pref-mcp-servers"
-            rows="12"
-            placeholder='{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]}}}'
-          ></html:textarea>
+          <hbox class="claudero-pref-row">
+            <html:span class="claudero-pref-row-label"></html:span>
+            <checkbox
+              id="claudero-pref-enable-zotero-mcp"
+              data-l10n-id="pref-enable-zotero-mcp"
+            />
+          </hbox>
+          <hbox class="claudero-pref-row claudero-pref-row-tall">
+            <html:label
+              class="claudero-pref-row-label"
+              for="claudero-pref-mcp-servers"
+              data-l10n-id="pref-mcp-servers"
+            ></html:label>
+            <html:textarea
+              id="claudero-pref-mcp-servers"
+              rows="12"
+              placeholder='{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]}}}'
+            ></html:textarea>
+          </hbox>
           <hbox class="claudero-pref-mcp-actions">
             <html:button
               type="button"
@@ -302,15 +360,18 @@
             id="claudero-pref-skills-list"
             class="claudero-pref-skills-list"
           ></html:div>
-          <html:label
-            for="claudero-pref-skills-import"
-            data-l10n-id="pref-skills-import"
-          ></html:label>
-          <html:textarea
-            id="claudero-pref-skills-import"
-            rows="8"
-            data-l10n-id="pref-skills-import-placeholder"
-          ></html:textarea>
+          <hbox class="claudero-pref-row claudero-pref-row-tall">
+            <html:label
+              class="claudero-pref-row-label"
+              for="claudero-pref-skills-import"
+              data-l10n-id="pref-skills-import"
+            ></html:label>
+            <html:textarea
+              id="claudero-pref-skills-import"
+              rows="8"
+              data-l10n-id="pref-skills-import-placeholder"
+            ></html:textarea>
+          </hbox>
           <hbox class="claudero-pref-skills-actions">
             <html:button
               type="button"

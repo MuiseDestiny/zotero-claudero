@@ -34,6 +34,7 @@ import {
   type AcademicSkillRecord,
 } from "./academicSkills";
 import { exportDiagnosticLog } from "./diagnosticLog";
+import { autoDetectSettings } from "./settingsAutoDetect";
 import { getPref, setPref } from "../utils/prefs";
 
 type XulValueElement = HTMLElement & {
@@ -43,6 +44,7 @@ type XulValueElement = HTMLElement & {
 
 export async function registerPrefsScripts(window: Window) {
   const doc = window.document;
+  await autoDetectSettings();
   const testButton = doc.querySelector<HTMLButtonElement>(
     "#claudero-test-helper",
   );
