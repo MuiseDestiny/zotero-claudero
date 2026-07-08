@@ -3217,7 +3217,14 @@ toolbarbutton.claudero-header-action:hover {
   max-height: 420px;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-gutter: auto;
+  scrollbar-width: none;
   background: color-mix(in srgb, currentColor 3%, transparent);
+}
+
+.claudero-pref-skills-table-body-shell:hover,
+.claudero-pref-skills-table-body-shell:focus-within {
+  scrollbar-width: thin;
 }
 
 .claudero-pref-skills-table {
@@ -3230,6 +3237,7 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-skills-table-header {
   background: var(--material-mix-quarternary, #f5f5f5);
+  box-shadow: inset 0 -1px 0 var(--material-panedivider);
 }
 
 .claudero-pref-skills-table-body {
@@ -3238,6 +3246,7 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-skills-table-header th {
   border-bottom: 1px solid var(--material-panedivider);
+  box-shadow: inset 0 -1px 0 var(--material-panedivider);
 }
 
 .claudero-pref-skills-table th {
