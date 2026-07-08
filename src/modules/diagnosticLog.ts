@@ -1,4 +1,5 @@
 import { getPref } from "../utils/prefs";
+import { isZoteroMcpEnabled } from "./mcpSettings";
 import type { ClauderoSelectionContext } from "./zoteroContext";
 
 type DiagnosticLevel = "info" | "warning" | "error";
@@ -224,7 +225,7 @@ export function snapshotDiagnosticLog(extra: Record<string, unknown> = {}) {
       provider: getPref("provider"),
       helperPort: getPref("helperPort"),
       permissionMode: getPref("permissionMode"),
-      enableZoteroMcp: getPref("enableZoteroMcp"),
+      enableZoteroMcp: isZoteroMcpEnabled(),
     },
     ...extra,
     entries: entries.slice(),

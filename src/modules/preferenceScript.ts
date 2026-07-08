@@ -14,12 +14,10 @@ import {
 } from "./providerRegistry";
 import {
   getCustomMcpServersRaw,
-  isZoteroMcpEnabled,
   parseManagedMcpServers,
   parseCustomMcpServers,
   serializeManagedMcpServers,
   setCustomMcpServersRaw,
-  setZoteroMcpEnabled,
   type ManagedMcpServerConfig,
 } from "./mcpSettings";
 import {
@@ -189,9 +187,6 @@ function bindCodexSettings(doc: Document): void {
 }
 
 function bindMcpSettings(doc: Document): void {
-  const zoteroMcp = doc.querySelector("#claudero-pref-enable-zotero-mcp") as
-    | (HTMLElement & { checked?: boolean })
-    | null;
   const servers = doc.querySelector<HTMLTextAreaElement>(
     "#claudero-pref-mcp-servers",
   );
@@ -256,16 +251,6 @@ function bindMcpSettings(doc: Document): void {
       error?: string;
     };
   };
-
-  if (zoteroMcp) {
-    zoteroMcp.checked = isZoteroMcpEnabled();
-    zoteroMcp.addEventListener("command", () => {
-      setZoteroMcpEnabled(zoteroMcp.checked === true);
-    });
-    zoteroMcp.addEventListener("change", () => {
-      setZoteroMcpEnabled(zoteroMcp.checked === true);
-    });
-  }
 
   const renderStatus = (raw: string) => {
     if (!status) return;
@@ -618,7 +603,10 @@ function bindAcademicSkills(doc: Document): void {
     list.replaceChildren();
     const records = getAcademicSkillRecords();
     const shell = createHtml("div", "claudero-pref-skills-table-shell");
-    const table = createHtml("table", "claudero-pref-skills-table");
+    const headerTable = createHtml(
+      "table",
+      "claudero-pref-skills-table claudero-pref-skills-table-header",
+    );
     const thead = createHtml("thead");
     const headRow = createHtml("tr");
     for (const label of [
@@ -635,7 +623,16 @@ function bindAcademicSkills(doc: Document): void {
       headRow.appendChild(th);
     }
     thead.appendChild(headRow);
-    table.appendChild(thead);
+    headerTable.appendChild(thead);
+
+    const bodyShell = createHtml(
+      "div",
+      "claudero-pref-skills-table-body-shell",
+    );
+    const bodyTable = createHtml(
+      "table",
+      "claudero-pref-skills-table claudero-pref-skills-table-body",
+    );
 
     const tbody = createHtml("tbody");
     for (const record of records) {
@@ -731,8 +728,9 @@ function bindAcademicSkills(doc: Document): void {
       detailRow.appendChild(detailCell);
       tbody.appendChild(detailRow);
     }
-    table.appendChild(tbody);
-    shell.appendChild(table);
+    bodyTable.appendChild(tbody);
+    bodyShell.appendChild(bodyTable);
+    shell.append(headerTable, bodyShell);
     list.appendChild(shell);
   };
 
@@ -767,7 +765,10 @@ function bindAcademicSkills(doc: Document): void {
       const skill = importAcademicSkillFromText(raw);
       saveAcademicSkillOverride(skill, false);
       if (importText) importText.value = "";
-      setStatus(`Imported ${skill.title} as disabled`, "success");
+      setStatus(
+        `Imported ${skill.title}; enable it in the table when ready.`,
+        "success",
+      );
       renderList();
     } catch (error) {
       setStatus(

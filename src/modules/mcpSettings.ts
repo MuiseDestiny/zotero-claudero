@@ -14,11 +14,12 @@ export interface ManagedMcpServerConfig {
 }
 
 export function isZoteroMcpEnabled(): boolean {
-  return getPref("enableZoteroMcp") !== false;
+  return true;
 }
 
-export function setZoteroMcpEnabled(enabled: boolean): void {
-  setPref("enableZoteroMcp", enabled);
+export function setZoteroMcpEnabled(_enabled: boolean): void {
+  // Zotero MCP is a core Claudero capability and is always exposed when the
+  // helper/runtime supports MCP tools.
 }
 
 export function getCustomMcpServersRaw(): string {
@@ -51,8 +52,7 @@ export function parseCustomMcpServers(
     if (!name.trim() || !config || typeof config !== "object") continue;
     const managed = config as ManagedMcpServerConfig;
     if (managed.enabled === false) continue;
-    if (managed.contextSaving && !mentionedServers?.has(name.trim()))
-      continue;
+    if (managed.contextSaving && !mentionedServers?.has(name.trim())) continue;
     servers[name.trim()] = toRuntimeMcpConfig(managed);
   }
   return servers;

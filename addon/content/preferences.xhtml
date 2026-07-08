@@ -389,16 +389,6 @@
           hidden="true"
         >
           <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:span class="claudero-pref-row-label"></html:span>
-            <checkbox
-              id="claudero-pref-enable-zotero-mcp"
-              data-l10n-id="pref-enable-zotero-mcp"
-            />
-          </hbox>
-          <hbox
             class="claudero-pref-row claudero-pref-row-tall"
             style="display: flex; align-items: center; width: 100%"
           >
@@ -417,16 +407,16 @@
             ></html:textarea>
           </hbox>
           <hbox class="claudero-pref-mcp-actions">
-            <html:button
-              type="button"
+            <button
+              native="true"
               id="claudero-pref-mcp-add-stdio"
               data-l10n-id="pref-mcp-add-stdio"
-            ></html:button>
-            <html:button
-              type="button"
+            ></button>
+            <button
+              native="true"
               id="claudero-pref-mcp-add-http"
               data-l10n-id="pref-mcp-add-http"
-            ></html:button>
+            ></button>
           </hbox>
           <html:div
             id="claudero-pref-mcp-list"
