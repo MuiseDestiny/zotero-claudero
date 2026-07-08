@@ -369,6 +369,19 @@ async function runProvider(baseUrl, provider) {
     permissionMode: "dontAsk",
   });
   assertTextEvents(provider, "/send", sendEvents, sendToken);
+  const trace = await getJson(baseUrl, "/trace/latest");
+  assert(
+    trace?.traceId && Array.isArray(trace.events),
+    `${provider}: /trace/latest did not return a trace`,
+  );
+  assert(
+    trace.source?.provider === provider,
+    `${provider}: trace source provider mismatch`,
+  );
+  assert(
+    trace.events?.some((event) => event.event?.type === "done"),
+    `${provider}: trace did not record done event`,
+  );
 
   if (!full) return;
 

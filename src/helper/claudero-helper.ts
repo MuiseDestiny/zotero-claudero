@@ -25,6 +25,11 @@ import {
   normalizeModel as normalizeClaudeModel,
   type ClauderoPermissionMode,
 } from "./runtime/QueryOptionsBuilder";
+import {
+  AgentEventRecorder,
+  isAgentEventPayload,
+  type AgentEventTrace,
+} from "../shared/agentEvents";
 
 // Bump whenever the helper protocol changes so a stale helper process left
 // running from a previous plugin version is detected and restarted by the client.
@@ -165,7 +170,15 @@ async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
 }
 
-function writeEvent(res: ServerResponse, event: unknown): void {
+function writeEvent(
+  res: ServerResponse,
+  event: unknown,
+  recorder?: AgentEventRecorder,
+): void {
+  if (recorder && isAgentEventPayload(event)) {
+    recorder.record(event);
+    latestAgentTrace = recorder.snapshot();
+  }
   res.write(`${JSON.stringify(event)}\n`);
 }
 
@@ -380,6 +393,7 @@ const permissionManager = new PermissionManager();
 const claudeQueryManager = new PersistentQueryManager(permissionManager);
 const codexQueryManager = new CodexPersistentQueryManager(permissionManager);
 let activeProvider: HelperProvider = "claude";
+let latestAgentTrace: AgentEventTrace | null = null;
 
 function queryManagerFor(provider: HelperProvider) {
   return provider === "codex" ? codexQueryManager : claudeQueryManager;
@@ -685,7 +699,12 @@ async function handleSendWithPayload(
     "Cache-Control": "no-store",
     Connection: "keep-alive",
   });
-  writeEvent(res, { type: "ready" });
+  const traceRecorder = new AgentEventRecorder({
+    provider,
+    conversationId: payload.conversationId,
+    runtime: "helper",
+  });
+  writeEvent(res, { type: "ready" }, traceRecorder);
 
   try {
     if (provider === "codex") {
@@ -693,7 +712,7 @@ async function handleSendWithPayload(
         payload.prompt,
         payload.images,
       )) {
-        writeEvent(res, event);
+        writeEvent(res, event, traceRecorder);
       }
     } else {
       const streamState = new ToolInputStreamState();
@@ -703,16 +722,20 @@ async function handleSendWithPayload(
         payload.images,
       )) {
         for (const event of transformClaudeMessage(message, streamState)) {
-          writeEvent(res, event);
+          writeEvent(res, event, traceRecorder);
         }
       }
     }
-    writeEvent(res, { type: "done" });
+    writeEvent(res, { type: "done" }, traceRecorder);
   } catch (error) {
-    writeEvent(res, {
-      type: "error",
-      error: error instanceof Error ? error.message : String(error),
-    });
+    writeEvent(
+      res,
+      {
+        type: "error",
+        error: error instanceof Error ? error.message : String(error),
+      },
+      traceRecorder,
+    );
     // The streaming query threw — its underlying CLI session may be dead.
     // Drop it so the next message re-initializes a fresh query instead of
     // reusing a broken one (which surfaces as a NetworkError client-side).
@@ -893,6 +916,15 @@ async function route(
       provider: activeProvider,
       version: HELPER_VERSION,
     });
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/trace/latest") {
+    if (latestAgentTrace) {
+      sendJson(res, 200, latestAgentTrace);
+    } else {
+      sendJson(res, 204, "");
+    }
     return;
   }
 

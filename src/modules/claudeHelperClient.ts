@@ -14,63 +14,9 @@ import {
   parseCustomMcpServers,
 } from "./mcpSettings";
 import { getZoteroEndpointBaseUrl } from "./zoteroEndpoint";
+import type { AgentEventPayload } from "../shared/agentEvents";
 
-export interface ClauderoQueryEvent {
-  type:
-    | "ready"
-    | "session"
-    | "text"
-    | "text_delta"
-    | "text_snapshot"
-    | "thinking"
-    | "thinking_snapshot"
-    | "tool_use"
-    | "tool_use_delta"
-    | "tool_result"
-    | "usage"
-    | "thinking_tokens"
-    | "tool_progress"
-    | "error"
-    | "done"
-    | "commands_changed";
-  commands?: Array<{
-    name: string;
-    description: string;
-    argumentHint?: string;
-  }>;
-  text?: string;
-  session?: {
-    provider: "claude" | "codex";
-    sessionId?: string;
-    threadId?: string;
-    sessionFilePath?: string;
-    turnId?: string;
-  };
-  tool?: {
-    id: string;
-    name: string;
-    input?: unknown;
-    partialInput?: string;
-  };
-  index?: string;
-  input?: unknown;
-  partialInput?: string;
-  result?: {
-    id: string;
-    content: string;
-    isError: boolean;
-  };
-  usage?: {
-    outputTokens: number;
-    final: boolean;
-    durationMs?: number;
-  };
-  estimatedTokens?: number;
-  toolUseId?: string;
-  toolName?: string;
-  elapsedSeconds?: number;
-  error?: string;
-}
+export type ClauderoQueryEvent = AgentEventPayload;
 
 export interface ClauderoImageInput {
   media_type: string;
