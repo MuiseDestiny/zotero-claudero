@@ -77,6 +77,14 @@ export async function registerPrefsScripts(window: Window) {
     tabIndicator.style.left = `${active.offsetLeft}px`;
     tabIndicator.style.width = `${active.offsetWidth}px`;
   };
+  const scheduleTabIndicatorUpdate = () => {
+    updateTabIndicator();
+    window.requestAnimationFrame(() => {
+      updateTabIndicator();
+      window.requestAnimationFrame(updateTabIndicator);
+    });
+    window.setTimeout(updateTabIndicator, 60);
+  };
   const showPanel = (name: string) => {
     const normalized = [
       "general",
@@ -96,15 +104,14 @@ export async function registerPrefsScripts(window: Window) {
     panels.forEach((panel) => {
       panel.hidden = panel.id !== `claudero-pref-panel-${normalized}`;
     });
-    updateTabIndicator();
-    window.requestAnimationFrame(updateTabIndicator);
+    scheduleTabIndicatorUpdate();
   };
   tabs.forEach((tab) => {
     tab.addEventListener("click", () =>
       showPanel(tab.dataset.panel || "general"),
     );
   });
-  window.addEventListener("resize", updateTabIndicator);
+  window.addEventListener("resize", scheduleTabIndicatorUpdate);
 
   bindProviderPath(doc, "claude");
   bindProviderPath(doc, "codex");
@@ -115,7 +122,7 @@ export async function registerPrefsScripts(window: Window) {
   bindAcademicSkills(doc);
   bindDiagnostics(doc);
   showPanel(String(getPref("settingsProvider") || "general"));
-  window.setTimeout(updateTabIndicator, 0);
+  scheduleTabIndicatorUpdate();
 }
 
 async function readHelperToken(): Promise<string> {
