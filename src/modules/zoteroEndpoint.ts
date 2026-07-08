@@ -212,6 +212,9 @@ async function opGetEvidencePack(payload: any) {
     maxParagraphs: Number(payload.maxParagraphs || 0) || undefined,
     maxPages: Number(payload.maxPages || 0) || undefined,
     includeAnnotations: payload.includeAnnotations !== false,
+    includePageImages: payload.includePageImages === true,
+    maxPageImages: Number(payload.maxPageImages || 0) || undefined,
+    pageImageMaxWidth: Number(payload.pageImageMaxWidth || 0) || undefined,
   });
 }
 

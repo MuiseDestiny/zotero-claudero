@@ -8,13 +8,24 @@ const tools = ["get_evidence_pack", "locate_quote", "verify_citations"];
 const checks = [
   [
     "src/modules/evidence.ts",
-    ["EvidencePack", "EvidenceLocator", "evidenceUri", "verifyCitationClaims"],
+    [
+      "EvidencePack",
+      "EvidenceLocator",
+      "EvidencePageImage",
+      "evidenceUri",
+      "pageImage",
+      "includePageImages",
+      "verifyCitationClaims",
+    ],
   ],
   ["src/modules/zoteroEndpoint.ts", tools],
   ["src/helper/runtime/ZoteroMcpServer.ts", tools],
   ["src/helper/runtime/ZoteroMcpBridge.ts", tools],
   ["src/helper/runtime/PermissionManager.ts", tools],
-  ["src/modules/academicSkills.ts", ["verify-citations", ...tools]],
+  [
+    "src/modules/academicSkills.ts",
+    ["verify-citations", "figuresTables[].pageImage", ...tools],
+  ],
   [
     "src/modules/messageRenderer.ts",
     ["claudero-evidence-chip", "claudero-evidence:", "zotero://"],

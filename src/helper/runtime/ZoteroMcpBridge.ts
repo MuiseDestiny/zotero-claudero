@@ -127,7 +127,7 @@ function tools(): JsonRecord[] {
     {
       name: "get_evidence_pack",
       description:
-        "Build a citation-ready evidence pack for a Zotero item or attachment: ranked paragraphs, annotation provenance, page/open-pdf locators, and figure/table caption candidates. Use before scholarly synthesis or note generation.",
+        "Build a citation-ready evidence pack for a Zotero item or attachment: ranked paragraphs, annotation provenance, page/open-pdf locators, and figure/table caption candidates with page-level visual evidence. Pass includePageImages=true when the PDF is open in Zotero Reader and a multimodal model needs rendered page screenshots.",
       inputSchema: toolSchema({
         itemId: { type: "number" },
         attachmentId: { type: "number" },
@@ -135,6 +135,9 @@ function tools(): JsonRecord[] {
         maxParagraphs: { type: "number" },
         maxPages: { type: "number" },
         includeAnnotations: { type: "boolean" },
+        includePageImages: { type: "boolean" },
+        maxPageImages: { type: "number" },
+        pageImageMaxWidth: { type: "number" },
       }),
     },
     {

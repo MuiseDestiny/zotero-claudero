@@ -40,7 +40,20 @@ export interface EvidenceFigureTableCandidate {
   label: string;
   caption: string;
   locator: EvidenceLocator;
+  pageImage?: EvidencePageImage;
   pageContext?: EvidenceFigureTableContext;
+}
+
+export interface EvidencePageImage {
+  pageIndex: number;
+  pageNumber: number;
+  source: "pdfjs-canvas" | "open-pdf-uri";
+  openUri?: string;
+  dataUrl?: string;
+  mediaType?: "image/jpeg" | "image/png";
+  width?: number;
+  height?: number;
+  warning?: string;
 }
 
 export interface EvidenceFigureTableContext {
@@ -116,6 +129,11 @@ interface PdfJsLine {
   items: PdfJsTextItem[];
   rects: number[][];
   pageIndex: number;
+}
+
+interface PdfJsAppContext {
+  app: any;
+  pages: any[];
 }
 
 type CreatorLike = {
@@ -530,6 +548,149 @@ function getReaderForAttachment(attachmentId: number): any | null {
   return null;
 }
 
+function getPdfJsAppContext(attachmentId: number): PdfJsAppContext | null {
+  const reader = getReaderForAttachment(attachmentId);
+  if (!reader) return null;
+  try {
+    const Cu = (globalThis as any).Components?.utils;
+    const rawInternal = reader._internalReader;
+    const internal =
+      Cu?.waiveXrays && rawInternal ? Cu.waiveXrays(rawInternal) : rawInternal;
+    const view = internal?._lastView || internal?._primaryView;
+    const iframeWin = view?._iframeWindow;
+    const app =
+      iframeWin?.wrappedJSObject?.PDFViewerApplication ||
+      iframeWin?.PDFViewerApplication;
+    const pages = app?.pdfViewer?._pages;
+    if (!app || !Array.isArray(pages) || pages.length === 0) return null;
+    return { app, pages };
+  } catch {
+    return null;
+  }
+}
+
+async function waitForPdfJsPages(context: PdfJsAppContext): Promise<void> {
+  await context.app.pdfLoadingTask?.promise;
+  await context.app.pdfViewer?.pagesPromise;
+}
+
+function canvasFromPageView(pageView: any): HTMLCanvasElement | null {
+  const canvas =
+    pageView?.canvas ||
+    pageView?.div?.querySelector?.("canvas") ||
+    pageView?.canvasWrapper?.querySelector?.("canvas");
+  if (!canvas || typeof canvas.toDataURL !== "function") return null;
+  if (typeof HTMLCanvasElement === "undefined") {
+    return canvas as HTMLCanvasElement;
+  }
+  return canvas instanceof HTMLCanvasElement ? canvas : null;
+}
+
+function pageImageFallback(
+  attachment: Zotero.Item | undefined,
+  pageIndex: number,
+  warning?: string,
+): EvidencePageImage {
+  return {
+    pageIndex,
+    pageNumber: pageIndex + 1,
+    source: "open-pdf-uri",
+    openUri: makeOpenPdfUri(attachment, pageIndex),
+    warning,
+  };
+}
+
+function scaledCanvasDataUrl(
+  canvas: HTMLCanvasElement,
+  maxWidth: number,
+): {
+  dataUrl: string;
+  width: number;
+  height: number;
+  mediaType: "image/jpeg";
+} | null {
+  const width = Number(canvas.width || 0);
+  const height = Number(canvas.height || 0);
+  if (!width || !height) return null;
+
+  const targetWidth = Math.min(Math.max(320, maxWidth), width);
+  const scale = targetWidth / width;
+  const targetHeight = Math.max(1, Math.round(height * scale));
+  const doc = canvas.ownerDocument || globalThis.document;
+  const out = doc.createElement("canvas");
+  out.width = Math.round(targetWidth);
+  out.height = targetHeight;
+  const ctx = out.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(canvas, 0, 0, out.width, out.height);
+  return {
+    dataUrl: out.toDataURL("image/jpeg", 0.82),
+    width: out.width,
+    height: out.height,
+    mediaType: "image/jpeg",
+  };
+}
+
+async function capturePdfJsPageImage(options: {
+  attachment?: Zotero.Item;
+  pageIndex: number;
+  includeDataUrl: boolean;
+  maxWidth: number;
+}): Promise<EvidencePageImage | undefined> {
+  const { attachment, pageIndex } = options;
+  if (!attachment || typeof pageIndex !== "number" || pageIndex < 0) {
+    return undefined;
+  }
+  if (!options.includeDataUrl) {
+    return pageImageFallback(attachment, pageIndex);
+  }
+
+  const context = getPdfJsAppContext(attachment.id);
+  if (!context) {
+    return pageImageFallback(
+      attachment,
+      pageIndex,
+      "PDF.js page screenshot is available only when the attachment is open in Zotero Reader.",
+    );
+  }
+
+  try {
+    await waitForPdfJsPages(context);
+    const pageView = context.pages[pageIndex];
+    const canvas = canvasFromPageView(pageView);
+    if (!canvas) {
+      return pageImageFallback(
+        attachment,
+        pageIndex,
+        "PDF.js page canvas has not been rendered yet. Open or scroll to this page, then request evidence again.",
+      );
+    }
+    const image = scaledCanvasDataUrl(canvas, options.maxWidth);
+    if (!image) {
+      return pageImageFallback(
+        attachment,
+        pageIndex,
+        "PDF.js page canvas could not be converted to a page screenshot.",
+      );
+    }
+    return {
+      pageIndex,
+      pageNumber: pageIndex + 1,
+      source: "pdfjs-canvas",
+      openUri: makeOpenPdfUri(attachment, pageIndex),
+      ...image,
+    };
+  } catch (error) {
+    return pageImageFallback(
+      attachment,
+      pageIndex,
+      `PDF.js page screenshot failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
 function makeOpenPdfUri(
   attachment: Zotero.Item | undefined,
   pageIndex?: number,
@@ -624,41 +785,26 @@ async function extractPdfJsParagraphEvidence(
   attachment: Zotero.Item,
   maxPages: number,
 ): Promise<{ paragraphs: EvidenceParagraph[]; warnings: string[] }> {
-  const reader = getReaderForAttachment(attachment.id);
-  if (!reader) return { paragraphs: [], warnings: [] };
+  const context = getPdfJsAppContext(attachment.id);
+  if (!context) return { paragraphs: [], warnings: [] };
 
   try {
-    const Cu = (globalThis as any).Components?.utils;
-    const rawInternal = reader._internalReader;
-    const internal =
-      Cu?.waiveXrays && rawInternal ? Cu.waiveXrays(rawInternal) : rawInternal;
-    const view = internal?._lastView || internal?._primaryView;
-    const iframeWin = view?._iframeWindow;
-    const app =
-      iframeWin?.wrappedJSObject?.PDFViewerApplication ||
-      iframeWin?.PDFViewerApplication;
-    const pages = app?.pdfViewer?._pages;
-    if (!app || !Array.isArray(pages) || pages.length === 0) {
-      return { paragraphs: [], warnings: [] };
-    }
-
-    await app.pdfLoadingTask?.promise;
-    await app.pdfViewer?.pagesPromise;
+    await waitForPdfJsPages(context);
 
     const warnings: string[] = [];
     const pageLimit = Math.max(
       1,
-      Math.min(Number(maxPages || 120), pages.length),
+      Math.min(Number(maxPages || 120), context.pages.length),
     );
-    if (pageLimit < pages.length) {
+    if (pageLimit < context.pages.length) {
       warnings.push(
-        `PDF.js evidence extraction limited to ${pageLimit}/${pages.length} pages.`,
+        `PDF.js evidence extraction limited to ${pageLimit}/${context.pages.length} pages.`,
       );
     }
 
     const lines: PdfJsLine[] = [];
     for (let pageIndex = 0; pageIndex < pageLimit; pageIndex += 1) {
-      const pageView = pages[pageIndex];
+      const pageView = context.pages[pageIndex];
       const textContent = await pageView?.pdfPage?.getTextContent?.();
       const rawItems = Array.isArray(textContent?.items)
         ? (textContent.items as PdfJsTextItem[])
@@ -760,6 +906,7 @@ function figureTablePageContext(
 
 function extractFigureTableCandidates(
   paragraphs: EvidenceParagraph[],
+  pageImages = new Map<number, EvidencePageImage>(),
 ): EvidenceFigureTableCandidate[] {
   const candidates: EvidenceFigureTableCandidate[] = [];
   for (const [index, paragraph] of paragraphs.entries()) {
@@ -778,10 +925,47 @@ function extractFigureTableCandidates(
       label: `${match[1]} ${match[2]}`,
       caption: compact(paragraph.text, 900),
       locator: paragraph.locator,
+      pageImage:
+        typeof paragraph.locator.pageIndex === "number"
+          ? pageImages.get(paragraph.locator.pageIndex)
+          : undefined,
       pageContext: figureTablePageContext(paragraphs, index),
     });
   }
   return candidates.slice(0, 20);
+}
+
+async function figureTablePageImages(options: {
+  candidates: EvidenceFigureTableCandidate[];
+  attachment?: Zotero.Item;
+  includeDataUrls: boolean;
+  maxPageImages: number;
+  maxWidth: number;
+}): Promise<Map<number, EvidencePageImage>> {
+  const out = new Map<number, EvidencePageImage>();
+  const pageIndexes = [
+    ...new Set(
+      options.candidates
+        .map((candidate) => candidate.locator.pageIndex)
+        .filter(
+          (pageIndex): pageIndex is number => typeof pageIndex === "number",
+        ),
+    ),
+  ];
+  let dataUrlCount = 0;
+  for (const pageIndex of pageIndexes) {
+    const includeDataUrl =
+      options.includeDataUrls && dataUrlCount < options.maxPageImages;
+    const image = await capturePdfJsPageImage({
+      attachment: options.attachment,
+      pageIndex,
+      includeDataUrl,
+      maxWidth: options.maxWidth,
+    });
+    if (image) out.set(pageIndex, image);
+    if (includeDataUrl && image?.dataUrl) dataUrlCount += 1;
+  }
+  return out;
 }
 
 function parseAnnotationPosition(
@@ -878,6 +1062,9 @@ export async function buildEvidencePack(payload: {
   maxParagraphs?: number;
   maxPages?: number;
   includeAnnotations?: boolean;
+  includePageImages?: boolean;
+  maxPageImages?: number;
+  pageImageMaxWidth?: number;
 }): Promise<EvidencePack | { error: string }> {
   const target = await resolveEvidenceTarget(payload);
   if (!target)
@@ -962,6 +1149,20 @@ export async function buildEvidencePack(payload: {
     Math.min(Number(payload.maxParagraphs || 12), 20),
   );
   const path = attachment ? await attachmentPath(attachment) : undefined;
+  const figureTableCandidates = extractFigureTableCandidates(paragraphs);
+  const figureTableImages = await figureTablePageImages({
+    candidates: figureTableCandidates,
+    attachment,
+    includeDataUrls: payload.includePageImages === true,
+    maxPageImages: Math.max(
+      0,
+      Math.min(Number(payload.maxPageImages || 3), 12),
+    ),
+    maxWidth: Math.max(
+      640,
+      Math.min(Number(payload.pageImageMaxWidth || 1200), 1800),
+    ),
+  });
 
   return {
     item: itemMetadata(item),
@@ -978,13 +1179,14 @@ export async function buildEvidencePack(payload: {
     query: payload.query,
     paragraphs: rankedParagraphs,
     annotations: rankedAnnotations,
-    figuresTables: extractFigureTableCandidates(paragraphs),
+    figuresTables: extractFigureTableCandidates(paragraphs, figureTableImages),
     warnings,
     citationGuidance: [
       "Use evidence ids such as [para-3] or [anno-ABC] while drafting, then cite the locator page/openUri in final prose.",
       "Direct quotes must appear verbatim in an evidence paragraph or annotation; otherwise label them as paraphrases.",
       "Prefer paragraph or annotation evidence over item-level metadata for empirical claims.",
-      "For figure/table claims, cite the figure/table candidate caption plus pageContext.before/after when the claim depends on surrounding interpretation.",
+      "For figure/table claims, inspect the candidate pageImage when available; treat the full rendered page as the visual source of truth for captions, figures, tables, and surrounding interpretation.",
+      "If pageImage contains only an openUri, open that PDF page or request includePageImages=true while the attachment is open in Zotero Reader.",
     ],
   };
 }

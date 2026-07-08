@@ -334,7 +334,7 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
     promptTemplate: {
       system:
         "You are running Claudero's verify-citations academic workflow. Use get_evidence_pack, locate_quote, and verify_citations to audit claims against Zotero evidence. Never invent page numbers, quotes, or sources.",
-      task: "Return a verification table. Mark each claim as verified, weak, or unverified. Include evidence id, page/openUri when available, quote provenance for direct quotes, and a concrete fix for weak or unsupported claims.",
+      task: "Return a verification table. Mark each claim as verified, weak, or unverified. Include evidence id, page/openUri when available, quote provenance for direct quotes, and a concrete fix for weak or unsupported claims. For figure/table claims, request get_evidence_pack with includePageImages=true when possible and treat figuresTables[].pageImage as the visual source of truth.",
     },
     source: { type: "builtin" },
   },

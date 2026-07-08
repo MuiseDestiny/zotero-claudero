@@ -62,9 +62,14 @@ assert(
 const evidence = read("src/modules/evidence.ts");
 for (const marker of [
   "EvidenceFigureTableContext",
+  "EvidencePageImage",
+  "pageImage?: EvidencePageImage",
+  "includePageImages?: boolean",
+  'source: "pdfjs-canvas" | "open-pdf-uri"',
   "pageContext",
   "samePageEvidenceIds",
   "rects: paragraph.locator.position?.rects?.slice",
+  "treat the full rendered page as the visual source of truth",
 ]) {
   assert(evidence.includes(marker), `evidence source missing ${marker}`);
 }

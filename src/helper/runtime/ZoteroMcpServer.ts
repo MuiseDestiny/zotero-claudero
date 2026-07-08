@@ -131,7 +131,7 @@ export function createZoteroMcpServer(
       {
         name: "get_evidence_pack",
         description:
-          "Build a citation-ready evidence pack for a Zotero item or attachment: ranked paragraphs, annotation provenance, page/open-pdf locators, and figure/table caption candidates. Use before scholarly synthesis or note generation.",
+          "Build a citation-ready evidence pack for a Zotero item or attachment: ranked paragraphs, annotation provenance, page/open-pdf locators, and figure/table caption candidates with page-level visual evidence. Pass includePageImages=true when the PDF is open in Zotero Reader and a multimodal model needs rendered page screenshots.",
         inputSchema: {
           itemId: z.number().optional(),
           attachmentId: z.number().optional(),
@@ -139,6 +139,9 @@ export function createZoteroMcpServer(
           maxParagraphs: z.number().optional(),
           maxPages: z.number().optional(),
           includeAnnotations: z.boolean().optional(),
+          includePageImages: z.boolean().optional(),
+          maxPageImages: z.number().optional(),
+          pageImageMaxWidth: z.number().optional(),
         },
         handler: (args) => call("get_evidence_pack", args),
       },
