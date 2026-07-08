@@ -19,6 +19,7 @@ export type FluentMessageId =
   | 'pref-codex-safe-workspace'
   | 'pref-codex-wsl-distro'
   | 'pref-current-host'
+  | 'pref-diagnostics-export'
   | 'pref-diagnostics-refresh'
   | 'pref-enable'
   | 'pref-enable-zotero-mcp'

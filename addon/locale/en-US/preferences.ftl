@@ -44,5 +44,6 @@ pref-skills-import-placeholder =
     .placeholder = Paste Claudero skill JSON, Agent Skills SKILL.md, MCP prompt JSON, or Markdown instructions
 pref-skills-import-button = Import disabled
 pref-diagnostics-refresh = Refresh diagnostics
+pref-diagnostics-export = Export diagnostic log
 pref-test = Helper startup note
 pref-help = { $name } Build { $version } { $time }

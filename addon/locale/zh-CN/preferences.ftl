@@ -44,5 +44,6 @@ pref-skills-import-placeholder =
     .placeholder = 粘贴 Claudero skill JSON、Agent Skills SKILL.md、MCP prompt JSON 或 Markdown 指令
 pref-skills-import-button = 导入为禁用
 pref-diagnostics-refresh = 刷新诊断
+pref-diagnostics-export = 导出诊断日志
 pref-test = Helper 启动说明
 pref-help = { $name } Build { $version } { $time }

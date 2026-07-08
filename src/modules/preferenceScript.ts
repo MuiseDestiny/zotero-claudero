@@ -33,6 +33,7 @@ import {
   type AcademicSkill,
   type AcademicSkillRecord,
 } from "./academicSkills";
+import { exportDiagnosticLog } from "./diagnosticLog";
 import { getPref, setPref } from "../utils/prefs";
 
 type XulValueElement = HTMLElement & {
@@ -776,6 +777,9 @@ function bindDiagnostics(doc: Document): void {
   const refresh = doc.querySelector<HTMLButtonElement>(
     "#claudero-pref-diagnostics-refresh",
   );
+  const exportButton = doc.querySelector<HTMLButtonElement>(
+    "#claudero-pref-diagnostics-export",
+  );
   const status = doc.querySelector<HTMLElement>(
     "#claudero-pref-diagnostics-status",
   );
@@ -894,5 +898,27 @@ function bindDiagnostics(doc: Document): void {
   };
 
   refresh?.addEventListener("click", () => void load());
+  exportButton?.addEventListener("click", () => {
+    if (status) {
+      status.classList.remove("error", "success");
+      status.textContent = "Exporting diagnostic log...";
+    }
+    void exportDiagnosticLog()
+      .then((path) => {
+        if (status) {
+          status.textContent = `Diagnostic log saved: ${path}`;
+          status.classList.add("success");
+        }
+      })
+      .catch((error) => {
+        if (status) {
+          status.textContent =
+            error instanceof Error
+              ? `Export failed: ${error.message}`
+              : "Export failed";
+          status.classList.add("error");
+        }
+      });
+  });
   void load();
 }

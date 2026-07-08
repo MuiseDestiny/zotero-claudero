@@ -83,6 +83,13 @@ import {
   type PendingExitPlan,
   type QuestionDialogState,
 } from "./permissionDialog";
+import {
+  logDiagnostic,
+  logToolResult,
+  logToolUse,
+  logTurnEnd,
+  logTurnStart,
+} from "./diagnosticLog";
 
 type NoticeKind = "info" | "warning" | "auth" | "success";
 
@@ -1187,6 +1194,11 @@ function maybeAppendUndoCard(
     parsed.result && typeof parsed.result.itemId === "number"
       ? parsed.result.itemId
       : undefined;
+  logDiagnostic("write.success", {
+    operationId: opId,
+    label,
+    itemId,
+  });
   appendUndoCard(state, opId, label, itemId);
 }
 
@@ -1256,15 +1268,22 @@ function appendUndoCard(
   undoBtn.appendChild(undoSvg);
   undoBtn.addEventListener("click", () => {
     undoBtn.disabled = true;
+    logDiagnostic("write.undo.requested", { operationId, label, itemId });
     void callZoteroEndpoint({ action: "undo_last", operationId })
       .then((res) => {
         if (res?.success) {
+          logDiagnostic("write.undo.success", { operationId, label, itemId });
           card.classList.add("undone");
           icon.textContent = "↩";
           text.textContent = `已撤销 · ${label}`;
           viewBtn?.remove();
           undoBtn.remove();
         } else {
+          logDiagnostic(
+            "write.undo.failed",
+            { operationId, label, itemId, error: res?.error || "unknown" },
+            "warning",
+          );
           undoBtn.disabled = false;
           appendNoticeCard(
             state,
@@ -1275,6 +1294,11 @@ function appendUndoCard(
         }
       })
       .catch((e) => {
+        logDiagnostic(
+          "write.undo.error",
+          { operationId, label, itemId, error: String(e) },
+          "error",
+        );
         undoBtn.disabled = false;
         appendNoticeCard(state, "warning", "撤销失败", String(e));
       });
@@ -3372,6 +3396,17 @@ async function sendPrompt(
       basePrompt,
       getEnabledAcademicSkills(),
     );
+    logTurnStart({
+      provider,
+      model: getSelectedModel(state),
+      effort: getSelectedEffort(state),
+      permissionMode: state.permissionMode,
+      conversationId: state.conversationId,
+      promptLength: basePrompt.length,
+      imageCount: images.length,
+      academicSkill: academicMatch?.skill.id || null,
+      context,
+    });
     const workflowPrompt = academicMatch
       ? compileAcademicSkillPrompt({
           userPrompt: basePrompt,
@@ -3404,6 +3439,12 @@ async function sendPrompt(
     })) {
       if (state.cancelRequested) break;
       if (event.type === "session") {
+        logDiagnostic("provider.session", {
+          provider: event.session.provider,
+          sessionId: event.session.sessionId,
+          threadId: event.session.threadId,
+          turnId: event.session.turnId,
+        });
         applyProviderSessionEvent(state, event.session);
       } else if (event.type === "ready") {
         setActivity(state, "responding");
@@ -3467,6 +3508,7 @@ async function sendPrompt(
         startThinkingAnimation(state);
         await animateAssistantText(state, event.text);
       } else if (event.type === "tool_use" && event.tool) {
+        logToolUse(event.tool);
         finalizeThinkingCard(state);
         finalizeAssistantThinkingBlock(state, Date.now() - state.thinkingTs);
         const skillIntroCard = state.currentAssistantCard;
@@ -3552,6 +3594,7 @@ async function sendPrompt(
           stopThinkingAnimation(state);
         }
       } else if (event.type === "tool_result" && event.result) {
+        logToolResult(event.result);
         hideQuestionDialog(state);
         appendToolResult(state, event.result);
         pushAssistantBlock(state, {
@@ -3577,6 +3620,11 @@ async function sendPrompt(
         setActivity(state, "responding");
         startThinkingAnimation(state);
       } else if (event.type === "usage" && event.usage) {
+        logDiagnostic("usage", {
+          outputTokens: event.usage.outputTokens,
+          final: event.usage.final,
+          durationMs: event.usage.durationMs,
+        });
         updateTurnUsage(state, event.usage);
       } else if (
         event.type === "thinking_tokens" &&
@@ -3604,6 +3652,13 @@ async function sendPrompt(
           argumentHint: c.argumentHint,
         }));
       } else if (event.type === "done") {
+        logTurnEnd({
+          cancelled: false,
+          durationMs: Date.now() - userTs,
+          outputTokens: state.turnOutputTokens,
+          responseChars: state.turnResponseChars,
+          thinkingTokens: state.thinkingTokenEstimate,
+        });
         stopThinkingAnimation(state);
         finalizeThinkingCard(state);
         finalizeAssistantThinkingBlock(state, Date.now() - state.thinkingTs);
@@ -3718,6 +3773,13 @@ async function sendPrompt(
         const message =
           event.error ||
           `${providerLabel(normalizeProvider(state.providerSelect.value))} query failed.`;
+        logTurnEnd({
+          error: message,
+          durationMs: Date.now() - userTs,
+          outputTokens: state.turnOutputTokens,
+          responseChars: state.turnResponseChars,
+          thinkingTokens: state.thinkingTokenEstimate,
+        });
         if (isClaudeLimitError(message)) {
           appendLimitPrompt(state, message);
         } else if (isClaudeAuthError(message)) {
@@ -3736,6 +3798,14 @@ async function sendPrompt(
   } catch (error) {
     sawError = true;
     const message = error instanceof Error ? error.message : String(error);
+    logTurnEnd({
+      error: message,
+      cancelled: state.cancelRequested,
+      durationMs: Date.now() - userTs,
+      outputTokens: state.turnOutputTokens,
+      responseChars: state.turnResponseChars,
+      thinkingTokens: state.thinkingTokenEstimate,
+    });
     if (isClaudeLimitError(message)) {
       appendLimitPrompt(state, message);
     } else if (isClaudeAuthError(message)) {
@@ -3745,6 +3815,15 @@ async function sendPrompt(
       setStatusDot(state, "error");
     }
   } finally {
+    if (state.cancelRequested) {
+      logTurnEnd({
+        cancelled: true,
+        durationMs: Date.now() - userTs,
+        outputTokens: state.turnOutputTokens,
+        responseChars: state.turnResponseChars,
+        thinkingTokens: state.thinkingTokenEstimate,
+      });
+    }
     state.cancelRequested = false;
     stopThinkingAnimation(state);
     finalizeThinkingCard(state);
