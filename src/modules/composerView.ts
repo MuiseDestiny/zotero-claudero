@@ -629,7 +629,6 @@ export function createComposerView<S>(
   const toolbarLeft = createEl(doc, "div", "claudero-toolbar-left");
   toolbarLeft.append(
     atBtn,
-    providerSelect.element,
     effortModel.primary.element,
     permissionSelect.element,
     spacer,
@@ -643,7 +642,6 @@ export function createComposerView<S>(
       const w = entries[0].contentRect.width;
       permissionSelect.element.style.display = w < 360 ? "none" : "";
       effortModel.primary.element.style.display = w < 220 ? "none" : "";
-      providerSelect.element.style.display = w < 280 ? "none" : "";
     },
   );
   ro.observe(toolbar);
