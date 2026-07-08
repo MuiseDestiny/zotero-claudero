@@ -153,6 +153,28 @@ export interface CitationVisualInspectionHint {
   };
 }
 
+export interface EvidenceTrustReport {
+  summary: {
+    totalClaims: number;
+    verified: number;
+    weak: number;
+    unverified: number;
+    visualInspectionRequired: number;
+  };
+  verifications: CitationVerification[];
+  claimSourceMap: Record<string, EvidenceLocator | null>;
+  nextActions: EvidenceTrustReportAction[];
+  markdown: string;
+  warnings: string[];
+}
+
+export interface EvidenceTrustReportAction {
+  kind: "inspect_figure_table_page" | "revise_or_find_source";
+  claim: string;
+  reason: string;
+  arguments?: CitationVisualInspectionHint["arguments"];
+}
+
 interface TextPage {
   pageIndex?: number;
   text: string;
@@ -1674,4 +1696,145 @@ export async function verifyCitationClaims(payload: {
   }
 
   return { verifications, claimSourceMap, warnings: [...warnings] };
+}
+
+function markdownCell(value: unknown): string {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/\|/g, "\\|")
+    .trim();
+}
+
+function verificationLocation(verification: CitationVerification): string {
+  const locator = verification.evidence?.locator;
+  if (!locator) return "";
+  return [
+    locator.pageNumber ? `p. ${locator.pageNumber}` : "",
+    locator.openUri || locator.evidenceUri || "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function trustReportActions(
+  verifications: CitationVerification[],
+): EvidenceTrustReportAction[] {
+  const actions: EvidenceTrustReportAction[] = [];
+  for (const verification of verifications) {
+    if (verification.visualInspection) {
+      actions.push({
+        kind: "inspect_figure_table_page",
+        claim: verification.claim,
+        reason: verification.visualInspection.reason,
+        arguments: verification.visualInspection.arguments,
+      });
+    }
+    if (verification.status === "unverified") {
+      actions.push({
+        kind: "revise_or_find_source",
+        claim: verification.claim,
+        reason:
+          "No sufficiently supporting text evidence was found; revise the claim, add a source, or inspect additional evidence.",
+      });
+    }
+  }
+  return actions;
+}
+
+function trustReportMarkdown(options: {
+  summary: EvidenceTrustReport["summary"];
+  verifications: CitationVerification[];
+  nextActions: EvidenceTrustReportAction[];
+  warnings: string[];
+}): string {
+  const lines = [
+    "# Evidence Trust Report",
+    "",
+    `Claims: ${options.summary.totalClaims}`,
+    `Verified: ${options.summary.verified}`,
+    `Weak: ${options.summary.weak}`,
+    `Unverified: ${options.summary.unverified}`,
+    `Needs visual inspection: ${options.summary.visualInspectionRequired}`,
+    "",
+    "| Claim | Status | Confidence | Evidence | Next step |",
+    "| --- | --- | ---: | --- | --- |",
+  ];
+
+  for (const verification of options.verifications) {
+    const nextStep = verification.visualInspection
+      ? `Call ${verification.visualInspection.tool}`
+      : verification.status === "unverified"
+        ? "Revise claim or find stronger source"
+        : "";
+    lines.push(
+      [
+        markdownCell(verification.claim),
+        markdownCell(verification.status),
+        markdownCell(verification.confidence),
+        markdownCell(verificationLocation(verification)),
+        markdownCell(nextStep),
+      ].join(" | "),
+    );
+  }
+
+  if (options.nextActions.length) {
+    lines.push("", "## Next Actions");
+    for (const action of options.nextActions) {
+      lines.push(
+        `- ${action.kind}: ${action.reason} Claim: ${markdownCell(action.claim)}`,
+      );
+    }
+  }
+
+  if (options.warnings.length) {
+    lines.push("", "## Warnings");
+    for (const warning of options.warnings) {
+      lines.push(`- ${markdownCell(warning)}`);
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+export async function buildEvidenceTrustReport(payload: {
+  claims?: CitationClaimInput[];
+  text?: string;
+  itemId?: number;
+  attachmentId?: number;
+}): Promise<EvidenceTrustReport | { error: string }> {
+  const verification = await verifyCitationClaims({
+    claims: Array.isArray(payload.claims) ? payload.claims : [],
+    text: payload.text,
+    itemId: payload.itemId,
+    attachmentId: payload.attachmentId,
+  });
+  if ("error" in verification) return verification;
+
+  const verifications = verification.verifications;
+  const summary: EvidenceTrustReport["summary"] = {
+    totalClaims: verifications.length,
+    verified: verifications.filter((entry) => entry.status === "verified")
+      .length,
+    weak: verifications.filter((entry) => entry.status === "weak").length,
+    unverified: verifications.filter((entry) => entry.status === "unverified")
+      .length,
+    visualInspectionRequired: verifications.filter(
+      (entry) => entry.visualInspection?.required,
+    ).length,
+  };
+  const nextActions = trustReportActions(verifications);
+  const warnings = [...verification.warnings];
+  return {
+    summary,
+    verifications,
+    claimSourceMap: verification.claimSourceMap,
+    nextActions,
+    markdown: trustReportMarkdown({
+      summary,
+      verifications,
+      nextActions,
+      warnings,
+    }),
+    warnings,
+  };
 }

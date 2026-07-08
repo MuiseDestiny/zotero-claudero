@@ -16,7 +16,7 @@ const INSTRUCTIONS = [
   "A lightweight current Zotero context is already included in each user request. Use get_current_context only when you need a refresh or when the included context is insufficient.",
   "Use Zotero MCP tools for semantic library state, annotations, attachment paths, evidence packs, citation verification, and safe writes.",
   "For full PDF text, tables, formulas, or layout, get the attachment path and read the local PDF directly with Python instead of asking Zotero MCP for full text.",
-  "For scholarly answers, call get_evidence_pack before making factual claims, locate_quote before quoting, and verify_citations before finalizing claim-heavy output. Mark unsupported claims instead of inventing citations.",
+  "For scholarly answers, call get_evidence_pack before making factual claims, locate_quote before quoting, and build_trust_report before finalizing claim-heavy output. Mark unsupported claims instead of inventing citations.",
   "For figure/table claims, call inspect_figure_table_page when page-level visual evidence is needed; use the rendered page image as the source of truth for caption and visual-content checks.",
   "Read tools can be called directly.",
   "Write tools require user approval before the tool handler performs the operation.",
@@ -237,6 +237,31 @@ function tools(): JsonRecord[] {
         },
         [],
       ),
+    },
+    {
+      name: "build_trust_report",
+      description:
+        "Build a concise Evidence Trust Report for an academic answer or claim list. Summarizes verified, weak, unverified, and figure/table claims that need visual inspection, without attaching page images by default.",
+      inputSchema: toolSchema({
+        itemId: { type: "number" },
+        attachmentId: { type: "number" },
+        text: { type: "string" },
+        claims: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              claim: { type: "string" },
+              quote: { type: "string" },
+              itemId: { type: "number" },
+              attachmentId: { type: "number" },
+              pageIndex: { type: "number" },
+            },
+            required: ["claim"],
+            additionalProperties: false,
+          },
+        },
+      }),
     },
     {
       name: "inspect_figure_table_page",

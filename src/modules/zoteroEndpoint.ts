@@ -1,5 +1,6 @@
 import {
   buildEvidencePack,
+  buildEvidenceTrustReport,
   inspectFigureTablePage,
   locateQuote,
   verifyCitationClaims,
@@ -230,6 +231,15 @@ async function opLocateQuote(payload: any) {
 
 async function opVerifyCitations(payload: any) {
   return verifyCitationClaims({
+    claims: Array.isArray(payload.claims) ? payload.claims : [],
+    text: typeof payload.text === "string" ? payload.text : undefined,
+    itemId: Number(payload.itemId || 0) || undefined,
+    attachmentId: Number(payload.attachmentId || 0) || undefined,
+  });
+}
+
+async function opBuildTrustReport(payload: any) {
+  return buildEvidenceTrustReport({
     claims: Array.isArray(payload.claims) ? payload.claims : [],
     text: typeof payload.text === "string" ? payload.text : undefined,
     itemId: Number(payload.itemId || 0) || undefined,
@@ -606,6 +616,9 @@ export function registerZoteroEndpoint(): void {
             case "verify_citations":
               result = await opVerifyCitations(payload);
               break;
+            case "build_trust_report":
+              result = await opBuildTrustReport(payload);
+              break;
             case "inspect_figure_table_page":
               result = await opInspectFigureTablePage(payload);
               break;
@@ -636,6 +649,7 @@ export function registerZoteroEndpoint(): void {
                   "get_evidence_pack",
                   "locate_quote",
                   "verify_citations",
+                  "build_trust_report",
                   "inspect_figure_table_page",
                   "write_tags",
                   "create_note",
