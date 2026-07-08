@@ -133,6 +133,7 @@ function tools(): JsonRecord[] {
         attachmentId: { type: "number" },
         query: { type: "string" },
         maxParagraphs: { type: "number" },
+        maxPages: { type: "number" },
         includeAnnotations: { type: "boolean" },
       }),
     },
@@ -158,6 +159,7 @@ function tools(): JsonRecord[] {
         {
           itemId: { type: "number" },
           attachmentId: { type: "number" },
+          text: { type: "string" },
           claims: {
             type: "array",
             items: {
@@ -174,7 +176,7 @@ function tools(): JsonRecord[] {
             },
           },
         },
-        ["claims"],
+        [],
       ),
     },
     {

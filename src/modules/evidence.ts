@@ -4,13 +4,26 @@ export interface EvidenceLocator {
   attachmentId?: number;
   attachmentKey?: string;
   title: string;
-  sourceType: "metadata" | "fulltext" | "annotation";
+  sourceType: "metadata" | "fulltext" | "pdfjs" | "annotation";
   pageIndex?: number;
   pageNumber?: number;
   paragraphIndex?: number;
   annotationId?: number;
   annotationKey?: string;
+  position?: EvidencePosition;
   openUri?: string;
+}
+
+export interface EvidencePosition {
+  pageIndex: number;
+  rects?: number[][];
+  lines?: EvidenceLine[];
+}
+
+export interface EvidenceLine {
+  text: string;
+  rects: number[][];
+  pageIndex: number;
 }
 
 export interface EvidenceParagraph {
@@ -79,6 +92,21 @@ export interface CitationVerification {
 interface TextPage {
   pageIndex?: number;
   text: string;
+}
+
+interface PdfJsTextItem {
+  str?: string;
+  hasEOL?: boolean;
+  transform?: number[];
+  width?: number;
+  height?: number;
+}
+
+interface PdfJsLine {
+  text: string;
+  items: PdfJsTextItem[];
+  rects: number[][];
+  pageIndex: number;
 }
 
 type CreatorLike = {
@@ -381,6 +409,118 @@ function splitParagraphText(text: string): string[] {
   return paragraphs;
 }
 
+function itemRect(item: PdfJsTextItem): number[] | null {
+  const transform = item.transform || [];
+  const x = Number(transform[4]);
+  const y = Number(transform[5]);
+  const width = Number(item.width || 0);
+  const height = Number(item.height || transform[0] || 0);
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  return [x, y, x + Math.max(width, 0), y + Math.max(height, 0)];
+}
+
+function compactRects(rects: number[][]): number[][] {
+  return rects
+    .filter((rect) => rect.length === 4 && rect.every(Number.isFinite))
+    .map((rect) => rect.map((value) => Number(value.toFixed(3))));
+}
+
+function flushPdfJsLine(
+  lines: PdfJsLine[],
+  pageIndex: number,
+  line: { text: string; items: PdfJsTextItem[]; rects: number[][] },
+): void {
+  const text = line.text.replace(/\s+/g, " ").trim();
+  if (!text) return;
+  lines.push({
+    text,
+    items: [...line.items],
+    rects: compactRects(line.rects),
+    pageIndex,
+  });
+  line.text = "";
+  line.items = [];
+  line.rects = [];
+}
+
+function linesToParagraphs(lines: PdfJsLine[]): Array<{
+  text: string;
+  lines: EvidenceLine[];
+  rects: number[][];
+  pageIndex: number;
+}> {
+  const paragraphs: Array<{
+    text: string;
+    lines: EvidenceLine[];
+    rects: number[][];
+    pageIndex: number;
+  }> = [];
+  let current: PdfJsLine[] = [];
+  const flush = () => {
+    if (!current.length) return;
+    const text = current
+      .map((line) => line.text)
+      .join("\n")
+      .trim();
+    if (text.length >= 40 || isCaption(text)) {
+      paragraphs.push({
+        text,
+        lines: current.map((line) => ({
+          text: line.text,
+          rects: line.rects,
+          pageIndex: line.pageIndex,
+        })),
+        rects: compactRects(current.flatMap((line) => line.rects)),
+        pageIndex: current[0].pageIndex,
+      });
+    }
+    current = [];
+  };
+
+  for (const line of lines) {
+    if (!line.text.trim()) {
+      flush();
+      continue;
+    }
+    if (current.length && isCaption(line.text)) flush();
+    current.push(line);
+    const text = current.map((entry) => entry.text).join(" ");
+    if (
+      text.length > 900 ||
+      (text.length > 260 && /[。！？.!?]$/.test(line.text))
+    ) {
+      flush();
+    }
+  }
+  flush();
+  return paragraphs;
+}
+
+function getReaderForAttachment(attachmentId: number): any | null {
+  try {
+    const mainWin = Zotero.getMainWindow() as any;
+    const readerApi = mainWin?.Zotero?.Reader || (Zotero as any).Reader;
+    const selectedID = mainWin?.Zotero_Tabs?.selectedID;
+    const selectedReader = selectedID
+      ? readerApi?.getByTabID?.(selectedID)
+      : null;
+    if (selectedReader?._item?.id === attachmentId) return selectedReader;
+    const readers = readerApi?._readers;
+    if (Array.isArray(readers)) {
+      return (
+        readers.find(
+          (reader: any) =>
+            reader?._item?.id === attachmentId ||
+            reader?.itemID === attachmentId,
+        ) || null
+      );
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function makeOpenPdfUri(
   attachment: Zotero.Item | undefined,
   pageIndex?: number,
@@ -413,6 +553,7 @@ function paragraphEvidence(options: {
   pageIndex?: number;
   paragraphIndex: number;
   idPrefix: string;
+  position?: EvidencePosition;
 }): EvidenceParagraph {
   return {
     id: `${options.idPrefix}-${options.paragraphIndex + 1}`,
@@ -432,9 +573,103 @@ function paragraphEvidence(options: {
           ? options.pageIndex + 1
           : undefined,
       paragraphIndex: options.paragraphIndex,
+      position: options.position,
       openUri: makeOpenPdfUri(options.attachment, options.pageIndex),
     },
   };
+}
+
+async function extractPdfJsParagraphEvidence(
+  item: Zotero.Item,
+  attachment: Zotero.Item,
+  maxPages: number,
+): Promise<{ paragraphs: EvidenceParagraph[]; warnings: string[] }> {
+  const reader = getReaderForAttachment(attachment.id);
+  if (!reader) return { paragraphs: [], warnings: [] };
+
+  try {
+    const Cu = (globalThis as any).Components?.utils;
+    const rawInternal = reader._internalReader;
+    const internal =
+      Cu?.waiveXrays && rawInternal ? Cu.waiveXrays(rawInternal) : rawInternal;
+    const view = internal?._lastView || internal?._primaryView;
+    const iframeWin = view?._iframeWindow;
+    const app =
+      iframeWin?.wrappedJSObject?.PDFViewerApplication ||
+      iframeWin?.PDFViewerApplication;
+    const pages = app?.pdfViewer?._pages;
+    if (!app || !Array.isArray(pages) || pages.length === 0) {
+      return { paragraphs: [], warnings: [] };
+    }
+
+    await app.pdfLoadingTask?.promise;
+    await app.pdfViewer?.pagesPromise;
+
+    const warnings: string[] = [];
+    const pageLimit = Math.max(
+      1,
+      Math.min(Number(maxPages || 120), pages.length),
+    );
+    if (pageLimit < pages.length) {
+      warnings.push(
+        `PDF.js evidence extraction limited to ${pageLimit}/${pages.length} pages.`,
+      );
+    }
+
+    const lines: PdfJsLine[] = [];
+    for (let pageIndex = 0; pageIndex < pageLimit; pageIndex += 1) {
+      const pageView = pages[pageIndex];
+      const textContent = await pageView?.pdfPage?.getTextContent?.();
+      const rawItems = Array.isArray(textContent?.items)
+        ? (textContent.items as PdfJsTextItem[])
+        : [];
+      const line = {
+        text: "",
+        items: [] as PdfJsTextItem[],
+        rects: [] as number[][],
+      };
+      for (const textItem of rawItems) {
+        const str = String(textItem.str || "");
+        if (str) {
+          line.text += str;
+          line.items.push(textItem);
+          const rect = itemRect(textItem);
+          if (rect) line.rects.push(rect);
+        }
+        if (textItem.hasEOL) flushPdfJsLine(lines, pageIndex, line);
+      }
+      flushPdfJsLine(lines, pageIndex, line);
+    }
+
+    return {
+      paragraphs: linesToParagraphs(lines).map((paragraph, index) =>
+        paragraphEvidence({
+          text: paragraph.text,
+          item,
+          attachment,
+          sourceType: "pdfjs",
+          pageIndex: paragraph.pageIndex,
+          paragraphIndex: index,
+          idPrefix: "para",
+          position: {
+            pageIndex: paragraph.pageIndex,
+            rects: paragraph.rects,
+            lines: paragraph.lines,
+          },
+        }),
+      ),
+      warnings,
+    };
+  } catch (error) {
+    return {
+      paragraphs: [],
+      warnings: [
+        `PDF.js evidence extraction failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ],
+    };
+  }
 }
 
 function rankParagraphs(
@@ -561,6 +796,7 @@ export async function buildEvidencePack(payload: {
   attachmentId?: number;
   query?: string;
   maxParagraphs?: number;
+  maxPages?: number;
   includeAnnotations?: boolean;
 }): Promise<EvidencePack | { error: string }> {
   const target = await resolveEvidenceTarget(payload);
@@ -580,26 +816,36 @@ export async function buildEvidencePack(payload: {
   let indexState: number | undefined;
 
   if (attachment) {
-    const cache = await readFulltextCache(attachment);
-    cachePath = cache.cachePath;
-    indexState = cache.indexState;
-    if (cache.warning) warnings.push(cache.warning);
-    let paragraphIndex = 0;
-    for (const page of splitPages(cache.text)) {
-      for (const text of splitParagraphText(page.text)) {
-        if (text.length < 40) continue;
-        paragraphs.push(
-          paragraphEvidence({
-            text,
-            item,
-            attachment,
-            sourceType: "fulltext",
-            pageIndex: page.pageIndex,
-            paragraphIndex,
-            idPrefix: "para",
-          }),
-        );
-        paragraphIndex += 1;
+    const precise = await extractPdfJsParagraphEvidence(
+      item,
+      attachment,
+      Number(payload.maxPages || 120),
+    );
+    paragraphs.push(...precise.paragraphs);
+    warnings.push(...precise.warnings);
+
+    if (paragraphs.length === 0) {
+      const cache = await readFulltextCache(attachment);
+      cachePath = cache.cachePath;
+      indexState = cache.indexState;
+      if (cache.warning) warnings.push(cache.warning);
+      let paragraphIndex = 0;
+      for (const page of splitPages(cache.text)) {
+        for (const text of splitParagraphText(page.text)) {
+          if (text.length < 40) continue;
+          paragraphs.push(
+            paragraphEvidence({
+              text,
+              item,
+              attachment,
+              sourceType: "fulltext",
+              pageIndex: page.pageIndex,
+              paragraphIndex,
+              idPrefix: "para",
+            }),
+          );
+          paragraphIndex += 1;
+        }
       }
     }
   }
@@ -698,8 +944,42 @@ export async function locateQuote(payload: {
   };
 }
 
+function extractClaimsFromText(text: string): CitationClaimInput[] {
+  const stripped = text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`\n]+`/g, " ")
+    .replace(/\[[^\]]+\]\([^)]*\)/g, " ")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .trim();
+  if (!stripped) return [];
+
+  const candidates = stripped
+    .split(/(?<=[。！？.!?])\s+|\n+/u)
+    .map((sentence) => sentence.replace(/^\s*[-*|>\d.]+\s*/, "").trim())
+    .filter((sentence) => {
+      if (sentence.length < 35 || sentence.length > 420) return false;
+      if (/^(claim|status|evidence|location|issue|fix)\b/i.test(sentence)) {
+        return false;
+      }
+      if (/^\|/.test(sentence)) return false;
+      return /[。！？.!?]$/.test(sentence) || /[，,;；:：]/.test(sentence);
+    });
+
+  const seen = new Set<string>();
+  const claims: CitationClaimInput[] = [];
+  for (const sentence of candidates) {
+    const normalized = normalizeForMatch(sentence);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    const quote = sentence.match(/["“](.{12,240}?)[”"]/u)?.[1];
+    claims.push({ claim: sentence, quote });
+  }
+  return claims.slice(0, 30);
+}
+
 export async function verifyCitationClaims(payload: {
   claims: CitationClaimInput[];
+  text?: string;
   itemId?: number;
   attachmentId?: number;
 }): Promise<
@@ -711,12 +991,18 @@ export async function verifyCitationClaims(payload: {
   | { error: string }
 > {
   const claims = Array.isArray(payload.claims) ? payload.claims : [];
-  if (claims.length === 0) return { error: "claims array is required" };
+  const extractedClaims =
+    claims.length > 0
+      ? claims
+      : extractClaimsFromText(String(payload.text || ""));
+  if (extractedClaims.length === 0) {
+    return { error: "claims array or verifiable text is required" };
+  }
   const verifications: CitationVerification[] = [];
   const claimSourceMap: Record<string, EvidenceLocator | null> = {};
   const warnings = new Set<string>();
 
-  for (const claimInput of claims.slice(0, 30)) {
+  for (const claimInput of extractedClaims.slice(0, 30)) {
     const claim = String(claimInput.claim || "").trim();
     const quote = String(claimInput.quote || "").trim();
     if (!claim) continue;

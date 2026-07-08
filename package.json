@@ -26,6 +26,7 @@
     "build": "zotero-plugin build && tsc --noEmit",
     "test:helper": "npm run build && node scripts/smoke-helper-communication.mjs --full",
     "test:helper:quick": "npm run build && node scripts/smoke-helper-communication.mjs",
+    "test:evidence": "npm run build && node scripts/smoke-evidence-contract.mjs",
     "trace:replay": "node scripts/replay-agent-trace.mjs",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",

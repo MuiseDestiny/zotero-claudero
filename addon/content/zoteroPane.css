@@ -1149,6 +1149,31 @@ toolbarbutton.claudero-header-action:hover {
   text-decoration: underline;
 }
 
+.claudero-message-body .claudero-evidence-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin: 0 2px;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 36%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+  color: var(--accent-blue);
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 0.86em;
+  line-height: 1.35;
+  text-decoration: none;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.claudero-message-body a.claudero-evidence-chip:hover {
+  background: color-mix(in srgb, var(--accent-blue) 16%, transparent);
+  text-decoration: none;
+}
+
 .claudero-message-body blockquote {
   margin: 10px 0;
   padding: 8px 10px;

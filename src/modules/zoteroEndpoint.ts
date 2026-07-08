@@ -210,6 +210,7 @@ async function opGetEvidencePack(payload: any) {
     attachmentId: Number(payload.attachmentId || 0) || undefined,
     query: typeof payload.query === "string" ? payload.query : undefined,
     maxParagraphs: Number(payload.maxParagraphs || 0) || undefined,
+    maxPages: Number(payload.maxPages || 0) || undefined,
     includeAnnotations: payload.includeAnnotations !== false,
   });
 }
@@ -226,6 +227,7 @@ async function opLocateQuote(payload: any) {
 async function opVerifyCitations(payload: any) {
   return verifyCitationClaims({
     claims: Array.isArray(payload.claims) ? payload.claims : [],
+    text: typeof payload.text === "string" ? payload.text : undefined,
     itemId: Number(payload.itemId || 0) || undefined,
     attachmentId: Number(payload.attachmentId || 0) || undefined,
   });

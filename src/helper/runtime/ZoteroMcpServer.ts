@@ -137,6 +137,7 @@ export function createZoteroMcpServer(
           attachmentId: z.number().optional(),
           query: z.string().optional(),
           maxParagraphs: z.number().optional(),
+          maxPages: z.number().optional(),
           includeAnnotations: z.boolean().optional(),
         },
         handler: (args) => call("get_evidence_pack", args),
@@ -160,15 +161,18 @@ export function createZoteroMcpServer(
         inputSchema: {
           itemId: z.number().optional(),
           attachmentId: z.number().optional(),
-          claims: z.array(
-            z.object({
-              claim: z.string(),
-              quote: z.string().optional(),
-              itemId: z.number().optional(),
-              attachmentId: z.number().optional(),
-              pageIndex: z.number().optional(),
-            }),
-          ),
+          text: z.string().optional(),
+          claims: z
+            .array(
+              z.object({
+                claim: z.string(),
+                quote: z.string().optional(),
+                itemId: z.number().optional(),
+                attachmentId: z.number().optional(),
+                pageIndex: z.number().optional(),
+              }),
+            )
+            .optional(),
         },
         handler: (args) => call("verify_citations", args),
       },
