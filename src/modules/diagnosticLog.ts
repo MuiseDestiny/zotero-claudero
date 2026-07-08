@@ -256,12 +256,9 @@ async function fetchHelperDiagnostics(): Promise<unknown> {
 }
 
 function desktopPath(filename: string): string {
-  const desktopDir =
-    (OS as any)?.Constants?.Path?.desktopDir ||
-    PathUtils.join(
-      (OS as any)?.Constants?.Path?.homeDir || Zotero.Profile.dir,
-      "Desktop",
-    );
+  const desktopDir = (
+    Services.dirsvc.get("Desk", Components.interfaces.nsIFile) as nsIFile
+  ).path;
   return PathUtils.join(desktopDir, filename);
 }
 
@@ -283,12 +280,12 @@ export async function exportDiagnosticLog(): Promise<string> {
   const path = desktopPath(filename);
   const data = JSON.stringify(payload, null, 2);
   try {
-    await Zotero.File.putContentsAsync(path, data);
+    await Zotero.File.putContentsAsync(path, data, "utf-8");
     logDiagnostic("diagnostics.export", { path, entries: entries.length });
     return path;
   } catch (error) {
     const fallback = await fallbackDiagnosticPath(filename);
-    await Zotero.File.putContentsAsync(fallback, data);
+    await Zotero.File.putContentsAsync(fallback, data, "utf-8");
     logDiagnostic(
       "diagnostics.export.fallback",
       {
