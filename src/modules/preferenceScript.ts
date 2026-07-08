@@ -853,6 +853,8 @@ interface DiagnosticsPayload {
     {
       active?: boolean;
       workspacePath?: string | null;
+      mcpServers?: string[];
+      zoteroMcp?: boolean;
       session?: {
         threadId?: string;
         sessionFilePath?: string;
@@ -960,11 +962,15 @@ function bindDiagnostics(doc: Document): void {
         renderCard("Claude", [
           ["Active", data.runtimes?.claude?.active],
           ["Workspace", data.runtimes?.claude?.workspacePath],
+          ["Zotero MCP", data.runtimes?.claude?.zoteroMcp],
+          ["MCP servers", data.runtimes?.claude?.mcpServers?.join(", ")],
         ]),
         renderCard("Codex", [
           ["Active", data.runtimes?.codex?.active],
           ["Workspace", data.runtimes?.codex?.workspacePath],
           ["Thread", data.runtimes?.codex?.session?.threadId],
+          ["Zotero MCP", data.runtimes?.codex?.zoteroMcp],
+          ["MCP servers", data.runtimes?.codex?.mcpServers?.join(", ")],
         ]),
         renderCard("Latest trace", [
           ["Trace ID", data.trace?.traceId],

@@ -665,6 +665,13 @@ export class CodexPersistentQueryManager {
     return this.config?.workspacePath || null;
   }
 
+  getMcpServerNames(): string[] {
+    if (!this.config || !this.launchSpec) return [];
+    return Object.keys(
+      buildCodexMcpServers(this.config, this.launchSpec.pathMapper),
+    ).sort();
+  }
+
   async initialize(config: CodexConfig): Promise<void> {
     await mkdir(config.workspacePath, { recursive: true });
     this.close();

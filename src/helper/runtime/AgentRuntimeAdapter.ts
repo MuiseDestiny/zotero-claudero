@@ -30,6 +30,8 @@ export interface AgentRuntimeDiagnostics {
   active: boolean;
   workspacePath: string | null;
   session?: unknown;
+  mcpServers?: string[];
+  zoteroMcp?: boolean;
 }
 
 export interface AgentRuntimeAdapter {
@@ -156,10 +158,13 @@ export class ClaudeRuntimeAdapter implements AgentRuntimeAdapter {
   }
 
   diagnostics(): AgentRuntimeDiagnostics {
+    const mcpServers = this.manager.getMcpServerNames();
     return {
       active: this.isActive,
       workspacePath: this.workspacePath,
       session: this.isActive ? { provider: this.provider } : null,
+      mcpServers,
+      zoteroMcp: mcpServers.includes("zotero"),
     };
   }
 
@@ -255,10 +260,13 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
   }
 
   diagnostics(): AgentRuntimeDiagnostics {
+    const mcpServers = this.manager.getMcpServerNames();
     return {
       active: this.isActive,
       workspacePath: this.workspacePath,
       session: this.manager.getSessionState(),
+      mcpServers,
+      zoteroMcp: mcpServers.includes("zotero"),
     };
   }
 

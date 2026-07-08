@@ -127,6 +127,15 @@ export class PersistentQueryManager {
     return this.state?.workspacePath || null;
   }
 
+  getMcpServerNames(): string[] {
+    if (!this.state) return [];
+    const servers = { ...(this.state.mcpServers || {}) };
+    if (this.state.enableZoteroMcp !== false && this.state.zoteroEndpointUrl) {
+      servers.zotero = true;
+    }
+    return Object.keys(servers).sort();
+  }
+
   async initialize(config: PersistentQueryConfig): Promise<void> {
     if (this.state) {
       throw new Error("Persistent query already initialized");
