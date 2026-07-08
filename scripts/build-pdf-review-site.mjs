@@ -196,10 +196,9 @@ function buildTasks(result) {
   if (result.quoteFixture) {
     tasks.push({
       id: "quote-page",
-      title: "Quote page locator",
-      prompt:
-        "Confirm that the quote appears on the expected page and is not a text-extraction artifact.",
-      expected: `Page ${result.quoteFixture.expectedPageNumber}`,
+      title: "引文页码定位",
+      prompt: "确认这段引文确实出现在预期页码，并且不是文本抽取造成的假内容。",
+      expected: `第 ${result.quoteFixture.expectedPageNumber} 页`,
       evidence: result.quoteFixture.quote,
     });
   }
@@ -209,27 +208,25 @@ function buildTasks(result) {
   ) {
     tasks.push({
       id: "figure-table",
-      title: "Figure/table provenance",
-      prompt:
-        "Confirm captions and extracted table signals point to real figure/table evidence on the rendered pages.",
-      expected: `${result.figureTableCaptionCount || 0} captions, ${
+      title: "图表证据来源",
+      prompt: "确认 caption 和表格抽取信号确实对应渲染页上的真实图/表证据。",
+      expected: `${result.figureTableCaptionCount || 0} 个 caption，${
         result.tableCount || 0
-      } extracted tables`,
+      } 个抽取表格`,
       evidence: (result.figureTableCaptions || [])
         .slice(0, 5)
-        .map((caption) => `p${caption.pageNumber}: ${caption.caption}`)
+        .map((caption) => `第 ${caption.pageNumber} 页：${caption.caption}`)
         .join("\n"),
     });
   }
   if (Number(result.textChars || 0) < 2000 || !result.quoteFixture) {
     tasks.push({
       id: "weak-text",
-      title: "Weak or scanned text",
-      prompt:
-        "Confirm whether the PDF is scanned, image-heavy, translated, or otherwise weak for text extraction.",
-      expected: `${result.textChars || 0} extracted chars from sampled pages`,
+      title: "弱文本或扫描 PDF",
+      prompt: "确认该 PDF 是否为扫描件、图片较多、翻译版，或文本抽取质量较弱。",
+      expected: `样本页抽取出 ${result.textChars || 0} 个字符`,
       evidence:
-        "If the rendered page has readable text but extraction is empty, mark needs-fix for OCR/layout handling.",
+        "如果渲染页上文字可读，但抽取文本为空或很少，请标记“需要修复”，后续用于 OCR/版面处理。",
     });
   }
   return tasks;
@@ -294,11 +291,11 @@ function itemFromResult(result, args, assetsDir) {
 
 function htmlTemplate() {
   return `<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Claudero PDF Golden Review</title>
+  <title>Claudero PDF Golden 人工确认</title>
   <style>
     :root {
       color-scheme: light;
@@ -570,19 +567,19 @@ function htmlTemplate() {
 <body>
   <header>
     <div>
-      <h1>Claudero PDF Golden Review</h1>
+      <h1>Claudero PDF Golden 人工确认</h1>
       <div class="sub" id="subtitle"></div>
     </div>
     <div class="export-row">
-      <button id="exportBtn">Export review JSON</button>
-      <button id="resetBtn">Reset decisions</button>
+      <button id="exportBtn">导出确认 JSON</button>
+      <button id="resetBtn">重置标记</button>
     </div>
   </header>
   <div class="shell">
     <aside>
       <div class="summary" id="summary"></div>
       <div class="controls">
-        <b>Filters</b>
+        <b>筛选</b>
         <div class="filter-grid" id="filters"></div>
       </div>
       <div class="progress" id="progress"></div>
@@ -599,6 +596,27 @@ function htmlTemplate() {
     let state = JSON.parse(localStorage.getItem(storageKey) || "{}");
     let selectedId = data.items[0]?.id || null;
     let activeFilter = "all";
+
+    const labels = {
+      all: "全部",
+      pending: "待确认",
+      quote: "引文",
+      caption: "图表标题",
+      table: "表格",
+      "weak-text": "弱文本",
+      translated: "翻译版",
+      "non-ascii-path": "中文/非 ASCII 路径",
+      classic: "经典论文",
+      modern: "近年论文",
+      magic: "Magic 版",
+      accept: "通过",
+      "needs-fix": "需要修复",
+      reject: "驳回",
+    };
+
+    function label(value) {
+      return labels[value] || value;
+    }
 
     function save() {
       localStorage.setItem(storageKey, JSON.stringify(state));
@@ -645,13 +663,13 @@ function htmlTemplate() {
       document.getElementById("subtitle").textContent =
         data.generatedAt + " · " + data.sourceReport;
       document.getElementById("summary").innerHTML = \`
-        <b>\${data.items.length} review candidates</b>
+        <b>\${data.items.length} 个待确认样本</b>
         <div class="chips">
-          <span class="pill">\${data.summary.totalPdfCount} PDFs</span>
-          <span class="pill">\${data.summary.sampledPdfCount} sampled</span>
-          <span class="pill">\${data.summary.quoteFixtureCount} quotes</span>
-          <span class="pill">\${data.summary.totalFigureTableCaptions} captions</span>
-          <span class="pill">\${data.summary.totalExtractedTables} tables</span>
+          <span class="pill">\${data.summary.totalPdfCount} 个 PDF</span>
+          <span class="pill">\${data.summary.sampledPdfCount} 个样本</span>
+          <span class="pill">\${data.summary.quoteFixtureCount} 条引文</span>
+          <span class="pill">\${data.summary.totalFigureTableCaptions} 个 caption</span>
+          <span class="pill">\${data.summary.totalExtractedTables} 个表格</span>
         </div>\`;
     }
 
@@ -660,7 +678,7 @@ function htmlTemplate() {
       const filters = ["all", "pending", ...categories];
       document.getElementById("filters").innerHTML = filters.map(filter => {
         const active = filter === activeFilter ? "active" : "";
-        return \`<button class="\${active}" data-filter="\${escapeHtml(filter)}">\${escapeHtml(filter)}</button>\`;
+        return \`<button class="\${active}" data-filter="\${escapeHtml(filter)}">\${escapeHtml(label(filter))}</button>\`;
       }).join("");
       document.querySelectorAll("[data-filter]").forEach(button => {
         button.onclick = () => {
@@ -687,7 +705,7 @@ function htmlTemplate() {
     function renderProgress() {
       const totals = taskTotals();
       document.getElementById("progress").textContent =
-        \`Manual decisions: \${totals.done}/\${totals.total}\`;
+        \`人工确认进度：\${totals.done}/\${totals.total}\`;
     }
 
     function renderList() {
@@ -697,9 +715,9 @@ function htmlTemplate() {
         const done = item.tasks.filter(task => decision(item.id, task.id)).length;
         return \`<button class="nav-item \${active}" data-item="\${item.id}">
           <span class="name">\${escapeHtml(item.name)}</span>
-          <span class="meta">\${done}/\${item.tasks.length} tasks · \${item.categories.join(", ")}</span>
+          <span class="meta">\${done}/\${item.tasks.length} 项 · \${item.categories.map(label).join("，")}</span>
         </button>\`;
-      }).join("") || '<div class="empty">No items match this filter.</div>';
+      }).join("") || '<div class="empty">没有符合筛选条件的样本。</div>';
       document.querySelectorAll("[data-item]").forEach(button => {
         button.onclick = () => {
           selectedId = button.dataset.item;
@@ -711,9 +729,9 @@ function htmlTemplate() {
     function renderDecisionButtons(item, task) {
       const current = decision(item.id, task.id);
       const buttons = [
-        ["accept", "Accept", "good"],
-        ["needs-fix", "Needs fix", "warn"],
-        ["reject", "Reject", "bad"],
+        ["accept", "通过", "good"],
+        ["needs-fix", "需要修复", "warn"],
+        ["reject", "驳回", "bad"],
       ];
       return buttons.map(([status, label, cls]) =>
         \`<button class="\${cls} \${current === status ? "active" : ""}" data-decision="\${status}" data-task="\${task.id}">\${label}</button>\`
@@ -724,7 +742,7 @@ function htmlTemplate() {
       const item = data.items.find(entry => entry.id === selectedId);
       const detail = document.getElementById("detail");
       if (!item) {
-        detail.innerHTML = '<div class="empty">Select a review item.</div>';
+        detail.innerHTML = '<div class="empty">请选择一个待确认样本。</div>';
         return;
       }
       detail.innerHTML = \`
@@ -732,16 +750,16 @@ function htmlTemplate() {
           <div>
             <h2>\${escapeHtml(item.name)}</h2>
             <div class="path">\${escapeHtml(item.path)}</div>
-            <div class="chips">\${item.categories.map(cat => \`<span class="pill">\${escapeHtml(cat)}</span>\`).join("")}</div>
+            <div class="chips">\${item.categories.map(cat => \`<span class="pill">\${escapeHtml(label(cat))}</span>\`).join("")}</div>
           </div>
-          <a href="\${item.pdfUrl}" target="_blank" rel="noreferrer">Open PDF</a>
+          <a href="\${item.pdfUrl}" target="_blank" rel="noreferrer">打开 PDF</a>
         </div>
         <div class="stats">
-          <div class="stat"><b>\${item.pageCount || "-"}</b><span>pages</span></div>
-          <div class="stat"><b>\${item.textChars || 0}</b><span>sample text chars</span></div>
-          <div class="stat"><b>\${item.figureTableCaptionCount || 0}</b><span>captions</span></div>
-          <div class="stat"><b>\${item.tableCount || 0}</b><span>tables</span></div>
-          <div class="stat"><b>\${item.pageImages.length}</b><span>rendered pages</span></div>
+          <div class="stat"><b>\${item.pageCount || "-"}</b><span>总页数</span></div>
+          <div class="stat"><b>\${item.textChars || 0}</b><span>样本页字符数</span></div>
+          <div class="stat"><b>\${item.figureTableCaptionCount || 0}</b><span>caption 数</span></div>
+          <div class="stat"><b>\${item.tableCount || 0}</b><span>表格数</span></div>
+          <div class="stat"><b>\${item.pageImages.length}</b><span>已渲染页</span></div>
         </div>
         <div class="review-grid">
           <div>
@@ -755,18 +773,18 @@ function htmlTemplate() {
               </section>
             \`).join("")}
             <section class="task">
-              <h3>Review note</h3>
-              <textarea id="noteBox" placeholder="Record manual corrections, exact page, OCR issue, caption mismatch, or fixture notes.">\${escapeHtml(state[item.id]?.note || "")}</textarea>
+              <h3>人工备注</h3>
+              <textarea id="noteBox" placeholder="记录人工修正、准确页码、OCR 问题、caption 不匹配，或作为 fixture 的备注。">\${escapeHtml(state[item.id]?.note || "")}</textarea>
             </section>
-            \${item.warnings.length ? \`<section class="task"><h3>Warnings</h3><div class="evidence">\${escapeHtml(item.warnings.join("\\n"))}</div></section>\` : ""}
+            \${item.warnings.length ? \`<section class="task"><h3>警告</h3><div class="evidence">\${escapeHtml(item.warnings.join("\\n"))}</div></section>\` : ""}
           </div>
           <div class="pages">
             \${item.pageImages.map(page => \`
               <figure class="page">
-                <div class="page-title"><span>Rendered page \${page.pageNumber}</span><a href="\${item.pdfUrl}" target="_blank" rel="noreferrer">PDF</a></div>
-                <img src="\${page.src}" alt="Rendered page \${page.pageNumber}" />
+                <div class="page-title"><span>渲染页 \${page.pageNumber}</span><a href="\${item.pdfUrl}" target="_blank" rel="noreferrer">PDF</a></div>
+                <img src="\${page.src}" alt="渲染页 \${page.pageNumber}" />
               </figure>
-            \`).join("") || '<div class="empty">No rendered pages. Open the PDF directly.</div>'}
+            \`).join("") || '<div class="empty">没有渲染页，请直接打开 PDF。</div>'}
           </div>
         </div>\`;
       document.querySelectorAll("[data-decision]").forEach(button => {
@@ -806,7 +824,7 @@ function htmlTemplate() {
 
     document.getElementById("exportBtn").onclick = exportReview;
     document.getElementById("resetBtn").onclick = () => {
-      if (confirm("Reset all local review decisions?")) {
+      if (confirm("确定要重置所有本地人工确认标记吗？")) {
         state = {};
         localStorage.removeItem(storageKey);
         render();
