@@ -40,6 +40,7 @@ const READ_ONLY_ZOTERO_ACTIONS = new Set([
   "get_annotations",
   "get_attachment_path",
   "get_evidence_pack",
+  "build_academic_trace",
   "build_trust_report",
   "inspect_figure_table_page",
   "locate_quote",

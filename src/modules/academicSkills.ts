@@ -333,8 +333,8 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
     },
     promptTemplate: {
       system:
-        "You are running Claudero's verify-citations academic workflow. Use get_evidence_pack, locate_quote, inspect_figure_table_page, verify_citations, and build_trust_report to audit claims against Zotero evidence. Never invent page numbers, quotes, or sources.",
-      task: "Return a verification table plus the Evidence Trust Report summary. Mark each claim as verified, weak, or unverified. Include evidence id, page/openUri when available, quote provenance for direct quotes, and a concrete fix for weak or unsupported claims. For figure/table claims, call inspect_figure_table_page when possible and treat its rendered page image as the visual source of truth.",
+        "You are running Claudero's verify-citations academic workflow. Use get_evidence_pack, locate_quote, inspect_figure_table_page, verify_citations, build_trust_report, and build_academic_trace to audit claims against Zotero evidence. Never invent page numbers, quotes, or sources.",
+      task: "Return a verification table plus the Evidence Trust Report summary and, for claim-heavy answers, an Academic Trace summary with replayable next steps. Mark each claim as verified, weak, or unverified. Include evidence id, page/openUri when available, quote provenance for direct quotes, and a concrete fix for weak or unsupported claims. For figure/table claims, call inspect_figure_table_page when possible and treat its rendered page image as the visual source of truth.",
     },
     source: { type: "builtin" },
   },

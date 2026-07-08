@@ -5,6 +5,7 @@ import process from "node:process";
 
 const root = process.cwd();
 const tools = [
+  "build_academic_trace",
   "build_trust_report",
   "get_evidence_pack",
   "inspect_figure_table_page",
@@ -19,8 +20,10 @@ const checks = [
       "EvidenceLocator",
       "EvidencePageImage",
       "EvidenceTrustReport",
+      "AcademicTraceArtifact",
       "FigureTablePageInspection",
       "CitationVisualInspectionHint",
+      "buildAcademicTrace",
       "buildEvidenceTrustReport",
       "evidenceUri",
       "imageInput",
@@ -37,7 +40,7 @@ const checks = [
   ["src/helper/runtime/PermissionManager.ts", tools],
   [
     "src/modules/academicSkills.ts",
-    ["verify-citations", "Evidence Trust Report", ...tools],
+    ["verify-citations", "Evidence Trust Report", "Academic Trace", ...tools],
   ],
   [
     "src/helper/runtime/ZoteroMcpServer.ts",

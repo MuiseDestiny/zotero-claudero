@@ -175,6 +175,61 @@ export interface EvidenceTrustReportAction {
   arguments?: CitationVisualInspectionHint["arguments"];
 }
 
+export interface AcademicTraceToolCall {
+  tool: string;
+  arguments?: unknown;
+  status?: "planned" | "called" | "succeeded" | "failed" | "skipped";
+  summary?: string;
+  error?: string;
+}
+
+export interface AcademicTraceEvidenceRecord {
+  claim: string;
+  status: CitationVerification["status"];
+  confidence: number;
+  quote?: string;
+  evidenceId?: string;
+  excerpt?: string;
+  locator?: EvidenceLocator;
+  warnings: string[];
+}
+
+export interface AcademicTraceReplayStep {
+  tool: string;
+  arguments: Record<string, unknown>;
+  reason: string;
+  required: boolean;
+}
+
+export interface AcademicTraceFailure {
+  claim: string;
+  status: CitationVerification["status"];
+  reason: string;
+  fix: string;
+}
+
+export interface AcademicTraceArtifact {
+  protocol: "claudero.academic-trace";
+  version: 1;
+  traceId: string;
+  createdAt: string;
+  source: {
+    itemId?: number;
+    attachmentId?: number;
+    query?: string;
+  };
+  answer?: string;
+  claims: CitationClaimInput[];
+  trustReport: EvidenceTrustReport;
+  evidence: AcademicTraceEvidenceRecord[];
+  toolCalls: AcademicTraceToolCall[];
+  replayPlan: AcademicTraceReplayStep[];
+  visualInspectionQueue: EvidenceTrustReportAction[];
+  failures: AcademicTraceFailure[];
+  markdown: string;
+  warnings: string[];
+}
+
 interface TextPage {
   pageIndex?: number;
   text: string;
@@ -1836,5 +1891,270 @@ export async function buildEvidenceTrustReport(payload: {
       warnings,
     }),
     warnings,
+  };
+}
+
+function academicTraceId(createdAt: Date): string {
+  return `academic-trace-${createdAt.getTime().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
+function compactEvidenceExcerpt(text: string | undefined): string | undefined {
+  const compact = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!compact) return undefined;
+  return compact.length > 480 ? `${compact.slice(0, 477)}...` : compact;
+}
+
+function academicTraceEvidence(
+  verifications: CitationVerification[],
+): AcademicTraceEvidenceRecord[] {
+  return verifications.map((verification) => ({
+    claim: verification.claim,
+    status: verification.status,
+    confidence: verification.confidence,
+    quote: verification.quote,
+    evidenceId: verification.evidence?.id,
+    excerpt: compactEvidenceExcerpt(verification.evidence?.text),
+    locator: verification.evidence?.locator,
+    warnings: [...verification.warnings],
+  }));
+}
+
+function academicTraceFailures(
+  verifications: CitationVerification[],
+): AcademicTraceFailure[] {
+  return verifications
+    .filter((verification) => verification.status !== "verified")
+    .map((verification) => ({
+      claim: verification.claim,
+      status: verification.status,
+      reason:
+        verification.warnings[0] ||
+        "The current evidence does not fully support this claim.",
+      fix:
+        verification.status === "unverified"
+          ? "Remove or rewrite the claim, then search for a stronger Zotero source."
+          : "Narrow the wording or add a stronger quote/page locator.",
+    }));
+}
+
+function academicTraceReplayPlan(options: {
+  itemId?: number;
+  attachmentId?: number;
+  query?: string;
+  claims: CitationClaimInput[];
+  trustReport: EvidenceTrustReport;
+}): AcademicTraceReplayStep[] {
+  const baseArgs: Record<string, unknown> = {};
+  if (options.itemId) baseArgs.itemId = options.itemId;
+  if (options.attachmentId) baseArgs.attachmentId = options.attachmentId;
+  if (options.query) baseArgs.query = options.query;
+
+  const steps: AcademicTraceReplayStep[] = [];
+  if (options.itemId || options.attachmentId) {
+    steps.push({
+      tool: "get_evidence_pack",
+      arguments: {
+        ...baseArgs,
+        includeAnnotations: true,
+        includePageImages: false,
+      },
+      reason: "Rebuild the text evidence pack without page screenshots.",
+      required: true,
+    });
+  }
+  for (const claim of options.claims) {
+    if (claim.quote) {
+      steps.push({
+        tool: "locate_quote",
+        arguments: {
+          quote: claim.quote,
+          itemId: claim.itemId || options.itemId,
+          attachmentId: claim.attachmentId || options.attachmentId,
+        },
+        reason: "Recheck direct quote provenance and page locator.",
+        required: true,
+      });
+    }
+  }
+  steps.push({
+    tool: "verify_citations",
+    arguments: {
+      itemId: options.itemId,
+      attachmentId: options.attachmentId,
+      claims: options.claims,
+    },
+    reason: "Recompute claim-to-source support statuses.",
+    required: true,
+  });
+  steps.push({
+    tool: "build_trust_report",
+    arguments: {
+      itemId: options.itemId,
+      attachmentId: options.attachmentId,
+      claims: options.claims,
+    },
+    reason: "Regenerate the Evidence Trust Report summary.",
+    required: true,
+  });
+  for (const action of options.trustReport.nextActions) {
+    if (action.kind !== "inspect_figure_table_page") continue;
+    steps.push({
+      tool: "inspect_figure_table_page",
+      arguments: action.arguments || { claim: action.claim },
+      reason: action.reason,
+      required: true,
+    });
+  }
+  return steps;
+}
+
+function academicTraceMarkdown(
+  trace: Omit<AcademicTraceArtifact, "markdown">,
+): string {
+  const lines = [
+    "# Academic Trace",
+    "",
+    `Trace ID: ${trace.traceId}`,
+    `Created: ${trace.createdAt}`,
+    `Claims: ${trace.trustReport.summary.totalClaims}`,
+    `Verified: ${trace.trustReport.summary.verified}`,
+    `Weak: ${trace.trustReport.summary.weak}`,
+    `Unverified: ${trace.trustReport.summary.unverified}`,
+    `Needs visual inspection: ${trace.trustReport.summary.visualInspectionRequired}`,
+    "",
+    "## Evidence",
+    "",
+    "| Claim | Status | Evidence | Location |",
+    "| --- | --- | --- | --- |",
+  ];
+
+  for (const record of trace.evidence) {
+    lines.push(
+      [
+        markdownCell(record.claim),
+        markdownCell(record.status),
+        markdownCell(record.evidenceId || record.excerpt || ""),
+        markdownCell(
+          record.locator
+            ? [
+                record.locator.pageNumber
+                  ? `p. ${record.locator.pageNumber}`
+                  : "",
+                record.locator.openUri || record.locator.evidenceUri || "",
+              ]
+                .filter(Boolean)
+                .join(" ")
+            : "",
+        ),
+      ].join(" | "),
+    );
+  }
+
+  if (trace.failures.length) {
+    lines.push("", "## Failures");
+    for (const failure of trace.failures) {
+      lines.push(
+        `- ${failure.status}: ${markdownCell(failure.reason)} Claim: ${markdownCell(
+          failure.claim,
+        )} Fix: ${markdownCell(failure.fix)}`,
+      );
+    }
+  }
+
+  if (trace.visualInspectionQueue.length) {
+    lines.push("", "## Visual Inspection Queue");
+    for (const action of trace.visualInspectionQueue) {
+      lines.push(
+        `- inspect_figure_table_page: ${markdownCell(action.reason)} Claim: ${markdownCell(
+          action.claim,
+        )}`,
+      );
+    }
+  }
+
+  lines.push("", "## Replay Plan");
+  for (const [index, step] of trace.replayPlan.entries()) {
+    lines.push(
+      `${index + 1}. ${step.tool}: ${markdownCell(step.reason)} ${JSON.stringify(
+        step.arguments,
+      )}`,
+    );
+  }
+
+  if (trace.toolCalls.length) {
+    lines.push("", "## Tool Calls");
+    for (const call of trace.toolCalls) {
+      lines.push(
+        `- ${call.tool}: ${call.status || "called"} ${markdownCell(
+          call.summary || call.error || "",
+        )}`,
+      );
+    }
+  }
+
+  if (trace.warnings.length) {
+    lines.push("", "## Warnings");
+    for (const warning of trace.warnings)
+      lines.push(`- ${markdownCell(warning)}`);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+export async function buildAcademicTrace(payload: {
+  answer?: string;
+  claims?: CitationClaimInput[];
+  text?: string;
+  itemId?: number;
+  attachmentId?: number;
+  query?: string;
+  toolCalls?: AcademicTraceToolCall[];
+}): Promise<AcademicTraceArtifact | { error: string }> {
+  const trustReport = await buildEvidenceTrustReport({
+    claims: Array.isArray(payload.claims) ? payload.claims : [],
+    text: payload.text || payload.answer,
+    itemId: payload.itemId,
+    attachmentId: payload.attachmentId,
+  });
+  if ("error" in trustReport) return trustReport;
+
+  const createdAt = new Date();
+  const claims = Array.isArray(payload.claims) ? payload.claims : [];
+  const baseTrace = {
+    protocol: "claudero.academic-trace" as const,
+    version: 1 as const,
+    traceId: academicTraceId(createdAt),
+    createdAt: createdAt.toISOString(),
+    source: {
+      itemId: payload.itemId,
+      attachmentId: payload.attachmentId,
+      query: payload.query,
+    },
+    answer: payload.answer,
+    claims,
+    trustReport,
+    evidence: academicTraceEvidence(trustReport.verifications),
+    toolCalls: Array.isArray(payload.toolCalls) ? payload.toolCalls : [],
+    replayPlan: academicTraceReplayPlan({
+      itemId: payload.itemId,
+      attachmentId: payload.attachmentId,
+      query: payload.query,
+      claims,
+      trustReport,
+    }),
+    visualInspectionQueue: trustReport.nextActions.filter(
+      (action) => action.kind === "inspect_figure_table_page",
+    ),
+    failures: academicTraceFailures(trustReport.verifications),
+    warnings: [...trustReport.warnings],
+  };
+
+  return {
+    ...baseTrace,
+    markdown: academicTraceMarkdown(baseTrace),
   };
 }

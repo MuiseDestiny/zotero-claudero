@@ -31,6 +31,7 @@
     "eval:pdf:review": "node scripts/build-pdf-review-site.mjs",
     "eval:pdf:visual": "node scripts/build-pdf-visual-audit-pack.mjs",
     "eval:pdf:review:serve": "python3 -m http.server 4177 --bind 127.0.0.1 --directory .claudero-eval/review-site",
+    "trace:academic": "node scripts/replay-academic-trace.mjs",
     "trace:replay": "node scripts/replay-agent-trace.mjs",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",

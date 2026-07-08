@@ -148,7 +148,7 @@ export function createZoteroMcpServer(
       "A lightweight current Zotero context is already included in each user request. Use get_current_context only when you need a refresh or when the included context is insufficient.",
       "Use Zotero MCP tools for semantic library state, annotations, attachment paths, evidence packs, citation verification, and safe writes.",
       "For full PDF text, tables, formulas, or layout, get the attachment path and read the local PDF directly with Python instead of asking Zotero MCP for full text.",
-      "For scholarly answers, call get_evidence_pack before making factual claims, locate_quote before quoting, and build_trust_report before finalizing claim-heavy output. Mark unsupported claims instead of inventing citations.",
+      "For scholarly answers, call get_evidence_pack before making factual claims, locate_quote before quoting, build_trust_report before finalizing claim-heavy output, and build_academic_trace when the answer should be reproducible. Mark unsupported claims instead of inventing citations.",
       "For figure/table claims, call inspect_figure_table_page when page-level visual evidence is needed; use the rendered page image as the source of truth for caption and visual-content checks.",
       "Read tools can be called directly.",
       "Write tools require user approval before the tool handler performs the operation.",
@@ -275,6 +275,43 @@ export function createZoteroMcpServer(
             .optional(),
         },
         handler: (args) => call("build_trust_report", args),
+      },
+      {
+        name: "build_academic_trace",
+        description:
+          "Build a reproducible academic trace artifact for a claim-heavy answer. Includes the Evidence Trust Report, claim-to-source evidence records, failures, visual inspection queue, and a replay plan. Does not attach page images by default.",
+        inputSchema: {
+          itemId: z.number().optional(),
+          attachmentId: z.number().optional(),
+          query: z.string().optional(),
+          answer: z.string().optional(),
+          text: z.string().optional(),
+          claims: z
+            .array(
+              z.object({
+                claim: z.string(),
+                quote: z.string().optional(),
+                itemId: z.number().optional(),
+                attachmentId: z.number().optional(),
+                pageIndex: z.number().optional(),
+              }),
+            )
+            .optional(),
+          toolCalls: z
+            .array(
+              z.object({
+                tool: z.string(),
+                arguments: z.unknown().optional(),
+                status: z
+                  .enum(["planned", "called", "succeeded", "failed", "skipped"])
+                  .optional(),
+                summary: z.string().optional(),
+                error: z.string().optional(),
+              }),
+            )
+            .optional(),
+        },
+        handler: (args) => call("build_academic_trace", args),
       },
       {
         name: "inspect_figure_table_page",

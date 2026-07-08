@@ -1,4 +1,5 @@
 import {
+  buildAcademicTrace,
   buildEvidencePack,
   buildEvidenceTrustReport,
   inspectFigureTablePage,
@@ -244,6 +245,18 @@ async function opBuildTrustReport(payload: any) {
     text: typeof payload.text === "string" ? payload.text : undefined,
     itemId: Number(payload.itemId || 0) || undefined,
     attachmentId: Number(payload.attachmentId || 0) || undefined,
+  });
+}
+
+async function opBuildAcademicTrace(payload: any) {
+  return buildAcademicTrace({
+    answer: typeof payload.answer === "string" ? payload.answer : undefined,
+    claims: Array.isArray(payload.claims) ? payload.claims : [],
+    text: typeof payload.text === "string" ? payload.text : undefined,
+    itemId: Number(payload.itemId || 0) || undefined,
+    attachmentId: Number(payload.attachmentId || 0) || undefined,
+    query: typeof payload.query === "string" ? payload.query : undefined,
+    toolCalls: Array.isArray(payload.toolCalls) ? payload.toolCalls : [],
   });
 }
 
@@ -619,6 +632,9 @@ export function registerZoteroEndpoint(): void {
             case "build_trust_report":
               result = await opBuildTrustReport(payload);
               break;
+            case "build_academic_trace":
+              result = await opBuildAcademicTrace(payload);
+              break;
             case "inspect_figure_table_page":
               result = await opInspectFigureTablePage(payload);
               break;
@@ -650,6 +666,7 @@ export function registerZoteroEndpoint(): void {
                   "locate_quote",
                   "verify_citations",
                   "build_trust_report",
+                  "build_academic_trace",
                   "inspect_figure_table_page",
                   "write_tags",
                   "create_note",
@@ -715,10 +732,10 @@ You also have DIRECT READ-ONLY access to Zotero's local data when you need bulk 
     : "";
   return `
 A lightweight current Zotero context is already included with each user request. Use it as the default target.
-If you need fresh or deeper Zotero data, use MCP tools: get_current_context, get_item, search_items, get_annotations, get_attachment_path, get_evidence_pack, locate_quote, verify_citations, write_tags, create_note, set_field, undo_last, list_history.
+If you need fresh or deeper Zotero data, use MCP tools: get_current_context, get_item, search_items, get_annotations, get_attachment_path, get_evidence_pack, locate_quote, verify_citations, build_trust_report, build_academic_trace, inspect_figure_table_page, write_tags, create_note, set_field, undo_last, list_history.
 ${dataDirLines}
 Keep MCP usage minimal: use Zotero tools for semantic library state and safe writes; use local file/Python reads for heavy PDF understanding.
-For scholarly answers, prefer get_evidence_pack before making factual claims, use locate_quote before quoting, and use verify_citations before finalizing claim-heavy output. Mark unsupported claims instead of inventing citations.
+For scholarly answers, prefer get_evidence_pack before making factual claims, use locate_quote before quoting, verify_citations and build_trust_report before finalizing claim-heavy output, and build_academic_trace when the answer should be reproducible. Mark unsupported claims instead of inventing citations.
 Before ANY write operation, confirm with the user or explain what will change.
 Write operations are protected by Claudero's approval dialog and may be denied by the user.
 After a successful write, briefly state what changed in one sentence. Do not print operationId or ask whether to undo.
