@@ -90,9 +90,12 @@ Open that HTML file in a browser. The site includes:
 
 - selected review candidates from the real PDF report
 - rendered PDF page images for quote and figure/table pages
+- searchable extracted page text beside rendered pages
 - quote locator checks
 - figure/table caption checks
 - weak-text/scanned-PDF checks
+- default exclusion of obvious translated/bilingual artifacts such as `.zh.*`,
+  `.mono.pdf`, and `.dual.pdf`
 - local manual decisions: `Accept`, `Needs fix`, `Reject`
 - free-form notes
 - export of `claudero-pdf-review-decisions.json`

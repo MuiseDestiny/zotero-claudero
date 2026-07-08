@@ -24,6 +24,8 @@ const defaultReport = path.join(
 const defaultOutDir = path.join(repoRoot, ".claudero-eval", "review-site");
 const defaultPdftoppm =
   "/Users/muisedestiny/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/pdftoppm";
+const defaultPython =
+  "/Users/muisedestiny/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3";
 
 function parseArgs(argv) {
   const args = {
@@ -33,7 +35,11 @@ function parseArgs(argv) {
     pdftoppm:
       process.env.PDFTOPPM ||
       (existsSync(defaultPdftoppm) ? defaultPdftoppm : "pdftoppm"),
+    python:
+      process.env.PYTHON ||
+      (existsSync(defaultPython) ? defaultPython : "python3"),
     scale: Number(process.env.CLAUDERO_PDF_REVIEW_SCALE || 1200),
+    maxPages: Number(process.env.CLAUDERO_PDF_REVIEW_MAX_PAGES || 8),
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -52,6 +58,12 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--scale" && next) {
       args.scale = Number(next);
+      i += 1;
+    } else if (arg === "--max-pages" && next) {
+      args.maxPages = Number(next);
+      i += 1;
+    } else if (arg === "--python" && next) {
+      args.python = next;
       i += 1;
     }
   }
@@ -80,6 +92,13 @@ function hasNonAscii(value) {
   );
 }
 
+function isTranslatedPdfArtifact(result) {
+  const value = `${result.name || ""}\n${result.path || ""}`;
+  return /(?:\.zh\.|\.mono\.pdf$|\.dual\.pdf$|\.zh\.mono|\.zh\.dual|no_watermark\.zh|debug\.no_watermark\.zh)/i.test(
+    value,
+  );
+}
+
 function categoriesFor(result) {
   const categories = [];
   const name = result.name || result.path || "";
@@ -91,7 +110,7 @@ function categoriesFor(result) {
   if (Number(result.textChars || 0) < 2000 || !result.quoteFixture) {
     categories.push("weak-text");
   }
-  if (/\.zh\.|no_watermark|dual|mono|decompressed/i.test(name)) {
+  if (isTranslatedPdfArtifact(result)) {
     categories.push("translated");
   }
   if (hasNonAscii(name)) categories.push("non-ascii-path");
@@ -116,10 +135,11 @@ function scoreResult(result) {
 }
 
 function selectReviewItems(results, limit) {
-  const ok = results.filter((result) => result.status === "ok");
+  const ok = results.filter(
+    (result) => result.status === "ok" && !isTranslatedPdfArtifact(result),
+  );
   const buckets = [
     (result) => categoriesFor(result).includes("weak-text"),
-    (result) => categoriesFor(result).includes("translated"),
     (result) => Number(result.tableCount || 0) >= 5,
     (result) => Number(result.figureTableCaptionCount || 0) >= 5,
     (result) => categoriesFor(result).includes("classic"),
@@ -191,6 +211,44 @@ function renderPageThumb(pdfPath, pageNumber, outPrefix, args) {
   return { ok: true, imagePath };
 }
 
+function extractPageTextMap(pdfPath, args) {
+  const extractor = path.join(__dirname, "pdf-eval-extract.py");
+  const result = spawnSync(
+    args.python,
+    [extractor, pdfPath, String(args.maxPages)],
+    {
+      encoding: "utf8",
+      maxBuffer: 24 * 1024 * 1024,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    return {
+      pages: new Map(),
+      warning:
+        result.error?.message ||
+        result.stderr ||
+        `text extractor exited with ${result.status}`,
+    };
+  }
+  try {
+    const parsed = JSON.parse(result.stdout || "{}");
+    const pages = new Map(
+      (parsed.pages || []).map((page) => [
+        Number(page.pageIndex) + 1,
+        String(page.text || ""),
+      ]),
+    );
+    return { pages, warning: null };
+  } catch (error) {
+    return {
+      pages: new Map(),
+      warning: `text extractor returned invalid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+}
+
 function buildTasks(result) {
   const tasks = [];
   if (result.quoteFixture) {
@@ -237,6 +295,10 @@ function itemFromResult(result, args, assetsDir) {
   const categories = categoriesFor(result);
   const pageImages = [];
   const renderWarnings = [];
+  const textMap = extractPageTextMap(result.path, args);
+  if (textMap.warning) {
+    renderWarnings.push(`text extraction: ${textMap.warning}`);
+  }
   for (const pageNumber of pageNumbersFor(result)) {
     const outPrefix = path.join(assetsDir, `${id}-p${pageNumber}`);
     const rendered = renderPageThumb(result.path, pageNumber, outPrefix, args);
@@ -244,6 +306,7 @@ function itemFromResult(result, args, assetsDir) {
       pageImages.push({
         pageNumber,
         src: path.relative(args.outDir, rendered.imagePath),
+        text: textMap.pages.get(pageNumber) || "",
       });
     } else {
       renderWarnings.push(`page ${pageNumber}: ${rendered.error}`);
@@ -517,6 +580,26 @@ function htmlTemplate() {
       border: 1px solid var(--line);
       border-radius: 6px;
     }
+    .search-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .search-row input {
+      width: 100%;
+      min-width: 0;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+    }
+    .search-row span {
+      align-self: center;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
     .pages {
       display: grid;
       gap: 12px;
@@ -538,6 +621,27 @@ function htmlTemplate() {
       width: 100%;
       height: auto;
       background: #fff;
+    }
+    .page-text {
+      max-height: 260px;
+      overflow: auto;
+      margin: 10px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfe;
+      color: #303846;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    mark {
+      padding: 0 2px;
+      border-radius: 3px;
+      background: #fff09a;
+      color: inherit;
     }
     .empty {
       padding: 18px;
@@ -643,6 +747,13 @@ function htmlTemplate() {
       renderProgress();
     }
 
+    function setSearch(itemId, value) {
+      state[itemId] ||= { tasks: {}, note: "" };
+      state[itemId].search = value;
+      localStorage.setItem(storageKey, JSON.stringify(state));
+      renderDetail();
+    }
+
     function filteredItems() {
       if (activeFilter === "all") return data.items;
       if (activeFilter === "pending") {
@@ -659,6 +770,37 @@ function htmlTemplate() {
         .replaceAll('"', "&quot;");
     }
 
+    function highlightText(value, query) {
+      const raw = String(value || "");
+      const q = String(query || "").trim();
+      if (!raw) return "该页没有可搜索文本。";
+      if (!q) return escapeHtml(raw);
+      const lower = raw.toLowerCase();
+      const needle = q.toLowerCase();
+      let html = "";
+      let index = 0;
+      while (index < raw.length) {
+        const hit = lower.indexOf(needle, index);
+        if (hit < 0) {
+          html += escapeHtml(raw.slice(index));
+          break;
+        }
+        html += escapeHtml(raw.slice(index, hit));
+        html += \`<mark>\${escapeHtml(raw.slice(hit, hit + q.length))}</mark>\`;
+        index = hit + q.length;
+      }
+      return html;
+    }
+
+    function searchHitCount(item, query) {
+      const q = String(query || "").trim().toLowerCase();
+      if (!q) return 0;
+      return item.pageImages.reduce((sum, page) => {
+        const text = String(page.text || "").toLowerCase();
+        return sum + (text.split(q).length - 1);
+      }, 0);
+    }
+
     function renderSummary() {
       document.getElementById("subtitle").textContent =
         data.generatedAt + " · " + data.sourceReport;
@@ -670,6 +812,7 @@ function htmlTemplate() {
           <span class="pill">\${data.summary.quoteFixtureCount} 条引文</span>
           <span class="pill">\${data.summary.totalFigureTableCaptions} 个 caption</span>
           <span class="pill">\${data.summary.totalExtractedTables} 个表格</span>
+          <span class="pill">已排除 \${data.filteredOutTranslated || 0} 个翻译/双语工件</span>
         </div>\`;
     }
 
@@ -761,6 +904,10 @@ function htmlTemplate() {
           <div class="stat"><b>\${item.tableCount || 0}</b><span>表格数</span></div>
           <div class="stat"><b>\${item.pageImages.length}</b><span>已渲染页</span></div>
         </div>
+        <div class="search-row">
+          <input id="pdfTextSearch" value="\${escapeHtml(state[item.id]?.search || "")}" placeholder="在当前 PDF 已抽取文本中搜索，例如方法名、引文片段、Figure 1..." />
+          <span>\${searchHitCount(item, state[item.id]?.search || "")} 处命中</span>
+        </div>
         <div class="review-grid">
           <div>
             \${item.tasks.map(task => \`
@@ -783,6 +930,7 @@ function htmlTemplate() {
               <figure class="page">
                 <div class="page-title"><span>渲染页 \${page.pageNumber}</span><a href="\${item.pdfUrl}" target="_blank" rel="noreferrer">PDF</a></div>
                 <img src="\${page.src}" alt="渲染页 \${page.pageNumber}" />
+                <figcaption class="page-text">\${highlightText(page.text, state[item.id]?.search || "")}</figcaption>
               </figure>
             \`).join("") || '<div class="empty">没有渲染页，请直接打开 PDF。</div>'}
           </div>
@@ -792,6 +940,8 @@ function htmlTemplate() {
       });
       const noteBox = document.getElementById("noteBox");
       if (noteBox) noteBox.oninput = () => setNote(item.id, noteBox.value);
+      const searchBox = document.getElementById("pdfTextSearch");
+      if (searchBox) searchBox.oninput = () => setSearch(item.id, searchBox.value);
     }
 
     function exportReview() {
@@ -845,6 +995,9 @@ function main() {
   }
   const report = JSON.parse(readFileSync(args.report, "utf8"));
   const items = selectReviewItems(report.results || [], args.limit);
+  const filteredOutTranslated = (report.results || []).filter(
+    (result) => result.status === "ok" && isTranslatedPdfArtifact(result),
+  ).length;
 
   rmSync(args.outDir, { recursive: true, force: true });
   const assetsDir = path.join(args.outDir, "assets");
@@ -859,6 +1012,7 @@ function main() {
     sourceReport: path.relative(repoRoot, args.report),
     sourceRoot: report.root,
     summary: report.summary,
+    filteredOutTranslated,
     items: reviewItems,
   };
 
