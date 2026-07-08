@@ -2994,19 +2994,20 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
   width: 100%;
   min-width: 0;
 }
 
 .claudero-pref-row-tall {
-  align-items: flex-start;
+  align-items: flex-start !important;
 }
 
 .claudero-pref-row-label {
   flex: 0 0 9.5em;
+  width: 9.5em;
   min-width: 0;
   color: var(--fill-primary, #222);
   overflow-wrap: anywhere;
@@ -3020,9 +3021,8 @@ toolbarbutton.claudero-header-action:hover {
 .claudero-pref-row html|textarea,
 .claudero-pref-row menulist,
 .claudero-pref-row html|code {
-  -moz-box-flex: 1;
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 1 0 !important;
+  min-width: 0 !important;
 }
 
 .claudero-pref-row html|button,
@@ -3041,8 +3041,10 @@ toolbarbutton.claudero-header-action:hover {
 .claudero-pref-row html|input,
 .claudero-pref-row html|textarea,
 .claudero-pref-row menulist {
+  display: block;
   width: 100% !important;
   max-width: none !important;
+  box-sizing: border-box !important;
 }
 
 .claudero-pref-stack html|code {
