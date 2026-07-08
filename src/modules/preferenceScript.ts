@@ -45,14 +45,6 @@ type XulValueElement = HTMLElement & {
 export async function registerPrefsScripts(window: Window) {
   const doc = window.document;
   await autoDetectSettings();
-  const testButton = doc.querySelector<HTMLButtonElement>(
-    "#claudero-test-helper",
-  );
-  testButton?.addEventListener("click", () => {
-    window.alert(
-      "Open the Claudero item pane, select an item, and send a prompt to start the helper.",
-    );
-  });
 
   const hostKey = getHostKey();
   doc.querySelector<HTMLElement>("#claudero-pref-host-key")!.textContent =

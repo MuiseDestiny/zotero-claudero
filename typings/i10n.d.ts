@@ -47,7 +47,6 @@ export type FluentMessageId =
   | 'pref-tab-general'
   | 'pref-tab-mcp'
   | 'pref-tab-skills'
-  | 'pref-test'
   | 'pref-title'
   | 'pref-workspace-path'
   | 'prefs-table-detail'

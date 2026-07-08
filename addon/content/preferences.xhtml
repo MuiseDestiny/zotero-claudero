@@ -194,16 +194,6 @@
               placeholder="PATH=/opt/homebrew/bin:/usr/local/bin:$PATH"
             ></html:textarea>
           </hbox>
-          <hbox
-            class="claudero-pref-row claudero-pref-row-actions"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:span class="claudero-pref-row-label"></html:span>
-            <html:button
-              id="claudero-test-helper"
-              data-l10n-id="pref-test"
-            ></html:button>
-          </hbox>
         </vbox>
         <vbox
           id="claudero-pref-panel-claude"
@@ -472,31 +462,34 @@
             id="claudero-pref-skills-list"
             class="claudero-pref-skills-list"
           ></html:div>
-          <hbox
-            class="claudero-pref-row claudero-pref-row-tall"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="claudero-pref-skills-import"
-              data-l10n-id="pref-skills-import"
-            ></html:label>
+          <html:div class="claudero-pref-skill-import-panel">
+            <html:div class="claudero-pref-skill-import-head">
+              <html:label
+                class="claudero-pref-skill-import-title"
+                for="claudero-pref-skills-import"
+                data-l10n-id="pref-skills-import"
+              ></html:label>
+              <html:div class="claudero-pref-skill-import-formats">
+                <html:span>Claudero JSON</html:span>
+                <html:span>SKILL.md</html:span>
+                <html:span>MCP JSON</html:span>
+                <html:span>Markdown</html:span>
+              </html:div>
+            </html:div>
             <html:textarea
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
               id="claudero-pref-skills-import"
-              rows="8"
+              class="claudero-pref-skill-import-textarea"
+              rows="7"
               data-l10n-id="pref-skills-import-placeholder"
             ></html:textarea>
-          </hbox>
-          <hbox class="claudero-pref-skills-actions">
-            <html:button
-              type="button"
-              id="claudero-pref-skills-import-button"
-              data-l10n-id="pref-skills-import-button"
-            ></html:button>
-          </hbox>
+            <html:div class="claudero-pref-skill-import-actions">
+              <html:button
+                type="button"
+                id="claudero-pref-skills-import-button"
+                data-l10n-id="pref-skills-import-button"
+              ></html:button>
+            </html:div>
+          </html:div>
           <html:div
             id="claudero-pref-skills-status"
             class="claudero-pref-status"
