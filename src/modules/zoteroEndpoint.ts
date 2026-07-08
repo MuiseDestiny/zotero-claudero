@@ -9,7 +9,7 @@ import {
 import { getSelectedZoteroContext } from "./zoteroContext";
 
 // Zotero HTTP endpoint — exposes Zotero API operations to Claude Code via curl/bash.
-// Registered at POST http://127.0.0.1:23119/claudero
+// Registered at POST http://127.0.0.1:<Zotero HTTP server port>/claudero
 // Each write operation is reversible: pushed onto undoStack, undone via "undo_last".
 
 interface UndoEntry {
@@ -565,6 +565,12 @@ function opListHistory() {
 let _detectedPort = 23119;
 
 function detectZoteroServerPort(): number {
+  try {
+    const port = Number((Zotero as any).Prefs?.get?.("httpServer.port"));
+    if (Number.isInteger(port) && port > 0 && port < 65536) return port;
+  } catch {
+    /* use Zotero's default */
+  }
   return 23119;
 }
 

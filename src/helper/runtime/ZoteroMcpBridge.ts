@@ -424,17 +424,45 @@ async function callZotero(
     const allowed = await requestPermission(config, action, args);
     if (!allowed) return { success: false, error: "Operation denied by user" };
   }
-  const response = await fetch(config.endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...args }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(config.endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...args }),
+    });
+  } catch (error) {
+    return {
+      success: false,
+      error: `Failed to reach Zotero MCP endpoint ${config.endpoint}: ${describeFetchError(error)}`,
+    };
+  }
   const text = await response.text();
+  if (!response.ok) {
+    return {
+      success: false,
+      error: `Zotero MCP endpoint ${config.endpoint} returned HTTP ${response.status}: ${text}`,
+    };
+  }
   try {
     return JSON.parse(text);
   } catch {
     return text;
   }
+}
+
+function describeFetchError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.message) {
+    return `${error.message} (${cause.message})`;
+  }
+  if (cause && typeof cause === "object") {
+    const code = String((cause as { code?: unknown }).code || "");
+    const message = String((cause as { message?: unknown }).message || "");
+    return [error.message, code, message].filter(Boolean).join(" ");
+  }
+  return error.message;
 }
 
 async function handleRequest(

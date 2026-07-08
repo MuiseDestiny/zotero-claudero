@@ -56,7 +56,7 @@ function isReadOnlyZoteroCall(
   const command = toolInput.command;
   if (
     typeof command !== "string" ||
-    !command.includes("127.0.0.1:23119/claudero")
+    !/127\.0\.0\.1:\d+\/claudero/.test(command)
   ) {
     return false;
   }
