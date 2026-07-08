@@ -28,6 +28,8 @@
     "test:helper:quick": "npm run build && node scripts/smoke-helper-communication.mjs",
     "test:evidence": "npm run build && node scripts/smoke-evidence-contract.mjs && node scripts/smoke-evidence-golden.mjs",
     "eval:pdf:golden": "node scripts/eval-real-pdf-golden.mjs",
+    "eval:pdf:review": "node scripts/build-pdf-review-site.mjs",
+    "eval:pdf:review:serve": "python3 -m http.server 4177 --bind 127.0.0.1 --directory .claudero-eval/review-site",
     "trace:replay": "node scripts/replay-agent-trace.mjs",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",

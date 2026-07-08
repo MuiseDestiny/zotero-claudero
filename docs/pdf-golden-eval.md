@@ -71,3 +71,52 @@ papers, and figure/table-heavy papers.
 The next step is to promote selected report entries into hand-reviewed golden
 fixtures for citation verification, figure/table provenance, and PDF rectangle
 jump accuracy.
+
+## Manual Review Site
+
+Generate an interactive local review site from the latest report:
+
+```bash
+npm run eval:pdf:review
+```
+
+The site is written to:
+
+```text
+.claudero-eval/review-site/index.html
+```
+
+Open that HTML file in a browser. The site includes:
+
+- selected review candidates from the real PDF report
+- rendered PDF page images for quote and figure/table pages
+- quote locator checks
+- figure/table caption checks
+- weak-text/scanned-PDF checks
+- local manual decisions: `Accept`, `Needs fix`, `Reject`
+- free-form notes
+- export of `claudero-pdf-review-decisions.json`
+
+Useful options:
+
+```bash
+node scripts/build-pdf-review-site.mjs --limit 20
+node scripts/build-pdf-review-site.mjs --report .claudero-eval/pdf-golden-report.json --out .claudero-eval/review-site
+```
+
+The exported review JSON is the bridge from human review to committed golden
+fixtures. After enough items are accepted, promote the accepted candidates into
+small checked-in fixture metadata while continuing to keep the PDFs themselves
+outside git.
+
+You can also serve the generated site locally:
+
+```bash
+npm run eval:pdf:review:serve
+```
+
+Then open:
+
+```text
+http://127.0.0.1:4177/
+```
