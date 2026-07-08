@@ -858,6 +858,7 @@ interface DiagnosticsPayload {
       session?: {
         threadId?: string;
         sessionFilePath?: string;
+        appServerStderr?: string;
       } | null;
     }
   >;
@@ -969,6 +970,7 @@ function bindDiagnostics(doc: Document): void {
           ["Active", data.runtimes?.codex?.active],
           ["Workspace", data.runtimes?.codex?.workspacePath],
           ["Thread", data.runtimes?.codex?.session?.threadId],
+          ["App stderr", data.runtimes?.codex?.session?.appServerStderr],
           ["Zotero MCP", data.runtimes?.codex?.zoteroMcp],
           ["MCP servers", data.runtimes?.codex?.mcpServers?.join(", ")],
         ]),

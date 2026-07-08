@@ -494,6 +494,7 @@ class CodexRpcTransport {
     string,
     (id: string | number, params: unknown) => Promise<unknown>
   >();
+  private stderrTail = "";
 
   constructor(private readonly proc: ChildProcessWithoutNullStreams) {}
 
@@ -503,8 +504,10 @@ class CodexRpcTransport {
     this.proc.on("exit", () => {
       this.rejectAll(new Error("Codex app-server exited"));
     });
-    this.proc.stderr.on("data", () => {
-      // Drain stderr so a noisy app-server cannot block on a full pipe.
+    this.proc.stderr.on("data", (chunk: Buffer) => {
+      // Drain stderr so a noisy app-server cannot block on a full pipe, but keep
+      // a small tail for diagnostics when a turn stalls before any event arrives.
+      this.stderrTail = (this.stderrTail + chunk.toString("utf8")).slice(-4000);
     });
   }
 
@@ -523,16 +526,12 @@ class CodexRpcTransport {
         reject,
         timer,
       });
-      this.send({ jsonrpc: "2.0", id, method, params });
+      this.send({ id, method, params });
     });
   }
 
   notify(method: string, params?: unknown): void {
-    this.send(
-      params === undefined
-        ? { jsonrpc: "2.0", method }
-        : { jsonrpc: "2.0", method, params },
-    );
+    this.send(params === undefined ? { method } : { method, params });
   }
 
   onNotification(method: string, handler: (params: unknown) => void): void {
@@ -550,6 +549,10 @@ class CodexRpcTransport {
     this.rejectAll(new Error("Codex transport disposed"));
   }
 
+  getStderrTail(): string {
+    return this.stderrTail.trim();
+  }
+
   private send(message: unknown): void {
     this.proc.stdin.write(JSON.stringify(message) + "\n");
   }
@@ -564,7 +567,7 @@ class CodexRpcTransport {
     const id = message.id as number | string | undefined;
     const method =
       typeof message.method === "string" ? message.method : undefined;
-    if (typeof id === "number" && !method) {
+    if ((typeof id === "number" || typeof id === "string") && !method) {
       this.handleResponse(id, message);
       return;
     }
@@ -577,10 +580,13 @@ class CodexRpcTransport {
     }
   }
 
-  private handleResponse(id: number, message: JsonRecord): void {
-    const pending = this.pending.get(id);
+  private handleResponse(id: number | string, message: JsonRecord): void {
+    const numericId = typeof id === "number" ? id : Number(id);
+    const pending = Number.isFinite(numericId)
+      ? this.pending.get(numericId)
+      : undefined;
     if (!pending) return;
-    this.pending.delete(id);
+    this.pending.delete(numericId);
     if (pending.timer) clearTimeout(pending.timer);
     const error = asRecord(message.error);
     if (error) {
@@ -692,7 +698,7 @@ export class CodexPersistentQueryManager {
     this.wireTransportHandlers();
     await this.transport.request("initialize", {
       clientInfo: { name: "claudero", title: "Claudero", version: "0.1.0" },
-      capabilities: { experimentalApi: true },
+      capabilities: { experimentalApi: true, requestAttestation: false },
     });
     this.transport.notify("initialized", {});
   }
@@ -745,6 +751,7 @@ export class CodexPersistentQueryManager {
       });
       const turn = asRecord(result.turn);
       this.currentTurnId = textValue(turn?.id);
+      this.handleTurnSnapshot(turn);
       yield { type: "session", session: this.getSessionState() };
       this.flushPendingNotifications();
 
@@ -770,12 +777,14 @@ export class CodexPersistentQueryManager {
     threadId?: string;
     sessionFilePath?: string;
     turnId?: string;
+    appServerStderr?: string;
   } {
     return {
       provider: "codex",
       threadId: this.threadId || undefined,
       sessionFilePath: this.sessionFilePath || undefined,
       turnId: this.currentTurnId || undefined,
+      appServerStderr: this.transport?.getStderrTail() || undefined,
     };
   }
 
@@ -1206,6 +1215,30 @@ export class CodexPersistentQueryManager {
     this.pendingNotifications = [];
     for (const entry of pending)
       this.handleNotification(entry.method, entry.params);
+  }
+
+  private handleTurnSnapshot(turn: JsonRecord | null): void {
+    if (!turn) return;
+    const items = Array.isArray(turn.items) ? turn.items : [];
+    for (const item of items) {
+      const record = asRecord(item);
+      if (!record) continue;
+      this.handleItemStarted(record);
+      this.handleItemCompleted(record);
+    }
+    const status = textValue(turn.status);
+    if (status === "failed") {
+      const error = asRecord(turn.error);
+      this.enqueue({
+        type: "error",
+        error:
+          textValue(error?.message, error?.additionalDetails) ||
+          "Codex turn failed.",
+      });
+      this.finishTurn();
+    } else if (status === "completed" || status === "interrupted") {
+      this.finishTurn();
+    }
   }
 
   private handleItemStarted(item: JsonRecord | null): void {
@@ -1672,11 +1705,13 @@ export class CodexPersistentQueryManager {
       await new Promise<void>((resolve) => {
         this.queueResolve = resolve;
         timer = setTimeout(() => {
+          const stderr = this.transport?.getStderrTail();
           this.queueResolve = null;
           this.enqueue({
             type: "error",
             error:
-              "Codex did not produce any events after starting the turn. The Codex app-server may be stuck; try sending again or restarting Claudero helper.",
+              "Codex did not produce any events after starting the turn. The Codex app-server may be stuck; try sending again or restarting Claudero helper." +
+              (stderr ? `\n\nApp-server stderr:\n${stderr}` : ""),
           });
           this.finishTurn();
           resolve();
