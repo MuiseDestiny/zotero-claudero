@@ -92,6 +92,68 @@ function hasNonAscii(value) {
   );
 }
 
+function normalizeForMatch(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const filenameStopwords = new Set([
+  "article",
+  "based",
+  "between",
+  "from",
+  "into",
+  "journal",
+  "paper",
+  "study",
+  "using",
+  "with",
+  "without",
+]);
+
+function filenameTitlePart(name) {
+  const withoutExt = String(name || "").replace(/\.pdf$/i, "");
+  const parts = withoutExt.split(/\s+-\s+/);
+  if (parts.length >= 3) return parts.slice(2).join(" ");
+  if (parts.length === 2) return parts[1];
+  return withoutExt;
+}
+
+function titleSignalTokens(name) {
+  return normalizeForMatch(filenameTitlePart(name))
+    .split(" ")
+    .filter((token) => {
+      if (token.length < 4) return false;
+      if (/^\d+$/.test(token)) return false;
+      return !filenameStopwords.has(token);
+    })
+    .slice(0, 18);
+}
+
+function titleCoverage(name, firstPageText) {
+  const tokens = titleSignalTokens(name);
+  const haystack = normalizeForMatch(firstPageText);
+  if (!tokens.length || !haystack) {
+    return {
+      ratio: null,
+      matched: [],
+      missing: tokens,
+      tokenCount: tokens.length,
+    };
+  }
+  const matched = tokens.filter((token) => haystack.includes(token));
+  return {
+    ratio: matched.length / tokens.length,
+    matched,
+    missing: tokens.filter((token) => !matched.includes(token)),
+    tokenCount: tokens.length,
+  };
+}
+
 function isTranslatedPdfArtifact(result) {
   const value = `${result.name || ""}\n${result.path || ""}`;
   return /(?:\.zh\.|\.mono\.pdf$|\.dual\.pdf$|\.zh\.mono|\.zh\.dual|no_watermark\.zh|debug\.no_watermark\.zh)/i.test(
@@ -290,9 +352,146 @@ function buildTasks(result) {
   return tasks;
 }
 
+function captionLabel(caption) {
+  const match = String(caption || "").match(
+    /\b((?:fig(?:ure)?\.?|table|图|表)\s*[0-9ivxlcdm一二三四五六七八九十百]+)/iu,
+  );
+  return match ? normalizeForMatch(match[1]).replace(/\s+/g, " ") : "";
+}
+
+function captionRiskReasons(caption, duplicateCount) {
+  const text = String(caption || "");
+  const normalized = normalizeForMatch(text);
+  const reasons = [];
+  if (duplicateCount > 1) {
+    reasons.push("同页同编号出现多个候选，可能混入正文引用或重复抽取。");
+  }
+  if (
+    /\b(?:fig(?:ure)?\.?|table)\s*[0-9ivxlcdm]+\.?\s+(?:shows?|illustrates?|reports?|presents?|displays?|depicts?|summari[sz]es?|lists?|is|are|was|were)\b/i.test(
+      text,
+    ) ||
+    /\b(?:shown|listed|reported|given|presented|illustrated)\s+in\s+(?:fig(?:ure)?\.?|table)\b/i.test(
+      text,
+    ) ||
+    /\b(?:see|according to)\s+(?:fig(?:ure)?\.?|table)\b/i.test(text)
+  ) {
+    reasons.push("措辞像正文中的图表引用，不一定是真实 caption。");
+  }
+  if (
+    text.length >= 250 ||
+    /\b(?:and|as|by|for|from|in|of|the|to|with)$/i.test(normalized)
+  ) {
+    reasons.push("候选文本较长或像被截断的句子，需要人工确认边界。");
+  }
+  if (!/[.:：。]\s*/u.test(text.slice(0, 28))) {
+    reasons.push("编号后缺少明显 caption 分隔符，可能是正文句子。");
+  }
+  return reasons;
+}
+
+function analyzeCaptionCandidates(captions) {
+  const counts = new Map();
+  for (const caption of captions || []) {
+    const label = captionLabel(caption.caption);
+    if (!label) continue;
+    const key = `${caption.pageNumber}:${label}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+
+  const candidates = (captions || []).slice(0, 12).map((caption) => {
+    const label = captionLabel(caption.caption);
+    const key = `${caption.pageNumber}:${label}`;
+    const reasons = captionRiskReasons(caption.caption, counts.get(key) || 0);
+    return {
+      pageNumber: caption.pageNumber,
+      label,
+      text: caption.caption,
+      risk: reasons.length ? "review" : "likely-caption",
+      reasons,
+    };
+  });
+
+  return {
+    total: candidates.length,
+    reviewCount: candidates.filter((candidate) => candidate.risk === "review")
+      .length,
+    candidates,
+  };
+}
+
+function buildAutoReview(result, pageImages, textMap) {
+  const issues = [];
+  const categories = [];
+  const renderedTextChars = pageImages.reduce(
+    (sum, page) => sum + String(page.text || "").trim().length,
+    0,
+  );
+  const hasRenderedPages = pageImages.length > 0;
+  const firstPageText =
+    textMap.pages.get(1) ||
+    pageImages.find((page) => String(page.text || "").trim())?.text ||
+    "";
+  const coverage = titleCoverage(result.name, firstPageText);
+
+  if (hasRenderedPages && renderedTextChars < 120) {
+    categories.push("ocr-candidate");
+    issues.push({
+      kind: "ocr-candidate",
+      severity: "high",
+      title: "渲染页存在，但可搜索文本几乎为空",
+      detail:
+        "这通常说明 PDF 有可见文字但文本层缺失或不可抽取，适合进入 OCR/版面理解回归集。",
+    });
+  }
+
+  if (
+    coverage.ratio !== null &&
+    coverage.tokenCount >= 4 &&
+    coverage.ratio < 0.25
+  ) {
+    categories.push("metadata-mismatch");
+    issues.push({
+      kind: "metadata-mismatch",
+      severity: "high",
+      title: "文件名标题与首页文本高度不匹配",
+      detail: `标题关键词命中 ${coverage.matched.length}/${coverage.tokenCount}。缺失关键词：${coverage.missing
+        .slice(0, 8)
+        .join("，")}`,
+    });
+  }
+
+  const captionReview = analyzeCaptionCandidates(
+    result.figureTableCaptions || [],
+  );
+  if (captionReview.reviewCount > 0) {
+    categories.push("caption-risk");
+    issues.push({
+      kind: "caption-risk",
+      severity: "medium",
+      title: "部分图表候选可能是正文引用",
+      detail: `${captionReview.reviewCount}/${captionReview.total} 个候选需要确认 caption 边界或去重。`,
+    });
+  }
+
+  const verdict = categories.includes("metadata-mismatch")
+    ? "exclude-review"
+    : issues.length
+      ? "needs-review"
+      : "golden-candidate";
+
+  return {
+    verdict,
+    categories,
+    renderedTextChars,
+    titleCoverage: coverage,
+    captionReview,
+    issues,
+  };
+}
+
 function itemFromResult(result, args, assetsDir) {
   const id = safeId(result.path);
-  const categories = categoriesFor(result);
+  const baseCategories = categoriesFor(result);
   const pageImages = [];
   const renderWarnings = [];
   const textMap = extractPageTextMap(result.path, args);
@@ -312,6 +511,10 @@ function itemFromResult(result, args, assetsDir) {
       renderWarnings.push(`page ${pageNumber}: ${rendered.error}`);
     }
   }
+  const autoReview = buildAutoReview(result, pageImages, textMap);
+  const categories = [
+    ...new Set([...baseCategories, ...autoReview.categories]),
+  ];
   return {
     id,
     name: result.name,
@@ -332,6 +535,7 @@ function itemFromResult(result, args, assetsDir) {
         }
       : null,
     figureTableCaptions: (result.figureTableCaptions || []).slice(0, 12),
+    autoReview,
     warnings: [...(result.warnings || []), ...renderWarnings],
     pageImages,
     tasks: buildTasks(result),
@@ -348,6 +552,7 @@ function itemFromResult(result, args, assetsDir) {
       figureTableCaptions: (result.figureTableCaptions || []).slice(0, 5),
       textQuality:
         Number(result.textChars || 0) < 2000 ? "weak-text" : "extractable-text",
+      autoReview,
     },
   };
 }
@@ -546,6 +751,70 @@ function htmlTemplate() {
       padding: 12px;
       margin-bottom: 10px;
     }
+    .precheck {
+      padding: 12px;
+      margin-bottom: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+    .precheck h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+    .precheck-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .issue-list {
+      display: grid;
+      gap: 7px;
+      margin-top: 8px;
+    }
+    .issue {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 8px;
+      background: #fff;
+    }
+    .issue.high {
+      border-color: #f1b7b7;
+      background: #fff8f8;
+    }
+    .issue.medium {
+      border-color: #edd28c;
+      background: #fffaf0;
+    }
+    .issue b {
+      display: block;
+      margin-bottom: 2px;
+      font-size: 12px;
+    }
+    .issue span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .caption-risk-list {
+      max-height: 180px;
+      overflow: auto;
+      display: grid;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .caption-risk {
+      padding: 7px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      font-size: 12px;
+    }
+    .caption-risk .why {
+      margin-top: 4px;
+      color: var(--amber);
+    }
     .task h3 {
       margin: 0 0 4px;
       font-size: 14px;
@@ -713,9 +982,15 @@ function htmlTemplate() {
       classic: "经典论文",
       modern: "近年论文",
       magic: "Magic 版",
+      "ocr-candidate": "OCR 候选",
+      "metadata-mismatch": "元数据错配",
+      "caption-risk": "Caption 风险",
       accept: "通过",
       "needs-fix": "需要修复",
       reject: "驳回",
+      "golden-candidate": "Golden 候选",
+      "needs-review": "需要预审",
+      "exclude-review": "建议排除",
     };
 
     function label(value) {
@@ -802,6 +1077,11 @@ function htmlTemplate() {
     }
 
     function renderSummary() {
+      const autoCounts = data.items.reduce((acc, item) => {
+        const verdict = item.autoReview?.verdict || "unknown";
+        acc[verdict] = (acc[verdict] || 0) + 1;
+        return acc;
+      }, {});
       document.getElementById("subtitle").textContent =
         data.generatedAt + " · " + data.sourceReport;
       document.getElementById("summary").innerHTML = \`
@@ -813,6 +1093,9 @@ function htmlTemplate() {
           <span class="pill">\${data.summary.totalFigureTableCaptions} 个 caption</span>
           <span class="pill">\${data.summary.totalExtractedTables} 个表格</span>
           <span class="pill">已排除 \${data.filteredOutTranslated || 0} 个翻译/双语工件</span>
+          <span class="pill">\${autoCounts["golden-candidate"] || 0} 个 Golden 候选</span>
+          <span class="pill">\${autoCounts["needs-review"] || 0} 个需预审</span>
+          <span class="pill">\${autoCounts["exclude-review"] || 0} 个建议排除</span>
         </div>\`;
     }
 
@@ -881,6 +1164,44 @@ function htmlTemplate() {
       ).join("");
     }
 
+    function renderAutoReview(item) {
+      const review = item.autoReview || { verdict: "needs-review", issues: [] };
+      const issueHtml = (review.issues || []).map(issue => \`
+        <div class="issue \${escapeHtml(issue.severity || "")}">
+          <b>\${escapeHtml(issue.title)}</b>
+          <span>\${escapeHtml(issue.detail)}</span>
+        </div>\`
+      ).join("") || '<div class="issue"><b>未发现自动预审风险</b><span>仍建议人工核对引文页码和图表来源。</span></div>';
+      const riskyCaptions = (review.captionReview?.candidates || [])
+        .filter(candidate => candidate.risk === "review")
+        .slice(0, 6);
+      const captionHtml = riskyCaptions.length ? \`
+        <div class="caption-risk-list">
+          \${riskyCaptions.map(candidate => \`
+            <div class="caption-risk">
+              <b>第 \${candidate.pageNumber} 页 · \${escapeHtml(candidate.label || "caption")}</b>
+              <div>\${escapeHtml(candidate.text)}</div>
+              <div class="why">\${escapeHtml((candidate.reasons || []).join("；"))}</div>
+            </div>\`
+          ).join("")}
+        </div>\` : "";
+      const coverage = review.titleCoverage?.ratio;
+      const coverageText = coverage === null || coverage === undefined
+        ? "标题覆盖率：无可比对文本"
+        : "标题覆盖率：" + Math.round(coverage * 100) + "%";
+      return \`
+        <section class="precheck">
+          <h3>自动预审</h3>
+          <div class="precheck-head">
+            <span class="pill">\${escapeHtml(label(review.verdict))}</span>
+            <span class="pill">\${escapeHtml(coverageText)}</span>
+            <span class="pill">渲染页文本 \${review.renderedTextChars || 0} 字符</span>
+          </div>
+          <div class="issue-list">\${issueHtml}</div>
+          \${captionHtml}
+        </section>\`;
+    }
+
     function renderDetail() {
       const item = data.items.find(entry => entry.id === selectedId);
       const detail = document.getElementById("detail");
@@ -910,6 +1231,7 @@ function htmlTemplate() {
         </div>
         <div class="review-grid">
           <div>
+            \${renderAutoReview(item)}
             \${item.tasks.map(task => \`
               <section class="task">
                 <h3>\${escapeHtml(task.title)}</h3>
