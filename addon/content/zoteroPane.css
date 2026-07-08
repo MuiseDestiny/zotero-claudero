@@ -3222,14 +3222,9 @@ toolbarbutton.claudero-header-action:hover {
   max-height: 420px;
   overflow-y: auto;
   overflow-x: hidden;
-  scrollbar-gutter: auto;
-  scrollbar-width: none;
-  background: color-mix(in srgb, currentColor 3%, transparent);
-}
-
-.claudero-pref-skills-table-body-shell:hover,
-.claudero-pref-skills-table-body-shell:focus-within {
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
+  background: color-mix(in srgb, currentColor 3%, transparent);
 }
 
 .claudero-pref-skills-table {
