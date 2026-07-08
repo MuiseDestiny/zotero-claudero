@@ -63,6 +63,7 @@ type RestartConfig = Omit<Partial<CodexConfig>, "workspacePath">;
 
 type JsonRecord = Record<string, unknown>;
 type QueueItem = ClauderoStreamEvent | { type: "__done" };
+const CODEX_TURN_IDLE_TIMEOUT_MS = 90_000;
 
 interface PendingQuestion {
   toolUseId: string;
@@ -916,7 +917,8 @@ export class CodexPersistentQueryManager {
   updateConfig(newConfig: RestartConfig): void {
     if (!this.config) return;
     this.config = { ...this.config, ...newConfig };
-    if (newConfig.providerState) this.applyProviderState(newConfig.providerState);
+    if (newConfig.providerState)
+      this.applyProviderState(newConfig.providerState);
   }
 
   private getComparableProviderState(): CodexProviderState {
@@ -1549,7 +1551,10 @@ export class CodexPersistentQueryManager {
       };
     });
 
-    if (decision?.type === "approve" || decision?.type === "approve-new-session") {
+    if (
+      decision?.type === "approve" ||
+      decision?.type === "approve-new-session"
+    ) {
       this.planApprovedTurnIds.add(turnKey);
       return true;
     }
@@ -1652,11 +1657,25 @@ export class CodexPersistentQueryManager {
     }
   }
 
-  private async nextQueueItem(): Promise<QueueItem> {
+  private async nextQueueItem(
+    timeoutMs = CODEX_TURN_IDLE_TIMEOUT_MS,
+  ): Promise<QueueItem> {
     while (this.queue.length === 0) {
+      let timer: NodeJS.Timeout | null = null;
       await new Promise<void>((resolve) => {
         this.queueResolve = resolve;
+        timer = setTimeout(() => {
+          this.queueResolve = null;
+          this.enqueue({
+            type: "error",
+            error:
+              "Codex did not produce any events after starting the turn. The Codex app-server may be stuck; try sending again or restarting Claudero helper.",
+          });
+          this.finishTurn();
+          resolve();
+        }, timeoutMs);
       });
+      if (timer) clearTimeout(timer);
     }
     return this.queue.shift()!;
   }
