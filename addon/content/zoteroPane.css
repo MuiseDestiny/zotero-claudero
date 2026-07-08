@@ -2925,7 +2925,7 @@ toolbarbutton.claudero-header-action:hover {
   border: var(--material-panedivider);
   border-radius: 8px;
   overflow: hidden;
-  background: var(--material-background, #fff);
+  background: var(--material-mix-quinary, #f3f3f3);
 }
 
 .claudero-pref-tabs-wrapper {
@@ -2986,7 +2986,7 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-tab-content {
   padding: 1.1em 1.25em;
-  background: var(--material-background, #fff);
+  background: var(--material-mix-quinary, #f3f3f3);
 }
 
 .claudero-pref-panel {
