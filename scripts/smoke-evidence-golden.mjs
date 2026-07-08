@@ -63,9 +63,13 @@ const evidence = read("src/modules/evidence.ts");
 for (const marker of [
   "EvidenceFigureTableContext",
   "EvidencePageImage",
+  "FigureTablePageInspection",
   "pageImage?: EvidencePageImage",
+  "imageInput?: EvidenceImageInput",
+  "inspectFigureTablePage",
   "includePageImages?: boolean",
   'source: "pdfjs-canvas" | "open-pdf-uri"',
+  "Use the attached rendered page screenshot as the primary source of truth.",
   "pageContext",
   "samePageEvidenceIds",
   "rects: paragraph.locator.position?.rects?.slice",

@@ -1,6 +1,9 @@
 import process from "node:process";
 
 type JsonRecord = Record<string, unknown>;
+type McpContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
 
 const WRITE_ACTIONS = new Set([
   "write_tags",
@@ -14,6 +17,7 @@ const INSTRUCTIONS = [
   "Use Zotero MCP tools for semantic library state, annotations, attachment paths, evidence packs, citation verification, and safe writes.",
   "For full PDF text, tables, formulas, or layout, get the attachment path and read the local PDF directly with Python instead of asking Zotero MCP for full text.",
   "For scholarly answers, call get_evidence_pack before making factual claims, locate_quote before quoting, and verify_citations before finalizing claim-heavy output. Mark unsupported claims instead of inventing citations.",
+  "For figure/table claims, call inspect_figure_table_page when page-level visual evidence is needed; use the rendered page image as the source of truth for caption and visual-content checks.",
   "Read tools can be called directly.",
   "Write tools require user approval before the tool handler performs the operation.",
   "After a successful write, briefly state what changed in one sentence and do not print operation IDs.",
@@ -33,6 +37,58 @@ interface JsonRpcRequest {
 
 function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === "object" ? (value as JsonRecord) : null;
+}
+
+function imageInputFromOutput(
+  output: unknown,
+): { media_type: string; data: string } | null {
+  const wrapper = asRecord(output);
+  const result = asRecord(wrapper?.result) || wrapper;
+  const imageInput = asRecord(result?.imageInput);
+  const mediaType = imageInput?.media_type;
+  const data = imageInput?.data;
+  return typeof mediaType === "string" && typeof data === "string" && data
+    ? { media_type: mediaType, data }
+    : null;
+}
+
+function redactImagePayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactImagePayload);
+  const record = asRecord(value);
+  if (!record) return value;
+  const out: JsonRecord = {};
+  for (const [key, nested] of Object.entries(record)) {
+    if (key === "data" && typeof nested === "string" && nested.length > 1200) {
+      out[key] = `<base64 omitted: ${nested.length} chars>`;
+    } else if (
+      key === "dataUrl" &&
+      typeof nested === "string" &&
+      nested.length > 1200
+    ) {
+      out[key] = `<dataUrl omitted: ${nested.length} chars>`;
+    } else {
+      out[key] = redactImagePayload(nested);
+    }
+  }
+  return out;
+}
+
+function toolContentFromOutput(output: unknown): McpContent[] {
+  const content: McpContent[] = [
+    {
+      type: "text",
+      text: JSON.stringify(redactImagePayload(output), null, 2),
+    },
+  ];
+  const imageInput = imageInputFromOutput(output);
+  if (imageInput) {
+    content.push({
+      type: "image",
+      data: imageInput.data,
+      mimeType: imageInput.media_type,
+    });
+  }
+  return content;
 }
 
 function textArg(argv: string[], name: string, fallback = ""): string {
@@ -183,6 +239,23 @@ function tools(): JsonRecord[] {
       ),
     },
     {
+      name: "inspect_figure_table_page",
+      description:
+        "Prepare a multimodal visual audit for a figure/table evidence page. Returns a strict inspection prompt plus the rendered PDF page as image content when the page is open in Zotero Reader. Use this before trusting figure/table claims or caption candidates.",
+      inputSchema: toolSchema({
+        itemId: { type: "number" },
+        attachmentId: { type: "number" },
+        pageIndex: { type: "number" },
+        pageNumber: { type: "number" },
+        label: { type: "string" },
+        caption: { type: "string" },
+        query: { type: "string" },
+        claim: { type: "string" },
+        maxPages: { type: "number" },
+        pageImageMaxWidth: { type: "number" },
+      }),
+    },
+    {
       name: "write_tags",
       description:
         "Add or remove tags on a Zotero item. Requires user approval before execution.",
@@ -320,7 +393,7 @@ async function handleRequest(
     if (!name) throw new Error("Missing tool name");
     const output = await callZotero(config, name, args);
     result(request.id, {
-      content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+      content: toolContentFromOutput(output),
       isError:
         asRecord(output)?.success === false ||
         typeof asRecord(output)?.error === "string",

@@ -88,6 +88,32 @@ export interface EvidencePack {
   citationGuidance: string[];
 }
 
+export interface EvidenceImageInput {
+  media_type: "image/jpeg" | "image/png";
+  data: string;
+}
+
+export interface FigureTablePageInspection {
+  target: {
+    itemId?: number;
+    attachmentId?: number;
+    pageIndex?: number;
+    pageNumber?: number;
+    label?: string;
+    caption?: string;
+    claim?: string;
+  };
+  candidate?: EvidenceFigureTableCandidate;
+  pageImage?: EvidencePageImage;
+  imageInput?: EvidenceImageInput;
+  inspectionPrompt: string;
+  expectedOutput: {
+    format: "json";
+    fields: string[];
+  };
+  warnings: string[];
+}
+
 export interface LocatedQuote {
   quote: string;
   matches: EvidenceParagraph[];
@@ -169,6 +195,17 @@ function normalizeForMatch(value: string): string {
 function compact(value: string, maxLength: number): string {
   const text = value.replace(/\s+/g, " ").trim();
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function dataUrlToImageInput(dataUrl?: string): EvidenceImageInput | undefined {
+  const match = String(dataUrl || "").match(
+    /^data:(image\/(?:jpeg|png));base64,(.+)$/i,
+  );
+  if (!match) return undefined;
+  return {
+    media_type: match[1].toLowerCase() as EvidenceImageInput["media_type"],
+    data: match[2],
+  };
 }
 
 function tokenize(value: string): string[] {
@@ -1223,6 +1260,189 @@ export async function locateQuote(payload: {
           ...pack.warnings,
           "No quote match found in available Zotero evidence.",
         ],
+  };
+}
+
+function scoreFigureTableCandidate(
+  candidate: EvidenceFigureTableCandidate,
+  target: {
+    pageIndex?: number;
+    pageNumber?: number;
+    label?: string;
+    caption?: string;
+    query?: string;
+    claim?: string;
+  },
+): number {
+  let score = 0;
+  const pageIndex =
+    typeof target.pageIndex === "number"
+      ? target.pageIndex
+      : typeof target.pageNumber === "number"
+        ? target.pageNumber - 1
+        : undefined;
+  if (
+    typeof pageIndex === "number" &&
+    candidate.locator.pageIndex === pageIndex
+  ) {
+    score += 4;
+  }
+  if (target.label) {
+    score += scoreText(candidate.label, target.label).score * 3;
+  }
+  if (target.caption) {
+    score += scoreText(candidate.caption, target.caption).score * 2;
+  }
+  if (target.query) {
+    score += scoreText(candidate.caption, target.query).score;
+  }
+  if (target.claim) {
+    score += scoreText(candidate.caption, target.claim).score;
+  }
+  return score;
+}
+
+function visualInspectionPrompt(options: {
+  candidate?: EvidenceFigureTableCandidate;
+  pageImage?: EvidencePageImage;
+  claim?: string;
+  query?: string;
+  warnings: string[];
+}): string {
+  const candidate = options.candidate;
+  const pageImage = options.pageImage;
+  const targetLines = [
+    "You are auditing figure/table evidence from a Zotero PDF page.",
+    "Use the attached rendered page screenshot as the primary source of truth.",
+    "Do not rely on the extracted caption if the screenshot contradicts it.",
+    "",
+    "Target:",
+    `- Page: ${pageImage?.pageNumber || candidate?.locator.pageNumber || "unknown"}`,
+    `- Label: ${candidate?.label || "unknown"}`,
+    `- Candidate caption: ${candidate?.caption || "none"}`,
+    options.claim ? `- Claim to verify: ${options.claim}` : "",
+    options.query ? `- Query: ${options.query}` : "",
+    "",
+    "Tasks:",
+    "1. Decide whether the candidate is a true figure/table caption on this page or merely a body-text reference.",
+    "2. Briefly describe what the visible figure/table/page evidence shows.",
+    "3. If a claim is provided, decide whether the visible page supports it.",
+    "4. Report concrete visual evidence such as labels, caption text, axes, table headings, or nearby paragraph cues.",
+    "",
+    "Return strict JSON with fields: verdict, isTrueCaption, visualSummary, claimSupport, evidence, confidence, warnings.",
+  ].filter(Boolean);
+  if (options.warnings.length) {
+    targetLines.push(
+      "",
+      "Known warnings:",
+      ...options.warnings.map((w) => `- ${w}`),
+    );
+  }
+  return targetLines.join("\n");
+}
+
+export async function inspectFigureTablePage(payload: {
+  itemId?: number;
+  attachmentId?: number;
+  pageIndex?: number;
+  pageNumber?: number;
+  label?: string;
+  caption?: string;
+  query?: string;
+  claim?: string;
+  maxPages?: number;
+  pageImageMaxWidth?: number;
+}): Promise<FigureTablePageInspection | { error: string }> {
+  const pack = await buildEvidencePack({
+    itemId: payload.itemId,
+    attachmentId: payload.attachmentId,
+    query: payload.query || payload.caption || payload.label || payload.claim,
+    maxParagraphs: 12,
+    maxPages: Number(payload.maxPages || 120),
+    includeAnnotations: false,
+    includePageImages: true,
+    maxPageImages: 4,
+    pageImageMaxWidth: Number(payload.pageImageMaxWidth || 1200),
+  });
+  if ("error" in pack) return pack;
+
+  const scored = pack.figuresTables
+    .map((candidate) => ({
+      candidate,
+      score: scoreFigureTableCandidate(candidate, payload),
+    }))
+    .sort((a, b) => b.score - a.score);
+  const candidate = scored[0]?.candidate;
+  const requestedPageIndex =
+    typeof payload.pageIndex === "number"
+      ? payload.pageIndex
+      : typeof payload.pageNumber === "number"
+        ? payload.pageNumber - 1
+        : undefined;
+  const pageImage =
+    candidate?.pageImage ||
+    (typeof requestedPageIndex === "number"
+      ? {
+          pageIndex: requestedPageIndex,
+          pageNumber: requestedPageIndex + 1,
+          source: "open-pdf-uri" as const,
+          openUri: pack.attachment?.key
+            ? `zotero://open-pdf/library/items/${pack.attachment.key}?page=${
+                requestedPageIndex + 1
+              }`
+            : undefined,
+          warning:
+            "No figure/table candidate was found on the requested page; use the openUri to inspect the page.",
+        }
+      : undefined);
+  const imageInput = dataUrlToImageInput(pageImage?.dataUrl);
+  const warnings = [
+    ...pack.warnings,
+    ...(pageImage?.warning ? [pageImage.warning] : []),
+    ...(imageInput
+      ? []
+      : [
+          "No screenshot imageInput is available. Open the PDF page in Zotero Reader, ensure the page is rendered, then call inspect_figure_table_page again.",
+        ]),
+    ...(candidate ? [] : ["No matching figure/table caption candidate found."]),
+  ];
+
+  return {
+    target: {
+      itemId: payload.itemId,
+      attachmentId: payload.attachmentId,
+      pageIndex: requestedPageIndex ?? candidate?.locator.pageIndex,
+      pageNumber:
+        typeof requestedPageIndex === "number"
+          ? requestedPageIndex + 1
+          : candidate?.locator.pageNumber,
+      label: payload.label,
+      caption: payload.caption,
+      claim: payload.claim,
+    },
+    candidate,
+    pageImage,
+    imageInput,
+    inspectionPrompt: visualInspectionPrompt({
+      candidate,
+      pageImage,
+      claim: payload.claim,
+      query: payload.query,
+      warnings,
+    }),
+    expectedOutput: {
+      format: "json",
+      fields: [
+        "verdict",
+        "isTrueCaption",
+        "visualSummary",
+        "claimSupport",
+        "evidence",
+        "confidence",
+        "warnings",
+      ],
+    },
+    warnings,
   };
 }
 

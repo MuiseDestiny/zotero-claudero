@@ -4,7 +4,12 @@ import path from "node:path";
 import process from "node:process";
 
 const root = process.cwd();
-const tools = ["get_evidence_pack", "locate_quote", "verify_citations"];
+const tools = [
+  "get_evidence_pack",
+  "inspect_figure_table_page",
+  "locate_quote",
+  "verify_citations",
+];
 const checks = [
   [
     "src/modules/evidence.ts",
@@ -12,9 +17,12 @@ const checks = [
       "EvidencePack",
       "EvidenceLocator",
       "EvidencePageImage",
+      "FigureTablePageInspection",
       "evidenceUri",
+      "imageInput",
       "pageImage",
       "includePageImages",
+      "inspectFigureTablePage",
       "verifyCitationClaims",
     ],
   ],
@@ -24,7 +32,15 @@ const checks = [
   ["src/helper/runtime/PermissionManager.ts", tools],
   [
     "src/modules/academicSkills.ts",
-    ["verify-citations", "figuresTables[].pageImage", ...tools],
+    ["verify-citations", "rendered page image", ...tools],
+  ],
+  [
+    "src/helper/runtime/ZoteroMcpServer.ts",
+    ['type: "image"', "toolContentFromOutput", "inspect_figure_table_page"],
+  ],
+  [
+    "src/helper/runtime/ZoteroMcpBridge.ts",
+    ['type: "image"', "toolContentFromOutput", "inspect_figure_table_page"],
   ],
   [
     "src/modules/messageRenderer.ts",

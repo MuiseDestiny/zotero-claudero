@@ -1,5 +1,6 @@
 import {
   buildEvidencePack,
+  inspectFigureTablePage,
   locateQuote,
   verifyCitationClaims,
 } from "./evidence";
@@ -233,6 +234,23 @@ async function opVerifyCitations(payload: any) {
     text: typeof payload.text === "string" ? payload.text : undefined,
     itemId: Number(payload.itemId || 0) || undefined,
     attachmentId: Number(payload.attachmentId || 0) || undefined,
+  });
+}
+
+async function opInspectFigureTablePage(payload: any) {
+  return inspectFigureTablePage({
+    itemId: Number(payload.itemId || 0) || undefined,
+    attachmentId: Number(payload.attachmentId || 0) || undefined,
+    pageIndex:
+      typeof payload.pageIndex === "number" ? payload.pageIndex : undefined,
+    pageNumber:
+      typeof payload.pageNumber === "number" ? payload.pageNumber : undefined,
+    label: typeof payload.label === "string" ? payload.label : undefined,
+    caption: typeof payload.caption === "string" ? payload.caption : undefined,
+    query: typeof payload.query === "string" ? payload.query : undefined,
+    claim: typeof payload.claim === "string" ? payload.claim : undefined,
+    maxPages: Number(payload.maxPages || 0) || undefined,
+    pageImageMaxWidth: Number(payload.pageImageMaxWidth || 0) || undefined,
   });
 }
 
@@ -588,6 +606,9 @@ export function registerZoteroEndpoint(): void {
             case "verify_citations":
               result = await opVerifyCitations(payload);
               break;
+            case "inspect_figure_table_page":
+              result = await opInspectFigureTablePage(payload);
+              break;
             case "write_tags":
               result = await opWriteTags(payload);
               break;
@@ -615,6 +636,7 @@ export function registerZoteroEndpoint(): void {
                   "get_evidence_pack",
                   "locate_quote",
                   "verify_citations",
+                  "inspect_figure_table_page",
                   "write_tags",
                   "create_note",
                   "set_field",

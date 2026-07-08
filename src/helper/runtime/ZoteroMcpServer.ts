@@ -2,6 +2,10 @@ import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { PermissionManager } from "./PermissionManager";
 
+type ToolContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
 const WRITE_ACTIONS = new Set([
   "write_tags",
   "create_note",
@@ -22,6 +26,70 @@ function permissionSummary(action: string): string {
     default:
       return "Modify Zotero data";
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function imageInputFromOutput(
+  output: unknown,
+): { media_type: string; data: string } | null {
+  const wrapper = asRecord(output);
+  const result = asRecord(wrapper?.result) || wrapper;
+  const imageInput = asRecord(result?.imageInput);
+  const mediaType = imageInput?.media_type;
+  const data = imageInput?.data;
+  return typeof mediaType === "string" && typeof data === "string" && data
+    ? { media_type: mediaType, data }
+    : null;
+}
+
+function redactImagePayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactImagePayload);
+  const record = asRecord(value);
+  if (!record) return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(record)) {
+    if (key === "data" && typeof nested === "string" && nested.length > 1200) {
+      out[key] = `<base64 omitted: ${nested.length} chars>`;
+    } else if (
+      key === "dataUrl" &&
+      typeof nested === "string" &&
+      nested.length > 1200
+    ) {
+      out[key] = `<dataUrl omitted: ${nested.length} chars>`;
+    } else {
+      out[key] = redactImagePayload(nested);
+    }
+  }
+  return out;
+}
+
+function toolContentFromOutput(output: unknown): ToolContent[] {
+  const content: ToolContent[] = [
+    {
+      type: "text",
+      text: JSON.stringify(redactImagePayload(output)),
+    },
+  ];
+  const imageInput = imageInputFromOutput(output);
+  if (imageInput) {
+    const mediaType =
+      imageInput.media_type === "image/jpeg" ||
+      imageInput.media_type === "image/gif" ||
+      imageInput.media_type === "image/webp"
+        ? imageInput.media_type
+        : "image/png";
+    content.push({
+      type: "image",
+      data: imageInput.data,
+      mimeType: mediaType,
+    });
+  }
+  return content;
 }
 
 export function createZoteroMcpServer(
@@ -63,7 +131,13 @@ export function createZoteroMcpServer(
       body: JSON.stringify({ action, ...args }),
     });
     const text = await response.text();
-    return { content: [{ type: "text" as const, text }] };
+    let output: unknown = text;
+    try {
+      output = JSON.parse(text);
+    } catch {
+      output = text;
+    }
+    return { content: toolContentFromOutput(output) };
   };
 
   return createSdkMcpServer({
@@ -75,6 +149,7 @@ export function createZoteroMcpServer(
       "Use Zotero MCP tools for semantic library state, annotations, attachment paths, evidence packs, citation verification, and safe writes.",
       "For full PDF text, tables, formulas, or layout, get the attachment path and read the local PDF directly with Python instead of asking Zotero MCP for full text.",
       "For scholarly answers, call get_evidence_pack before making factual claims, locate_quote before quoting, and verify_citations before finalizing claim-heavy output. Mark unsupported claims instead of inventing citations.",
+      "For figure/table claims, call inspect_figure_table_page when page-level visual evidence is needed; use the rendered page image as the source of truth for caption and visual-content checks.",
       "Read tools can be called directly.",
       "Write tools require user approval before the tool handler performs the operation.",
       "After a successful write, briefly state what changed in one sentence and do not print operation IDs.",
@@ -178,6 +253,24 @@ export function createZoteroMcpServer(
             .optional(),
         },
         handler: (args) => call("verify_citations", args),
+      },
+      {
+        name: "inspect_figure_table_page",
+        description:
+          "Prepare a multimodal visual audit for a figure/table evidence page. Returns a strict inspection prompt plus the rendered PDF page as image content when the page is open in Zotero Reader. Use this before trusting figure/table claims or caption candidates.",
+        inputSchema: {
+          itemId: z.number().optional(),
+          attachmentId: z.number().optional(),
+          pageIndex: z.number().optional(),
+          pageNumber: z.number().optional(),
+          label: z.string().optional(),
+          caption: z.string().optional(),
+          query: z.string().optional(),
+          claim: z.string().optional(),
+          maxPages: z.number().optional(),
+          pageImageMaxWidth: z.number().optional(),
+        },
+        handler: (args) => call("inspect_figure_table_page", args),
       },
       {
         name: "write_tags",
