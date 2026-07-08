@@ -8,16 +8,17 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "os";
 import path from "node:path";
 import process from "node:process";
-import { ToolInputStreamState } from "./stream/toolInputStreamState";
-import { transformClaudeMessage } from "./stream/transformClaudeMessage";
 import { PermissionManager } from "./runtime/PermissionManager";
-import { PersistentQueryManager } from "./runtime/PersistentQueryManager";
-import { CodexPersistentQueryManager } from "./runtime/CodexPersistentQueryManager";
+import {
+  ClaudeRuntimeAdapter,
+  CodexRuntimeAdapter,
+  type AgentRuntimeAdapter,
+  type AgentRuntimeRestartConfig,
+} from "./runtime/AgentRuntimeAdapter";
 import { testMcpServer, type McpServerConfig } from "./runtime/McpTester";
 import { runZoteroMcpStdioServer } from "./runtime/ZoteroMcpBridge";
 import {
   buildQueryOptions,
-  normalizePermissionMode,
   normalizeEffort as normalizeClaudeEffort,
   normalizeModel as normalizeClaudeModel,
   type ClauderoPermissionMode,
@@ -387,17 +388,27 @@ function uniqueExistingDirectories(paths: string[] | undefined): string[] {
 // ── HTTP Handlers ────────────────────────────────────────────────────────────
 
 const permissionManager = new PermissionManager();
-const claudeQueryManager = new PersistentQueryManager(permissionManager);
-const codexQueryManager = new CodexPersistentQueryManager(permissionManager);
+const runtimeAdapters: Record<HelperProvider, AgentRuntimeAdapter> = {
+  claude: new ClaudeRuntimeAdapter(permissionManager),
+  codex: new CodexRuntimeAdapter(permissionManager),
+};
 let activeProvider: HelperProvider = "claude";
 let latestAgentTrace: AgentEventTrace | null = null;
 
 function queryManagerFor(provider: HelperProvider) {
-  return provider === "codex" ? codexQueryManager : claudeQueryManager;
+  return runtimeAdapters[provider];
 }
 
 function activeQueryManager() {
   return queryManagerFor(activeProvider);
+}
+
+function currentWorkspacePathFor(provider: HelperProvider): string | null {
+  return (
+    queryManagerFor(provider).workspacePath ||
+    runtimeAdapters.claude.workspacePath ||
+    runtimeAdapters.codex.workspacePath
+  );
 }
 
 function traceSummary(trace: AgentEventTrace | null): unknown {
@@ -433,18 +444,62 @@ function diagnosticsPayload(): unknown {
       active: activeQueryManager().isActive,
     },
     runtimes: {
-      claude: {
-        active: claudeQueryManager.isActive,
-        workspacePath: claudeQueryManager.workspacePath,
-      },
-      codex: {
-        active: codexQueryManager.isActive,
-        workspacePath: codexQueryManager.workspacePath,
-        session: codexQueryManager.getSessionState(),
-      },
+      claude: runtimeAdapters.claude.diagnostics(),
+      codex: runtimeAdapters.codex.diagnostics(),
     },
     trace: traceSummary(latestAgentTrace),
   };
+}
+
+function runtimeRestartConfig(
+  provider: HelperProvider,
+  payload: Partial<InitPayload & SendPayload>,
+): AgentRuntimeRestartConfig {
+  const common = {
+    model: normalizeClaudeModel(payload.model),
+    effort:
+      provider === "claude"
+        ? normalizeClaudeEffort(payload.effort)
+        : payload.effort,
+    additionalDirectories: payload.additionalDirectories,
+    environment: payload.environment,
+    permissionMode: payload.permissionMode,
+    zoteroEndpointUrl: payload.zoteroEndpointUrl,
+    enableZoteroMcp: payload.enableZoteroMcp,
+    mcpServers: payload.mcpServers,
+    mcpDisabledTools: payload.mcpDisabledTools,
+    conversationId: payload.conversationId,
+  };
+  if (provider === "codex") {
+    return {
+      ...common,
+      codexPath: payload.codexPath,
+      codexInstallationMethod: payload.codexInstallationMethod,
+      codexWslDistro: payload.codexWslDistro,
+      codexSafeMode: payload.codexSafeMode,
+      providerState: payload.providerState?.codex,
+    };
+  }
+  return {
+    ...common,
+    claudePath: payload.claudePath,
+  };
+}
+
+function runtimeLiveUpdateConfig(
+  provider: HelperProvider,
+  payload: Partial<InitPayload & SendPayload>,
+): AgentRuntimeRestartConfig {
+  if (provider === "codex") {
+    return {
+      model: normalizeClaudeModel(payload.model),
+      effort: payload.effort,
+      additionalDirectories: payload.additionalDirectories,
+      permissionMode: payload.permissionMode,
+      codexSafeMode: payload.codexSafeMode,
+    };
+  }
+  return {};
 }
 
 async function initializeProviderFromPayload(
@@ -456,6 +511,7 @@ async function initializeProviderFromPayload(
   const additionalDirectories = uniqueExistingDirectories(
     payload.additionalDirectories,
   );
+  const manager = queryManagerFor(provider);
   if (provider === "codex") {
     const codexPath = resolveCodexPath(
       payload.codexPath,
@@ -465,7 +521,7 @@ async function initializeProviderFromPayload(
       },
       payload.codexInstallationMethod,
     );
-    await codexQueryManager.initialize({
+    await manager.initialize({
       workspacePath,
       codexPath,
       environment: payload.environment || {},
@@ -499,7 +555,7 @@ async function initializeProviderFromPayload(
     ...process.env,
     ...(payload.environment || {}),
   });
-  await claudeQueryManager.initialize({
+  await manager.initialize({
     workspacePath,
     claudePath,
     environment: payload.environment || {},
@@ -529,65 +585,12 @@ async function handleInit(
 
   try {
     const provider = normalizeProvider(payload.provider);
-    const additionalDirectories = uniqueExistingDirectories(
-      payload.additionalDirectories,
+    await initializeProviderFromPayload(
+      provider,
+      payload.workspacePath,
+      payload,
+      helperConfig,
     );
-
-    if (provider === "codex") {
-      const codexPath = resolveCodexPath(
-        payload.codexPath,
-        {
-          ...process.env,
-          ...(payload.environment || {}),
-        },
-        payload.codexInstallationMethod,
-      );
-      await codexQueryManager.initialize({
-        workspacePath: payload.workspacePath,
-        codexPath,
-        environment: payload.environment || {},
-        model: normalizeClaudeModel(payload.model),
-        effort: payload.effort,
-        additionalDirectories,
-        permissionMode: payload.permissionMode,
-        zoteroEndpointUrl: payload.zoteroEndpointUrl,
-        enableZoteroMcp: payload.enableZoteroMcp,
-        mcpServers: payload.mcpServers,
-        mcpDisabledTools: payload.mcpDisabledTools,
-        conversationId: payload.conversationId,
-        codexInstallationMethod: payload.codexInstallationMethod,
-        codexWslDistro: payload.codexWslDistro,
-        codexSafeMode: payload.codexSafeMode,
-        providerState: payload.providerState?.codex,
-        helperBridge: payload.zoteroEndpointUrl
-          ? {
-              host: helperConfig.host,
-              port: helperConfig.port,
-              token: helperConfig.token,
-              bundlePath: process.argv[1] || "",
-            }
-          : undefined,
-      });
-    } else {
-      const claudePath = resolveClaudePath(payload.claudePath, {
-        ...process.env,
-        ...(payload.environment || {}),
-      });
-      await claudeQueryManager.initialize({
-        workspacePath: payload.workspacePath,
-        claudePath,
-        environment: payload.environment || {},
-        model: normalizeClaudeModel(payload.model),
-        effort: normalizeClaudeEffort(payload.effort),
-        additionalDirectories,
-        permissionMode: payload.permissionMode,
-        zoteroEndpointUrl: payload.zoteroEndpointUrl,
-        enableZoteroMcp: payload.enableZoteroMcp,
-        mcpServers: payload.mcpServers,
-        mcpDisabledTools: payload.mcpDisabledTools,
-        conversationId: payload.conversationId,
-      });
-    }
     activeProvider = provider;
 
     sendJson(res, 200, { ok: true });
@@ -620,10 +623,7 @@ async function handleSendWithPayload(
   const provider = normalizeProvider(payload.provider);
   const manager = queryManagerFor(provider);
   activeProvider = provider;
-  const currentWorkspacePath =
-    manager.workspacePath ||
-    claudeQueryManager.workspacePath ||
-    codexQueryManager.workspacePath;
+  const currentWorkspacePath = currentWorkspacePathFor(provider);
 
   if (!manager.isActive) {
     if (!currentWorkspacePath) {
@@ -665,37 +665,7 @@ async function handleSendWithPayload(
     payload.conversationId ||
     payload.providerState;
   const needsRestart = hasConfigUpdate
-    ? provider === "codex"
-      ? codexQueryManager.requiresRestart({
-          codexPath: payload.codexPath,
-          model: payload.model,
-          effort: payload.effort,
-          additionalDirectories: payload.additionalDirectories,
-          environment: payload.environment,
-          permissionMode: payload.permissionMode,
-          zoteroEndpointUrl: payload.zoteroEndpointUrl,
-          enableZoteroMcp: payload.enableZoteroMcp,
-          mcpServers: payload.mcpServers,
-          mcpDisabledTools: payload.mcpDisabledTools,
-          conversationId: payload.conversationId,
-          codexInstallationMethod: payload.codexInstallationMethod,
-          codexWslDistro: payload.codexWslDistro,
-          codexSafeMode: payload.codexSafeMode,
-          providerState: payload.providerState?.codex,
-        })
-      : claudeQueryManager.requiresRestart({
-          claudePath: payload.claudePath,
-          model: payload.model,
-          effort: payload.effort,
-          additionalDirectories: payload.additionalDirectories,
-          environment: payload.environment,
-          permissionMode: payload.permissionMode,
-          zoteroEndpointUrl: payload.zoteroEndpointUrl,
-          enableZoteroMcp: payload.enableZoteroMcp,
-          mcpServers: payload.mcpServers,
-          mcpDisabledTools: payload.mcpDisabledTools,
-          conversationId: payload.conversationId,
-        })
+    ? manager.requiresRestart(runtimeRestartConfig(provider, payload))
     : false;
 
   if (needsRestart && manager.workspacePath) {
@@ -715,20 +685,10 @@ async function handleSendWithPayload(
       return;
     }
   } else {
-    if (provider === "codex") {
-      codexQueryManager.updateConfig({
-        model: normalizeClaudeModel(payload.model),
-        effort: payload.effort,
-        additionalDirectories: payload.additionalDirectories,
-        permissionMode: payload.permissionMode,
-        codexSafeMode: payload.codexSafeMode,
-      });
-    }
+    manager.updateConfig(runtimeLiveUpdateConfig(provider, payload));
     if (payload.permissionMode !== undefined) {
       try {
-        await manager.setPermissionMode(
-          normalizePermissionMode(payload.permissionMode),
-        );
+        await manager.setPermissionMode(payload.permissionMode);
       } catch (error) {
         sendJson(res, 500, {
           error: `Failed to update permission mode: ${error instanceof Error ? error.message : String(error)}`,
@@ -751,24 +711,11 @@ async function handleSendWithPayload(
   writeEvent(res, { type: "ready" }, traceRecorder);
 
   try {
-    if (provider === "codex") {
-      for await (const event of codexQueryManager.sendMessageEvents(
-        payload.prompt,
-        payload.images,
-      )) {
-        writeEvent(res, event, traceRecorder);
-      }
-    } else {
-      const streamState = new ToolInputStreamState();
-      streamState.resetTurn();
-      for await (const message of claudeQueryManager.sendMessage(
-        payload.prompt,
-        payload.images,
-      )) {
-        for (const event of transformClaudeMessage(message, streamState)) {
-          writeEvent(res, event, traceRecorder);
-        }
-      }
+    for await (const event of manager.sendMessageEvents(
+      payload.prompt,
+      payload.images,
+    )) {
+      writeEvent(res, event, traceRecorder);
     }
     writeEvent(res, { type: "done" }, traceRecorder);
   } catch (error) {
@@ -851,9 +798,7 @@ async function handleAuxQuery(
         },
         payload.codexInstallationMethod,
       );
-      const auxManager = new CodexPersistentQueryManager(
-        new PermissionManager(),
-      );
+      const auxManager = new CodexRuntimeAdapter(new PermissionManager());
       await auxManager.initialize({
         workspacePath: payload.workspacePath,
         codexPath,
@@ -1061,7 +1006,7 @@ async function route(
     permissionManager.cancelAll();
     activeQueryManager().cancelPendingQuestion();
     activeQueryManager().cancelPendingExitPlan();
-    if (activeProvider === "codex") codexQueryManager.cancelActiveTurn();
+    activeQueryManager().cancelActiveTurn();
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -1069,7 +1014,7 @@ async function route(
   if (req.method === "POST" && req.url === "/cancel-question") {
     activeQueryManager().cancelPendingQuestion();
     activeQueryManager().cancelPendingExitPlan();
-    if (activeProvider === "codex") codexQueryManager.cancelActiveTurn();
+    activeQueryManager().cancelActiveTurn();
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -1127,10 +1072,7 @@ async function route(
       toolUseId: string;
       decision: import("./runtime/PersistentQueryManager").ExitPlanDecision;
     }>(req);
-    const manager = activeQueryManager() as {
-      answerExitPlan?: (toolUseId: string, decision: unknown) => boolean;
-    };
-    if (manager.answerExitPlan?.(body.toolUseId, body.decision)) {
+    if (activeQueryManager().answerExitPlan(body.toolUseId, body.decision)) {
       sendJson(res, 200, { ok: true });
     } else {
       sendJson(res, 404, { error: "Exit plan request not found or expired" });
