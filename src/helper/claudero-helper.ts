@@ -28,10 +28,7 @@ import {
   isAgentEventPayload,
   type AgentEventTrace,
 } from "../shared/agentEvents";
-
-// Bump whenever the helper protocol changes so a stale helper process left
-// running from a previous plugin version is detected and restarted by the client.
-const HELPER_VERSION = 23;
+import { CLAUDERO_HELPER_VERSION as HELPER_VERSION } from "../shared/helperProtocol";
 
 type HelperProvider = "claude" | "codex";
 

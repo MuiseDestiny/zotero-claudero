@@ -526,12 +526,16 @@ class CodexRpcTransport {
         reject,
         timer,
       });
-      this.send({ id, method, params });
+      this.send({ jsonrpc: "2.0", id, method, params });
     });
   }
 
   notify(method: string, params?: unknown): void {
-    this.send(params === undefined ? { method } : { method, params });
+    this.send(
+      params === undefined
+        ? { jsonrpc: "2.0", method }
+        : { jsonrpc: "2.0", method, params },
+    );
   }
 
   onNotification(method: string, handler: (params: unknown) => void): void {

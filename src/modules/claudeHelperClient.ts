@@ -16,6 +16,7 @@ import {
 } from "./mcpSettings";
 import { getZoteroEndpointBaseUrl } from "./zoteroEndpoint";
 import type { AgentEventPayload } from "../shared/agentEvents";
+import { CLAUDERO_HELPER_VERSION as EXPECTED_HELPER_VERSION } from "../shared/helperProtocol";
 
 export type ClauderoQueryEvent = AgentEventPayload;
 
@@ -70,10 +71,6 @@ export interface ClauderoQueryOptions {
   conversationId?: string;
   providerState?: ConversationProviderState;
 }
-
-// Must match HELPER_VERSION in claudero-helper.ts. Bump both together when the
-// helper protocol changes so stale helper processes get restarted automatically.
-const EXPECTED_HELPER_VERSION = 22;
 
 let helperProcess: nsIProcess | null = null;
 let persistentQueryInitialized = false;

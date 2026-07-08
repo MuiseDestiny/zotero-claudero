@@ -1,0 +1,1 @@
+export const CLAUDERO_HELPER_VERSION = 23;
