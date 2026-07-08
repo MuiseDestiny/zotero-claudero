@@ -28,6 +28,7 @@ declare namespace _ZoteroTypes {
       "codexModel": string;
       "codexEffort": string;
       "defaultPrompts": string;
+      "academicSkills": string;
       "fontScale": number;
     };
   }

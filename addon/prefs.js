@@ -19,4 +19,5 @@ pref("claudeEffort", "high");
 pref("codexModel", "gpt-5.5");
 pref("codexEffort", "medium");
 pref("defaultPrompts", "");
+pref("academicSkills", "");
 pref("fontScale", 100);
