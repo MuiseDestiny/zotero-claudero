@@ -21,6 +21,12 @@ import {
   type ClauderoAnnotationContext,
   type ClauderoSelectionContext,
 } from "./zoteroContext";
+import {
+  compileAcademicSkillPrompt,
+  getEnabledAcademicSkills,
+  matchAcademicSkillIntent,
+  resolveAcademicSkillContextStatus,
+} from "./academicSkills";
 import { getPref, setPref } from "../utils/prefs";
 import {
   newConversationId,
@@ -3362,8 +3368,22 @@ async function sendPrompt(
     }
     state.currentContextSnapshot = context;
     const basePrompt = prompt || "(用户发送了图片，请查看)";
-    const promptWithHistory = buildPromptWithConversationHistory(
+    const academicMatch = matchAcademicSkillIntent(
       basePrompt,
+      getEnabledAcademicSkills(),
+    );
+    const workflowPrompt = academicMatch
+      ? compileAcademicSkillPrompt({
+          userPrompt: basePrompt,
+          match: academicMatch,
+          contextStatus: resolveAcademicSkillContextStatus(
+            academicMatch.skill,
+            context,
+          ),
+        })
+      : basePrompt;
+    const promptWithHistory = buildPromptWithConversationHistory(
+      workflowPrompt,
       state.conversationTurns,
     );
     const fullPrompt = buildPromptWithZoteroContext(
