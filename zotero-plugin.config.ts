@@ -36,6 +36,14 @@ export default defineConfig({
         target: "firefox115",
         outfile: `.scaffold/build/addon/content/scripts/${pkg.config.addonRef}.js`,
       },
+      {
+        entryPoints: ["src/helper/claudero-helper.ts"],
+        bundle: true,
+        platform: "node",
+        target: "node20",
+        format: "esm",
+        outfile: `.scaffold/build/addon/content/helper/claudero-helper.mjs`,
+      },
     ],
   },
 

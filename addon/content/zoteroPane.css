@@ -1,3 +1,5641 @@
-.makeItRed {
-  background-color: tomato;
+@import url("chrome://claudero/content/katex/katex.min.css");
+
+#claudero-side-panel {
+  width: 360px;
+  min-width: 280px;
+  max-width: 600px;
+  height: 100%;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  /* Our resize splitter sits to the LEFT of this panel; the border that
+     separates us from the Zotero context pane is on the RIGHT. */
+  border-right: 1px solid var(--material-mix-quarternary);
+  background: var(--material-sidepane);
+}
+
+#claudero-side-splitter {
+  border-right: 0;
+  border-left: var(--material-border-quarternary);
+  margin-right: calc(1px - var(--draggable-size));
+  margin-left: -1px;
+}
+
+#claudero-toolbar-button {
+  list-style-image: url("chrome://claudero/content/icons/claudero.svg");
+  -moz-context-properties: fill, stroke;
+  fill: #be4246;
+}
+
+#claudero-toolbar-button[checked="true"] {
+  background-color: color-mix(in srgb, #be4246 14%, transparent);
+}
+
+.claudero-pane,
+.claudero-pane * {
+  box-sizing: border-box;
+}
+
+.claudero-pane {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  overflow: hidden;
+  color: var(--fill-primary);
+  background: var(--material-sidepane);
+  font: menu;
+  position: relative;
+  /* Browser-like content zoom (Cmd/Ctrl +/-/0). Scales the reading surfaces
+     (messages, thinking, input) but not the chrome (header, toolbar, chips). */
+  --claudero-font-scale: 1;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.claudero-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 41px;
+  height: 41px;
+  min-height: 41px;
+  max-height: 41px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--material-mix-quarternary);
+  background: var(--material-toolbar);
+  box-sizing: border-box;
+}
+
+.claudero-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 15px;
+}
+
+.claudero-logo {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+
+/* Status dot sits right after the "Claudero" title text */
+.claudero-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #22c55e;
+  margin-left: 2px;
+  transition: background 0.2s;
+}
+
+.claudero-status-dot.streaming {
+  background: #7c3aed;
+  animation: claudero-pulse 1.2s ease-in-out infinite;
+}
+
+.claudero-status-dot.error {
+  background: #ef4444;
+}
+
+@keyframes claudero-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.claudero-permission-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 8px 3px 10px;
+  border-radius: 6px;
+  margin-left: 6px;
+  flex: 0 0 auto;
+  color: var(--fill-primary);
+  background: var(--material-mix-tertiary);
+  border: 1px solid var(--material-mix-quarternary);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  appearance: none;
+}
+
+.claudero-permission-badge .chevron {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  color: inherit;
+}
+
+/* Permission mode popup */
+.claudero-permission-popup {
+  position: absolute;
+  top: 42px;
+  left: 84px;
+  z-index: 100;
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.1);
+  padding: 4px;
+  min-width: 180px;
+}
+
+.claudero-history-popup {
+  position: absolute;
+  top: 42px;
+  right: 12px;
+  z-index: 100;
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.1);
+  padding: 4px;
+  min-width: 240px;
+  max-width: 340px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.claudero-permission-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.claudero-history-popup .claudero-permission-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+
+.claudero-permission-row:hover {
+  background: var(--material-mix-tertiary);
+}
+
+.claudero-permission-check {
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: #22c55e;
+  flex: 0 0 auto;
+}
+
+.claudero-permission-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.claudero-permission-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fill-primary);
+}
+
+.claudero-permission-desc {
+  font-size: 11px;
+  color: var(--fill-secondary);
+}
+
+/* ── History rows: per-row hover actions ─────────────────────────────────── */
+.claudero-history-popup .claudero-permission-row {
+  position: relative;
+}
+
+.claudero-history-popup .claudero-permission-info {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.claudero-permission-name.is-generating {
+  color: var(--fill-secondary);
+  font-weight: 400;
+}
+
+.claudero-permission-row.has-rename-error .claudero-permission-desc {
+  color: #d34b4b;
+}
+
+.claudero-history-actions {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-left: 22px;
+  opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--material-mix-quinary) 20px
+  );
+  transition: opacity 0.12s ease;
+}
+
+.claudero-history-popup
+  .claudero-permission-row:hover
+  .claudero-history-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.claudero-history-popup
+  .claudero-permission-row.is-editing
+  .claudero-history-actions {
+  display: none;
+}
+
+.claudero-history-action-btn,
+toolbarbutton.claudero-history-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  min-height: 22px !important;
+  max-width: 22px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 5px;
+  background: transparent !important;
+  color: var(--fill-secondary);
+  cursor: pointer;
+  appearance: none;
+  -moz-context-properties: fill, fill-opacity, stroke, stroke-opacity;
+}
+
+.claudero-history-action-btn > svg {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+
+.claudero-history-action-btn:hover,
+toolbarbutton.claudero-history-action-btn:hover {
+  background-color: var(--material-mix-quarternary) !important;
+  color: var(--fill-primary) !important;
+}
+
+.claudero-history-action-btn.is-danger:hover,
+toolbarbutton.claudero-history-action-btn.is-danger:hover {
+  color: #ef4444 !important;
+  background-color: color-mix(in srgb, #ef4444 14%, transparent) !important;
+}
+
+.claudero-history-action-btn.is-busy {
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.claudero-history-action-btn.is-busy > svg {
+  animation: claudero-history-spin 0.9s linear infinite;
+}
+
+@keyframes claudero-history-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.claudero-history-rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fill-primary);
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin: -2px 0;
+  outline: none;
+}
+
+.claudero-history-rename-input:focus {
+  border-color: color-mix(
+    in srgb,
+    #2e7cd6 60%,
+    var(--material-mix-quarternary)
+  );
+}
+
+.claudero-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+toolbarbutton.claudero-icon-button,
+.claudero-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  min-height: 26px;
+  max-width: 26px;
+  max-height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: var(--fill-secondary);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  -moz-context-properties: fill, fill-opacity, stroke, stroke-opacity;
+  appearance: none;
+}
+
+/* XUL toolbarbuttons in the header: force square with XUL attributes */
+.claudero-header-tools toolbarbutton {
+  width: 26px !important;
+  height: 26px !important;
+  min-width: 26px !important;
+  min-height: 26px !important;
+  max-width: 26px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: 6px;
+  appearance: none;
+}
+
+toolbarbutton.claudero-icon-button:hover,
+.claudero-icon-button:hover {
+  color: var(--fill-primary) !important;
+}
+
+/* Close button — visually larger */
+.claudero-close-button {
+  width: 34px;
+  height: 34px;
+  font-size: 20px;
+  color: var(--fill-secondary);
+}
+
+.claudero-close-button:hover {
+  color: #ef4444;
+}
+
+.claudero-header-action[tooltiptext="Hide Claudero"]:hover {
+  color: #ef4444 !important;
+  background: color-mix(in srgb, #ef4444 14%, transparent) !important;
+}
+
+/* ── Transcript ──────────────────────────────────────────────────────────── */
+
+/* Wrapper provides the positioned context for the scroll-to-bottom button */
+.claudero-transcript-wrapper {
+  flex: 1 1 auto;
+  min-height: 160px;
+  position: relative;
+  overflow: hidden;
+}
+
+.claudero-transcript {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  height: 100%;
+  overflow: auto;
+  padding: 14px;
+  background: var(--material-sidepane);
+  /* Focusable (tabindex=-1) so clicking the transcript lets Cmd/Ctrl+-/0
+     font zoom apply to the pane; no visible focus ring. */
+  outline: none !important;
+}
+
+/* Transient "130%" badge shown while zooming with Cmd/Ctrl +/-/0 */
+.claudero-zoom-indicator {
+  position: absolute;
+  top: 50px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--material-mix-quarternary);
+  background: var(--material-toolbar);
+  color: var(--fill-primary);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.14);
+  pointer-events: none;
+}
+
+/* ── Message rows (Claudian-style) ──────────────────────────────────────── */
+
+.claudero-notice-card,
+.claudero-welcome-card {
+  border-radius: 8px;
+}
+
+/* Message stack owns the bubble and the out-of-bubble action row */
+.claudero-message-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.claudero-message-stack.user {
+  align-self: flex-end;
+  align-items: flex-end;
+  max-width: 90%;
+}
+
+.claudero-message-stack.assistant {
+  align-self: stretch;
+  align-items: stretch;
+  width: 100%;
+}
+
+/* Base message row — lives inside .claudero-message-stack */
+.claudero-message {
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* User: right-aligned rounded bubble */
+.claudero-message.user {
+  width: auto;
+  max-width: 100%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border-bottom-right-radius: 4px;
+  background: color-mix(in srgb, #be4246 14%, var(--material-background));
+  color: var(--fill-primary);
+}
+
+/* Assistant: transparent, stretches full width, no card */
+.claudero-message.assistant {
+  background: transparent;
+  padding: 2px 0;
+}
+
+.claudero-message-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  color: var(--fill-secondary);
+  font-size: 11.5px;
+  line-height: 1;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The whole user meta row (context pill, timestamp, actions) only fades in on
+   hover, so a resting message stays clean. */
+.claudero-message-meta.user {
+  justify-content: flex-end;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.claudero-message-meta.user > .claudero-message-context-summary {
+  margin-right: 2px;
+}
+
+.claudero-message-stack.user:hover .claudero-message-meta.user,
+.claudero-message-stack.user:focus-within .claudero-message-meta.user,
+.claudero-message-stack.user.claudero-context-pinned
+  .claudero-message-meta.user {
+  opacity: 1;
+}
+
+.claudero-message-meta.assistant {
+  width: 100%;
+  justify-content: flex-start;
+  opacity: 1;
+}
+
+.claudero-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Custom hover tooltip — position fully computed in JS, no transform needed */
+.claudero-chip-tooltip {
+  position: fixed;
+  z-index: 9999;
+  max-width: min(560px, calc(100vw - 16px));
+  padding: 6px 10px;
+  background: var(--fill-primary, #1c1c1e);
+  color: var(--material-background, #ffffff);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+
+.claudero-context-count-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 5px;
+  background: color-mix(in srgb, #6366f1 16%, transparent);
+  color: #6366f1;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.claudero-pdf-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 14px;
+  border-radius: 3px;
+  background: color-mix(in srgb, #be4246 12%, transparent);
+  color: #be4246;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.claudero-message-time {
+  padding: 0 3px;
+  white-space: nowrap;
+  color: var(--fill-secondary);
+}
+
+.claudero-message-meta toolbarbutton[data-claudero-message-action],
+.claudero-message-meta button[data-claudero-message-action],
+.claudero-header-action,
+toolbarbutton.claudero-header-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 23px !important;
+  height: 23px !important;
+  min-width: 23px !important;
+  min-height: 23px !important;
+  max-width: 23px !important;
+  max-height: 23px !important;
+  box-sizing: border-box;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 8px;
+  background: transparent !important;
+  color: var(--fill-secondary);
+  cursor: pointer;
+  appearance: none;
+  -moz-context-properties: fill, fill-opacity, stroke, stroke-opacity;
+}
+
+.claudero-message-meta toolbarbutton[data-claudero-message-action]:hover,
+.claudero-message-meta button[data-claudero-message-action]:hover,
+.claudero-header-action:hover,
+toolbarbutton.claudero-header-action:hover {
+  background-color: var(--material-mix-quarternary) !important;
+  color: var(--fill-primary) !important;
+}
+
+/* .claudero-message-meta toolbarbutton[data-claudero-message-action]:active,
+.claudero-message-meta button[data-claudero-message-action]:active,
+.claudero-header-action:active {
+  transform: translateY(1px);
+} */
+
+.claudero-message-meta toolbarbutton[data-claudero-message-action] > svg,
+.claudero-message-meta button[data-claudero-message-action] > svg,
+.claudero-header-action > svg {
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+}
+
+/* ── Message context: single summary pill ───────────────────────────────── */
+.claudero-message-context-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 240px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 7px 0 6px;
+  border: 1px solid
+    color-mix(in srgb, var(--material-mix-quarternary) 75%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--fill-primary) 4%, transparent);
+  color: var(--fill-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  appearance: none;
+  -moz-context-properties: fill, fill-opacity, stroke, stroke-opacity;
+  fill: currentColor;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+
+.claudero-message-context-summary:hover {
+  background: color-mix(
+    in srgb,
+    var(--material-sidepane) 72%,
+    var(--fill-primary) 5%
+  );
+  border-color: color-mix(
+    in srgb,
+    var(--material-mix-quarternary) 95%,
+    transparent
+  );
+  color: var(--fill-primary);
+}
+
+.claudero-message-context-summary > .claudero-chip-icon,
+.claudero-message-context-summary > .claudero-text-icon,
+.claudero-message-context-summary > .claudero-anno-icon,
+.claudero-message-context-summary > .claudero-collection-icon {
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+
+.claudero-message-context-summary > .claudero-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.claudero-ctx-summary-badge {
+  flex: 0 0 auto;
+  margin-left: 1px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fill-primary) 10%, transparent);
+  color: var(--fill-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.claudero-message-context-summary:hover .claudero-ctx-summary-badge {
+  background: color-mix(in srgb, var(--fill-primary) 14%, transparent);
+}
+
+.claudero-collection-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+/* ── Message context: categorised detail popup ──────────────────────────── */
+.claudero-context-detail-popup {
+  position: fixed;
+  z-index: 9999;
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  max-height: min(460px, calc(100vh - 24px));
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
+  color: var(--fill-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  animation: claudero-ctx-pop-in 0.12s ease;
+  -moz-context-properties: fill, fill-opacity, stroke, stroke-opacity;
+  fill: currentColor;
+}
+
+@keyframes claudero-ctx-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.claudero-ctx-section {
+  padding: 8px;
+}
+
+.claudero-ctx-section + .claudero-ctx-section {
+  border-top: 1px solid
+    color-mix(in srgb, var(--material-mix-quarternary) 55%, transparent);
+}
+
+.claudero-ctx-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 7px;
+  color: var(--fill-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.claudero-ctx-head-icon {
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+
+.claudero-ctx-text {
+  max-height: 168px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fill-primary) 5%, transparent);
+  color: var(--fill-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Active-collection breadcrumb shown as an indented library → collection tree. */
+.claudero-ctx-coll-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.claudero-ctx-coll-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  padding-left: calc(4px + var(--level, 0) * 15px);
+  border-radius: 6px;
+  color: var(--fill-secondary);
+}
+
+.claudero-ctx-coll-row.current {
+  color: var(--fill-primary);
+  font-weight: 600;
+}
+
+.claudero-ctx-coll-row .icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  background-size: contain;
+}
+
+.claudero-ctx-coll-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-ctx-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 7px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  appearance: none;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.claudero-ctx-row + .claudero-ctx-row {
+  margin-top: 1px;
+}
+
+.claudero-ctx-row-clickable:hover {
+  background: var(--material-mix-tertiary);
+}
+
+.claudero-ctx-row-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  opacity: 0.9;
+}
+
+.claudero-ctx-row-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.claudero-ctx-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fill-primary);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.claudero-ctx-row-sub {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fill-secondary);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+/* Annotation rows are read-only and may wrap onto multiple lines. The
+   annotation's own colour shows as a left accent bar (set inline per row). */
+.claudero-ctx-anno {
+  cursor: default;
+  border-left: 3px solid var(--material-mix-quarternary);
+  border-radius: 0 8px 8px 0;
+  padding: 6px 10px;
+}
+
+.claudero-ctx-anno + .claudero-ctx-anno {
+  margin-top: 6px;
+}
+
+.claudero-ctx-anno-text {
+  color: var(--fill-primary);
+  white-space: normal;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.claudero-ctx-anno-comment {
+  margin-top: 3px;
+  color: var(--fill-secondary);
+  font-size: 11px;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.claudero-ctx-page {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-end;
+  flex: 0 0 auto;
+  height: 16px;
+  margin-top: 5px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--fill-primary) 8%, transparent);
+  color: var(--fill-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* Response duration footer ("* Baked for 12s") */
+.claudero-response-footer {
+  margin-top: 8px;
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--fill-secondary);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Live turn activity, kept at the bottom of the transcript between model
+   messages so tool-result -> next-response gaps never look stalled. */
+.claudero-thinking-indicator {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 2px;
+  min-height: 24px;
+  margin: 4px 0 2px;
+  padding: 3px 2px 7px;
+  font-size: 13px;
+  font-style: italic;
+  color: #be4246;
+}
+
+.claudero-thinking-word {
+  min-width: 0;
+  max-width: min(58%, 280px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-thinking-time {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  color: var(--fill-secondary);
+  font-style: normal;
+}
+
+/* Extended-thinking ("Thought for Ns") card */
+.claudero-thinking-card {
+  margin: 4px 0 0;
+}
+
+/* Tighten gap between a done thinking card and the content that follows */
+.claudero-thinking-card.done + .claudero-message.assistant {
+  margin-top: -6px;
+}
+
+.claudero-thinking-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: calc(13px * var(--claudero-font-scale, 1));
+  font-weight: 600;
+  color: #be4246;
+  cursor: pointer;
+  text-align: left;
+}
+
+.claudero-thinking-duration {
+  color: var(--fill-secondary);
+  font-weight: 400;
+}
+
+.claudero-thinking-chevron {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+  background-color: var(--fill-secondary);
+  -webkit-mask-image: url("chrome://zotero/skin/20/universal/chevron-tabs.svg");
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    transform 0.2s;
+  transform: rotate(180deg); /* SVG points left; 180° → points right > */
+}
+
+.claudero-thinking-header:hover .claudero-thinking-chevron {
+  opacity: 1;
+}
+
+/* When NOT collapsed the body is visible — chevron points down ∨ */
+.claudero-thinking-card:not(.collapsed) .claudero-thinking-chevron {
+  opacity: 0.6;
+  transform: rotate(270deg);
+}
+
+.claudero-thinking-body {
+  padding-left: 12px;
+  border-left: 2px solid var(--material-mix-quarternary);
+  color: var(--fill-secondary);
+  font-size: calc(12.5px * var(--claudero-font-scale, 1));
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.claudero-thinking-card.collapsed .claudero-thinking-body {
+  display: none;
+}
+
+/* Pasted-image thumbnails above the input + in the transcript */
+.claudero-pending-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 2px 2px;
+}
+
+.claudero-img-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.claudero-img-thumb {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--material-mix-quarternary);
+  flex: 0 0 auto;
+  cursor: zoom-in;
+}
+
+.claudero-img-thumb > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.claudero-img-thumb .claudero-chip-remove {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 16px;
+  height: 16px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border-radius: 3px;
+}
+
+.claudero-img-preview {
+  z-index: 1000;
+  padding: 4px;
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.25);
+  pointer-events: none;
+}
+
+.claudero-img-preview > img {
+  display: block;
+  max-width: 360px;
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.claudero-message-body {
+  color: var(--fill-primary);
+  line-height: 1.58;
+  font-size: calc(13px * var(--claudero-font-scale, 1));
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+}
+
+.claudero-message-body p {
+  margin: 0 0 8px;
+}
+
+.claudero-message-body p:last-child {
+  margin-bottom: 0;
+}
+
+.claudero-message-body h1,
+.claudero-message-body h2,
+.claudero-message-body h3,
+.claudero-message-body h4 {
+  margin: 14px 0 8px;
+  color: var(--fill-primary);
+  line-height: 1.3;
+}
+
+.claudero-message-body h1 {
+  font-size: 1.38em; /* ≈18px at base 13px, scales with zoom */
+}
+.claudero-message-body h2 {
+  font-size: 1.23em; /* ≈16px */
+}
+.claudero-message-body h3,
+.claudero-message-body h4 {
+  font-size: 1.08em; /* ≈14px */
+}
+
+.claudero-message-body a {
+  color: var(--accent-blue);
+  text-decoration: none;
+}
+.claudero-message-body a:hover {
+  text-decoration: underline;
+}
+
+.claudero-message-body blockquote {
+  margin: 10px 0;
+  padding: 8px 10px;
+  color: var(--fill-secondary);
+  border-left: 3px solid var(--material-mix-quarternary);
+  border-radius: 0 7px 7px 0;
+  background: var(--material-sidepane);
+}
+
+.claudero-message-body hr,
+.claudero-pane .claudero-message-body hr {
+  height: 0 !important;
+  margin: 10px 0 !important;
+  border: 0 !important;
+  border-top: 1px solid var(--material-mix-quarternary) !important;
+  border-bottom: none !important;
+  background: transparent !important;
+  background-image: none !important;
+  background-color: transparent !important;
+  color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.claudero-message-body table {
+  display: block;
+  width: 100%;
+  overflow: auto;
+  margin: 10px 0;
+  border-collapse: collapse;
+  font-size: 0.92em; /* ≈12px at base 13px, scales with zoom */
+}
+
+.claudero-message-body th,
+.claudero-message-body td {
+  padding: 6px 8px;
+  border: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-message-body th {
+  color: var(--fill-primary);
+  background: var(--material-sidepane);
+}
+
+.claudero-message-body code {
+  padding: 2px 5px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 5px;
+  color: #be4246;
+  background: var(--material-sidepane);
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 0.92em; /* ≈12px at base 13px, scales with zoom */
+}
+
+.claudero-message-body pre.hljs {
+  overflow: auto;
+  margin: 10px 0;
+  padding: 11px 12px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  line-height: 1.55;
+}
+
+.claudero-message-body pre.hljs code {
+  display: block;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font-size: 0.92em; /* ≈12px at base 13px, scales with zoom */
+}
+
+.claudero-message-body .hljs-keyword,
+.claudero-message-body .hljs-selector-tag,
+.claudero-message-body .hljs-built_in,
+.claudero-message-body .hljs-name,
+.claudero-message-body .hljs-tag {
+  color: #93c5fd;
+}
+
+.claudero-message-body .hljs-string,
+.claudero-message-body .hljs-title,
+.claudero-message-body .hljs-section,
+.claudero-message-body .hljs-attribute,
+.claudero-message-body .hljs-literal,
+.claudero-message-body .hljs-template-tag,
+.claudero-message-body .hljs-template-variable,
+.claudero-message-body .hljs-type,
+.claudero-message-body .hljs-addition {
+  color: #86efac;
+}
+
+.claudero-message-body .hljs-comment,
+.claudero-message-body .hljs-quote,
+.claudero-message-body .hljs-deletion,
+.claudero-message-body .hljs-meta {
+  color: var(--fill-secondary);
+}
+
+.claudero-message-body .hljs-number,
+.claudero-message-body .hljs-regexp,
+.claudero-message-body .hljs-variable,
+.claudero-message-body .hljs-symbol,
+.claudero-message-body .hljs-bullet {
+  color: #fca5a5;
+}
+
+.claudero-message-body .katex {
+  color: var(--fill-primary);
+  font-size: 1.04em;
+  white-space: normal;
+}
+
+.claudero-message-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  background: var(--material-sidepane);
+  text-align: center;
+}
+
+.claudero-message-body .katex-display > .katex {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.claudero-message-body .katex .mord,
+.claudero-message-body .katex .mop,
+.claudero-message-body .katex .mbin,
+.claudero-message-body .katex .mrel,
+.claudero-message-body .katex .mopen,
+.claudero-message-body .katex .mclose,
+.claudero-message-body .katex .mpunct {
+  display: inline-block;
+}
+
+/* ── Tool cards ─────────────────────────────────────────────────────────── */
+
+.claudero-tool-card {
+  flex-shrink: 0;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--material-sidepane);
+  font-size: 12px;
+}
+
+.claudero-tool-card.running {
+  border-color: color-mix(in srgb, #6366f1 38%, transparent);
+  background: color-mix(in srgb, #6366f1 7%, transparent);
+}
+
+.claudero-tool-card.error {
+  border-color: color-mix(in srgb, #ef4444 40%, transparent);
+  background: color-mix(in srgb, #ef4444 8%, transparent);
+}
+
+.claudero-tool-card.completed {
+  border-color: var(--material-mix-quarternary);
+  background: var(--material-sidepane);
+}
+
+.claudero-tool-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--fill-secondary);
+}
+
+.claudero-tool-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  color: #6366f1;
+}
+
+.claudero-tool-name {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--fill-primary);
+}
+
+.claudero-tool-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fill-secondary);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+}
+
+.claudero-tool-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+}
+
+.claudero-tool-card.running .claudero-tool-status {
+  color: #7c3aed;
+  background: color-mix(in srgb, #7c3aed 18%, transparent);
+}
+
+.claudero-tool-card.completed .claudero-tool-status {
+  color: #15803d;
+  background: color-mix(in srgb, #15803d 18%, transparent);
+}
+
+.claudero-tool-card.error .claudero-tool-status {
+  color: #be4246;
+  background: color-mix(in srgb, #be4246 18%, transparent);
+}
+
+.claudero-tool-content {
+  display: block;
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--material-mix-quarternary);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--fill-secondary);
+  background: var(--material-sidepane);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.claudero-tool-content[hidden] {
+  display: none !important;
+}
+
+/* Tool renderer v2: Claudian-style affordances inside Claudero visual language */
+.claudero-tool-card {
+  transition:
+    border-color 0.16s ease,
+    background-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.claudero-tool-card.running {
+  box-shadow: 0 6px 18px color-mix(in srgb, #6366f1 8%, transparent);
+}
+
+.claudero-tool-card.error {
+  box-shadow: none;
+}
+
+.claudero-tool-header:hover {
+  background: color-mix(in srgb, var(--material-mix-tertiary) 38%, transparent);
+}
+
+.claudero-tool-chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--fill-quarternary);
+  transition:
+    transform 0.16s ease,
+    color 0.16s ease;
+}
+
+.claudero-tool-card.expanded .claudero-tool-chevron {
+  transform: rotate(90deg);
+  color: var(--fill-secondary);
+}
+
+.claudero-tool-title-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.claudero-tool-status-label {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fill-quarternary);
+}
+
+.claudero-tool-card.running .claudero-tool-status-label {
+  color: #6d5bd0;
+}
+
+.claudero-tool-card.completed .claudero-tool-status-label {
+  color: #15803d;
+}
+
+.claudero-tool-card.error .claudero-tool-status-label {
+  color: #be4246;
+}
+
+.claudero-tool-card.running .claudero-tool-status svg {
+  animation: claudero-tool-pulse 1.15s ease-in-out infinite;
+}
+
+.claudero-tool-card.expanded .claudero-tool-content {
+  border-top: none;
+}
+
+.claudero-tool-card.completed .claudero-tool-header {
+  background-color: var(--material-background50);
+}
+
+@keyframes claudero-tool-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Fine-tuned interactions */
+.claudero-tool-status-label {
+  display: none !important;
+}
+
+.claudero-tool-card.expanded .claudero-tool-content {
+  position: relative;
+  border-left: none;
+  margin-left: 0;
+  padding: 8px 14px;
+}
+
+.claudero-tool-header:hover {
+  background: color-mix(in srgb, #be4246 7%, var(--material-mix-tertiary));
+}
+
+.claudero-permission-badge:hover {
+  background: color-mix(in srgb, #22c55e 14%, var(--material-mix-tertiary));
+  border-color: color-mix(
+    in srgb,
+    #22c55e 46%,
+    var(--material-mix-quarternary)
+  );
+  background-color: none !important;
+}
+
+.claudero-permission-row {
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease,
+    transform 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.claudero-permission-row:hover {
+  background-color: var(--material-mix-quinary);
+}
+
+.claudero-permission-row:hover .claudero-permission-name {
+  color: var(--fill-primary);
+}
+
+.claudero-permission-row:hover .claudero-permission-desc {
+  color: var(--fill-secondary);
+}
+
+.claudero-history-popup .claudero-permission-row:hover {
+  background-color: var(--material-mix-quinary);
+}
+
+/* ── Notice / welcome cards ─────────────────────────────────────────────── */
+
+.claudero-notice-card,
+.claudero-welcome-card {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 13px 14px;
+  border: 1px solid var(--material-mix-quarternary);
+  background: var(--material-sidepane);
+  color: var(--fill-secondary);
+}
+
+.claudero-notice-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--fill-secondary);
+}
+
+.claudero-notice-card.warning .claudero-notice-icon,
+.claudero-notice-card.auth .claudero-notice-icon {
+  color: #f59e0b;
+}
+
+.claudero-notice-card.success .claudero-notice-icon {
+  color: #22c55e;
+}
+
+.claudero-notice-content {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.claudero-notice-card.warning,
+.claudero-notice-card.auth {
+  border-color: color-mix(in srgb, #f59e0b 45%, transparent);
+  background: color-mix(in srgb, #f59e0b 10%, transparent);
+}
+
+.claudero-notice-card.success {
+  border-color: color-mix(in srgb, #22c55e 45%, transparent);
+  background: color-mix(in srgb, #22c55e 10%, transparent);
+}
+
+.claudero-notice-title {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--fill-primary);
+}
+
+.claudero-notice-body {
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.claudero-undo-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 6px 0;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid color-mix(in srgb, #22c55e 35%, transparent);
+  background: color-mix(in srgb, #22c55e 8%, transparent);
+  border-radius: 8px;
+}
+
+.claudero-undo-card.undone {
+  border-color: var(--material-mix-quarternary);
+  background: var(--material-sidepane);
+  opacity: 0.7;
+}
+
+.claudero-undo-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.claudero-undo-icon {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: #16a34a;
+}
+
+.claudero-undo-card.undone .claudero-undo-icon {
+  color: var(--fill-secondary);
+}
+
+.claudero-undo-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fill-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-undo-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.claudero-undo-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fill-primary);
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    background 0.1s,
+    border-color 0.1s;
+}
+
+.claudero-undo-btn svg {
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+
+.claudero-undo-btn.claudero-undo-btn-icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+}
+
+.claudero-undo-btn.claudero-undo-btn-icon svg {
+  display: block;
+}
+
+.claudero-undo-btn.claudero-undo-btn-icon:hover:not(:disabled) {
+  color: var(--fill-primary);
+}
+
+.claudero-undo-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, #be4246 45%, transparent);
+  color: #be4246;
+}
+
+.claudero-undo-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+
+/* Universal button hover — all buttons use this background color */
+.claudero-composer-toolbar button:not(:disabled):hover,
+.toolbarbutton:not(:disabled):hover {
+  background-color: var(--material-mix-quinary);
+}
+
+.claudero-button,
+.claudero-suggestion,
+.claudero-quick-button,
+.claudero-tool-button {
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 7px;
+  color: var(--fill-secondary);
+  background: var(--material-sidepane);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Special case: red primary buttons keep their gradient, just darken on hover */
+.claudero-button-primary,
+.claudero-send-button {
+  background: #be4246 !important;
+}
+
+.claudero-button-primary:hover,
+.claudero-send-button:hover {
+  background: #a53438 !important;
+}
+
+.claudero-send-button.stop {
+  background: #9b2d30 !important;
+}
+
+.claudero-send-button.stop:hover {
+  background: #832427 !important;
+}
+
+.claudero-button:hover,
+.claudero-suggestion:hover,
+.claudero-quick-button:hover,
+.claudero-tool-button:hover {
+  border-color: var(--material-mix-quarternary);
+}
+
+.claudero-button.primary-soft {
+  margin-top: 10px;
+  padding: 6px 12px;
+  color: #be4246;
+  border-color: color-mix(in srgb, #be4246 40%, transparent);
+  background: color-mix(in srgb, #be4246 9%, transparent);
+}
+
+/* ── Welcome card ───────────────────────────────────────────────────────── */
+
+.claudero-welcome-card.redesigned {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 10px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--material-sidepane) 96%, #be4246 4%),
+    var(--material-sidepane)
+  );
+}
+
+.claudero-welcome-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.claudero-welcome-card strong {
+  display: block;
+  margin: 0;
+  color: var(--fill-primary);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.claudero-welcome-card p {
+  margin: 0;
+  color: var(--fill-secondary);
+  line-height: 1.55;
+  font-size: 12.5px;
+}
+
+.claudero-suggestions.redesigned {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.claudero-suggestion.prompt-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  text-align: left;
+  white-space: normal;
+  overflow: hidden;
+  background: var(--material-background);
+  transition: background-color 0.12s ease;
+}
+
+.claudero-prompt-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: #6366f1;
+  background: color-mix(in srgb, #6366f1 11%, transparent);
+}
+
+.claudero-prompt-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.claudero-prompt-title {
+  color: var(--fill-primary);
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-prompt-desc {
+  color: var(--fill-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-action-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+/* ── Quick actions bar/* ── Quick actions bar (single scrollable row) ──────────────────────────── */
+
+.claudero-quick-actions-wrap {
+  flex: 0 0 auto;
+  background: var(--material-sidepane);
+  border-top: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-quick-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 8px 14px;
+  overflow-x: auto;
+  scrollbar-width: none; /* Firefox */
+}
+
+.claudero-quick-actions::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
+}
+
+.claudero-quick-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 10px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.claudero-add-prompt-btn {
+  color: #7c3aed;
+  border-color: color-mix(in srgb, #7c3aed 38%, transparent);
+  background: color-mix(in srgb, #7c3aed 8%, transparent);
+  margin-left: auto; /* push to right when bar has room */
+}
+
+.claudero-add-prompt-btn:hover {
+}
+
+.claudero-quick-button.custom {
+  color: #0f766e;
+  border-color: color-mix(in srgb, #0f766e 40%, transparent);
+  background: color-mix(in srgb, #0f766e 9%, transparent);
+}
+
+.claudero-action-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: #6366f1;
+  fill: currentColor;
+  stroke: currentColor;
+}
+
+/* ── Add Prompt inline form ─────────────────────────────────────────────── */
+
+.claudero-add-prompt-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--material-mix-quarternary);
+  background: var(--material-sidepane);
+  flex: 0 0 auto;
+}
+
+.claudero-add-prompt-label {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  color: var(--fill-primary);
+}
+
+.claudero-add-prompt-label:focus {
+  border-color: #a78bfa;
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
+}
+
+.claudero-add-prompt-textarea {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+  outline: none;
+  color: var(--fill-primary);
+  min-height: 60px;
+}
+
+.claudero-add-prompt-textarea:focus {
+  border-color: #a78bfa;
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
+}
+
+.claudero-add-prompt-row {
+  display: flex;
+  gap: 6px;
+}
+
+.claudero-add-prompt-row .claudero-button {
+  margin-top: 0;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+/* ── Composer ────────────────────────────────────────────────────────────── */
+
+/* Context chips inside the composer box */
+.claudero-context-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
+.claudero-context-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 6px;
+  color: var(--fill-secondary);
+  background: color-mix(in srgb, var(--fill-primary) 6%, transparent);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.claudero-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  opacity: 0.75;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.claudero-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+  opacity: 0.6;
+}
+.claudero-chip-remove:hover {
+  opacity: 1;
+  background: var(--material-mix-quarternary);
+}
+
+.claudero-at-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fill-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.claudero-at-button:hover {
+}
+
+/* ── Item picker (@ popup) ───────────────────────────────────────────────── */
+
+.claudero-at-popup {
+  position: absolute;
+  bottom: 100%;
+  left: 14px;
+  right: 14px;
+  margin-bottom: 6px;
+  max-height: 280px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--material-mix-secondary);
+  border-radius: 10px;
+  background: var(--material-background);
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.2);
+  overflow: hidden;
+  z-index: 999;
+}
+
+.claudero-at-search-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--material-mix-quarternary);
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.claudero-at-search-row:hover {
+  background: color-mix(in srgb, var(--fill-primary) 6%, transparent);
+}
+
+.claudero-at-search {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: var(--fill-secondary);
+  outline: none;
+}
+
+.claudero-at-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.claudero-at-section {
+  padding: 5px 10px 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fill-secondary);
+  opacity: 0.6;
+}
+
+.claudero-at-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.claudero-at-row:hover,
+.claudero-at-row.selected {
+  background: color-mix(in srgb, var(--fill-primary) 6%, transparent);
+}
+
+.claudero-at-title {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: var(--fill-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-at-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  background: transparent;
+  color: var(--fill-secondary);
+  opacity: 0.6;
+}
+.claudero-at-action:hover {
+  opacity: 1;
+  color: var(--fill-primary);
+}
+
+.claudero-at-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: var(--fill-secondary);
+  opacity: 0.6;
+  text-align: center;
+}
+
+/* ── Magic wand button ───────────────────────────────────────────────────── */
+
+.claudero-magic-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  max-width: 30px;
+  max-height: 30px;
+  padding: 0;
+  margin-right: 4px;
+  border: 1px solid transparent;
+  border-radius: 30px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+}
+.claudero-magic-button:hover {
+}
+
+/* ── Magic popup ─────────────────────────────────────────────────────────── */
+
+.claudero-magic-popup {
+  position: absolute;
+  width: min(280px, calc(100% - 28px));
+  max-height: min(480px, calc(100% - 108px));
+  overflow: auto;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 14px;
+  background: var(--material-background);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
+  padding: 8px;
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.claudero-magic-header {
+  padding: 8px 9px 4px;
+}
+
+.claudero-magic-title {
+  color: var(--fill-primary);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.claudero-magic-subtitle {
+  margin-top: 3px;
+  color: var(--fill-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.claudero-magic-section {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.claudero-magic-section.custom-section {
+  padding-top: 7px;
+  border-top: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-magic-section-label {
+  padding: 3px 9px 4px;
+  color: var(--fill-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.claudero-magic-item {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 2px;
+  align-items: center;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fill-primary);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 0.13s ease,
+    background-color 0.13s ease,
+    transform 0.13s ease;
+}
+
+.claudero-magic-item .claudero-action-icon {
+  grid-row: 1 / span 2;
+  justify-self: center;
+  color: #6366f1;
+}
+
+.claudero-magic-item .claudero-prompt-title {
+  grid-column: 2;
+  font-size: 12.5px;
+}
+
+.claudero-magic-item .claudero-prompt-desc {
+  grid-column: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-magic-item:hover,
+.claudero-magic-item:focus-visible {
+  outline: none;
+  background: var(--material-mix-tertiary);
+}
+
+.claudero-magic-item.custom {
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+}
+
+.claudero-magic-item.custom .claudero-prompt-icon-wrap {
+  grid-row: 1 / -1;
+}
+
+.claudero-magic-item.custom .claudero-prompt-body {
+  grid-column: 2;
+}
+
+.claudero-magic-item.custom .claudero-prompt-edit-btn {
+  grid-column: 3;
+  grid-row: 1 / -1;
+  align-self: center;
+}
+
+.claudero-magic-item.custom .claudero-prompt-delete-btn {
+  grid-column: 4;
+  grid-row: 1 / -1;
+  align-self: center;
+}
+
+.claudero-magic-item.add-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  color: #be4246;
+  font-size: 12px;
+  font-weight: 650;
+  border: 1px dashed
+    color-mix(in srgb, #be4246 34%, var(--material-mix-quarternary));
+}
+
+.claudero-magic-add {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 2px 0 0;
+}
+
+.claudero-magic-add.editing {
+  padding: 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--fill-primary) 4%, transparent);
+}
+
+.claudero-magic-input,
+.claudero-magic-textarea {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  background: var(--material-background);
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: 12px;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.claudero-magic-input:focus,
+.claudero-magic-textarea:focus {
+  border-color: color-mix(
+    in srgb,
+    #be4246 52%,
+    var(--material-mix-quarternary)
+  );
+  box-shadow: 0 0 0 2px color-mix(in srgb, #be4246 12%, transparent);
+}
+
+.claudero-magic-textarea {
+  min-height: 74px;
+  resize: vertical;
+}
+
+.claudero-magic-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.claudero-magic-form-actions .claudero-button {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+/* Single item icon inside chip/* Single item icon inside chip - using data-item-type */
+.claudero-item-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  object-fit: contain;
+  border-radius: 2px;
+}
+
+/* New icon type using data attribute and CSS backgrounds */
+.icon-item-type {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  /* Use Zotero's item type icon sprite */
+  background-image: url("chrome://zotero/skin/item-type-icon.png");
+  background-repeat: no-repeat;
+  background-size: auto 14px;
+}
+
+/* Default position for unknown types */
+.icon-item-type {
+  background-position: 0 0;
+}
+
+/* Selected text icon (SVG-based) */
+.claudero-text-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  background-color: currentColor;
+  mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M2 12.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5zm0-3a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11a.5.5 0 0 1-.5-.5zm0-3a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5zm0-3a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11a.5.5 0 0 1-.5-.5z"/></svg>')
+    no-repeat center / contain;
+  -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M2 12.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5zm0-3a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11a.5.5 0 0 1-.5-.5zm0-3a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5zm0-3a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11a.5.5 0 0 1-.5-.5z"/></svg>')
+    no-repeat center / contain;
+}
+
+.claudero-anno-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: currentColor;
+}
+
+/* Stacked icons for multiple selected items */
+.claudero-item-icons {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Stacked item icons using data-item-type */
+.icon-item-type.stacked {
+  margin-right: -4px;
+  border: 1px solid var(--material-sidepane);
+  z-index: 1;
+}
+
+.icon-item-type.stacked:last-child {
+  margin-right: 0;
+  z-index: 2;
+}
+
+.claudero-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 auto;
+  margin: 0 14px 12px;
+  padding: 10px 13px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  background: var(--material-background);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
+}
+
+.claudero-input {
+  width: 100%;
+  min-height: 40px;
+  max-height: 120px;
+  resize: none;
+  padding: 0;
+  border: 0;
+  outline: none !important;
+  box-shadow: none !important;
+  color: var(--fill-primary);
+  background: transparent;
+  font: inherit;
+  /* 1em = the inherited composer size; multiply by the pane zoom factor */
+  font-size: calc(1em * var(--claudero-font-scale, 1));
+  line-height: 1.5;
+}
+
+.claudero-input:focus,
+.claudero-input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.claudero-composer:focus-within {
+  border-color: var(--material-mix-quarternary);
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.claudero-input::placeholder {
+  color: var(--fill-secondary);
+}
+
+.claudero-composer-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.claudero-toolbar-left {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.claudero-composer-toolbar .claudero-at-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent !important;
+  color: var(--fill-secondary);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.claudero-composer-toolbar .claudero-at-button > svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.claudero-composer-toolbar .claudero-at-button:hover {
+  background: var(--material-mix-quinary) !important;
+}
+
+.claudero-tool-button {
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--fill-secondary);
+  font-size: 12px;
+}
+
+.claudero-select {
+  appearance: none;
+  cursor: pointer;
+  border-radius: 20px;
+  transition: background 0.2s;
+  font-family: inherit;
+  background-color: transparent;
+  opacity: 0.8;
+  margin: 0 !important;
+  border: none;
+  color: var(--fill-secondary);
+  font-size: 12px;
+  min-width: 0;
+  min-height: 24px;
+  max-width: 100%;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.claudero-select-label {
+  min-width: 0;
+  font-weight: normal;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.claudero-select-label-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fill-primary);
+}
+
+.claudero-select-label-effort {
+  flex: 0 0 auto;
+  color: var(--fill-secondary);
+}
+
+.claudero-select.permission {
+  flex: 0 1 auto;
+}
+
+.claudero-select-caret {
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+
+.claudero-select:hover {
+  background-color: var(--material-mix-quinary);
+}
+
+.claudero-select.is-open {
+  background-color: var(--material-mix-quinary);
+}
+
+.claudero-select.is-auto-selected {
+  color: #1a73e8;
+}
+
+.claudero-select.is-danger-selected {
+  color: #be4246;
+}
+
+.claudero-select.is-disabled {
+  opacity: 0.38;
+  pointer-events: none;
+}
+
+/* ── Floating dropdown popover (replaces native XUL menupopup) ───────────── */
+.claudero-select-popover {
+  position: absolute;
+  min-width: 160px;
+  max-width: 280px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 10px;
+  background: var(--material-background);
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.2);
+  font-size: 13px;
+  color: var(--fill-primary);
+}
+
+.claudero-select-group-header {
+  padding: 4px 10px 2px;
+  font-size: 11px;
+  opacity: 0.5;
+}
+
+.claudero-select-row,
+.claudero-select-subrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.claudero-select-row:hover,
+.claudero-select-subrow:hover {
+  background-color: var(--material-mix-quinary);
+}
+
+.claudero-select-row.is-danger {
+  color: #be4246;
+}
+
+.claudero-select-row.is-danger:hover {
+  color: #a53438;
+}
+
+.claudero-select-row-label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.claudero-select-row-tail {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 14px;
+  color: var(--fill-secondary);
+}
+
+.claudero-select-check {
+  color: var(--fill-primary);
+}
+
+.claudero-select-row.selected:not(.is-danger),
+.claudero-select-row.selected:not(.is-danger) .claudero-select-check {
+  color: #1a73e8;
+}
+
+.claudero-select-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--material-mix-quarternary);
+}
+
+.claudero-select-sub-arrow {
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.claudero-danger-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.claudero-danger-confirm-card {
+  position: relative;
+  width: min(460px, 100%);
+  padding: 24px 28px 22px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 14px;
+  background: var(--material-background);
+  box-shadow: 0 18px 60px rgba(15, 23, 42, 0.24);
+  color: var(--fill-primary);
+}
+
+.claudero-danger-confirm-close {
+  position: absolute;
+  top: 28px;
+  right: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  max-width: 30px;
+  max-height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--material-mix-quinary);
+  color: var(--fill-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.claudero-danger-confirm-close:hover {
+  background: var(--material-mix-quarternary);
+  color: var(--fill-primary);
+}
+
+.claudero-danger-confirm-close > svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.claudero-danger-confirm-title {
+  margin-right: 28px;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.claudero-danger-confirm-body {
+  margin-top: 16px;
+  color: var(--fill-secondary);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.claudero-danger-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.claudero-danger-confirm-cancel,
+.claudero-danger-confirm-primary {
+  min-height: 34px;
+  padding: 6px 16px;
+  border: 0;
+  border-radius: 999px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.claudero-danger-confirm-close:focus,
+.claudero-danger-confirm-close:focus-visible,
+.claudero-danger-confirm-cancel:focus,
+.claudero-danger-confirm-cancel:focus-visible,
+.claudero-danger-confirm-primary:focus,
+.claudero-danger-confirm-primary:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.claudero-danger-confirm-cancel {
+  color: var(--fill-primary);
+  background: var(--material-mix-quinary);
+}
+
+.claudero-danger-confirm-primary {
+  color: #be4246;
+  background: color-mix(in srgb, #be4246 12%, transparent);
+}
+
+.claudero-danger-confirm-primary:hover {
+  background: color-mix(in srgb, #be4246 18%, transparent);
+}
+
+/* Model sub-menu opens as a flyout beside the main panel. */
+.claudero-select-flyout {
+  margin: 0;
+}
+
+.claudero-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.claudero-send-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 30px !important;
+  height: 30px !important;
+  min-width: 30px !important;
+  min-height: 30px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  color: #ffffff !important;
+  background: #be4246 !important;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+  flex: 0 0 auto;
+}
+
+.claudero-send-button:hover {
+  background: #a53438 !important;
+}
+
+.claudero-send-button.stop {
+  background: #9b2d30 !important;
+}
+
+.claudero-send-button.stop:hover {
+  background: #832427 !important;
+}
+
+.claudero-send-button:disabled {
+  opacity: 0.38 !important;
+  cursor: not-allowed;
+}
+
+.claudero-input:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+/* ── Preferences ─────────────────────────────────────────────────────────── */
+
+.claudero-pref-stack {
+  gap: 8px;
+}
+
+.claudero-pref-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
+.claudero-pref-tab {
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 6px;
+  padding: 5px 10px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  color: inherit;
+}
+
+.claudero-pref-tab.active {
+  background: AccentColor;
+  border-color: AccentColor;
+  color: AccentColorText;
+}
+
+.claudero-pref-panel {
+  gap: 8px;
+}
+
+.claudero-pref-stack html|input,
+.claudero-pref-stack html|textarea,
+.claudero-pref-stack html|select {
+  width: 38em;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.claudero-pref-stack html|code {
+  width: max-content;
+  max-width: 38em;
+  overflow-wrap: anywhere;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.claudero-pref-status {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--fill-secondary);
+}
+
+.claudero-pref-status.success {
+  color: #267246;
+}
+
+.claudero-pref-status.error {
+  color: #b42318;
+}
+
+.claudero-pref-mcp-actions {
+  gap: 6px;
+}
+
+.claudero-pref-mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 38em;
+  max-width: 100%;
+}
+
+.claudero-pref-mcp-empty {
+  padding: 8px 0;
+  color: var(--fill-secondary);
+  font-size: 12px;
+}
+
+.claudero-pref-mcp-card {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+.claudero-pref-mcp-card.disabled {
+  opacity: 0.58;
+}
+
+.claudero-pref-mcp-card-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.claudero-pref-mcp-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.claudero-pref-mcp-card-main {
+  min-width: 0;
+}
+
+.claudero-pref-mcp-card-title {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.claudero-pref-mcp-card-meta {
+  color: var(--fill-secondary);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-pref-mcp-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.claudero-pref-mcp-card-actions html|button {
+  padding: 3px 7px;
+}
+
+.claudero-pref-mcp-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--fill-secondary);
+  font-size: 11.5px;
+}
+
+.claudero-pref-mcp-tools.error {
+  color: #b42318;
+}
+
+.claudero-pref-mcp-tools-head {
+  color: var(--fill-primary);
+  font-weight: 600;
+}
+
+.claudero-pref-mcp-tool-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.claudero-pref-mcp-tool-body {
+  min-width: 0;
+}
+
+.claudero-pref-mcp-tool-name {
+  color: var(--fill-primary);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11.5px;
+}
+
+.claudero-pref-mcp-tool-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 380px) {
+  #claudero-side-panel {
+    min-width: 280px;
+  }
+}
+
+/* ── Permission Dialog ────────────────────────────────────────────────────── */
+
+.claudero-permission-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+  min-height: 40px;
+}
+
+.claudero-permission-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fill-primary);
+}
+
+.claudero-permission-header svg {
+  flex-shrink: 0;
+}
+
+.claudero-permission-toolname {
+  color: var(--fill-primary);
+}
+
+.claudero-permission-description {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--fill-primary);
+  padding: 8px 10px;
+  background: color-mix(in srgb, #be4246 7%, transparent);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.claudero-permission-preview {
+  padding: 8px;
+  background: var(--material-sidepane);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 6px;
+  font-size: 11px;
+  max-height: 120px;
+  overflow: auto;
+}
+
+.claudero-permission-preview code {
+  font-family: "SF Mono", "Consolas", "Liberation Mono", "Menlo", monospace;
+  color: var(--fill-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.claudero-permission-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 4px 4px 6px;
+}
+
+.claudero-permission-buttons .claudero-button {
+  padding: 5px 16px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.claudero-button-primary {
+  background: #be4246 !important;
+  color: white !important;
+  border: none;
+}
+
+.claudero-button-primary:hover {
+  background: #a53438 !important;
+}
+
+.claudero-button-secondary {
+  background: var(--material-control);
+  color: var(--fill-primary);
+  border: 1px solid var(--material-mix-quarternary);
+}
+
+/* Modern write-confirm workflow */
+.claudero-permission-dialog.modern {
+  gap: 10px;
+}
+
+.claudero-permission-dialog.modern .claudero-permission-header {
+  align-items: center;
+  gap: 10px;
+}
+
+.claudero-permission-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  color: #be4246;
+  background: color-mix(in srgb, #be4246 10%, transparent);
+  flex: 0 0 auto;
+}
+
+.claudero-permission-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.claudero-permission-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.claudero-permission-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--fill-primary);
+  line-height: 1.25;
+}
+
+.claudero-permission-dialog.modern .claudero-permission-toolname {
+  color: var(--fill-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-permission-dialog.modern .claudero-permission-description {
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, #be4246 16%, transparent);
+  background: color-mix(in srgb, #be4246 6%, transparent);
+  font-weight: 600;
+}
+
+.claudero-permission-dialog.modern .claudero-permission-preview {
+  max-height: 170px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--material-sidepane) 96%, black 4%);
+}
+
+.claudero-permission-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fill-secondary);
+  font-size: 12px;
+  line-height: 1.3;
+  padding: 2px 1px;
+}
+
+.claudero-permission-remember input {
+  margin: 0;
+}
+
+.claudero-permission-dialog.modern .claudero-permission-buttons {
+  padding: 0;
+}
+
+.claudero-permission-buttons .claudero-button[disabled] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.claudero-button-secondary:hover {
+  background: var(--material-toolbar);
+}
+
+/* ── Slash command popup ─────────────────────────────────────────────────── */
+
+.claudero-slash-popup {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  margin-bottom: 6px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--material-mix-secondary);
+  border-radius: 10px;
+  background: var(--material-background);
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.2);
+  overflow: hidden auto;
+  z-index: 999;
+}
+
+.claudero-slash-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.claudero-slash-row:hover,
+.claudero-slash-row.selected {
+  background: color-mix(in srgb, var(--fill-primary) 6%, transparent);
+}
+
+.claudero-slash-name {
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fill-primary);
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+.claudero-slash-desc {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: var(--fill-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Scroll-to-bottom button ─────────────────────────────────────────────── */
+
+/* Positioned inside .claudero-transcript-wrapper, so bottom:8px is relative
+   to the visible bottom of the transcript area — never overlaps the composer */
+.claudero-scroll-to-bottom {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 50%;
+  /* Frosted glass effect */
+  background: color-mix(in srgb, var(--material-background) 65%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  border: 1px solid var(--material-mix-quarternary);
+  box-shadow:
+    0 1px 4px rgba(15, 23, 42, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 10;
+  color: var(--fill-secondary);
+  padding: 0;
+  font: inherit;
+  transition:
+    box-shadow 0.12s ease-out,
+    color 0.12s ease-out,
+    background 0.12s ease-out;
+}
+
+.claudero-scroll-to-bottom:hover {
+  background: color-mix(
+    in srgb,
+    var(--material-main-surface-secondary) 75%,
+    transparent
+  );
+  box-shadow:
+    0 2px 8px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(255, 255, 255, 0.18);
+  color: var(--fill-primary);
+}
+
+/* ── Prompt Icon Picker ───────────────────────────────────────────────────────── */
+
+.claudero-icon-picker {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 8px;
+  width: min(280px, calc(100vw - 32px));
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.25);
+  overflow: hidden;
+  overflow-x: hidden;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Icon picker popup (positioned near trigger button) ── */
+
+.claudero-icon-picker-popup,
+.claudero-prompt-editor-floating-picker {
+  position: absolute;
+  z-index: 10000;
+  width: 280px;
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.25);
+  overflow: hidden;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.claudero-icon-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-icon-picker-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fill-primary);
+}
+
+.claudero-icon-picker-close {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--fill-secondary);
+  font-size: 20px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+
+.claudero-icon-picker-close:hover {
+  background: var(--material-mix-tertiary);
+  color: var(--fill-primary);
+}
+
+.claudero-icon-picker-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.claudero-icon-picker-subtitle {
+  font-size: 12px;
+  color: var(--fill-secondary);
+}
+
+.claudero-icon-picker-search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.claudero-icon-picker-search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  min-height: 34px;
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 10px;
+}
+
+.claudero-icon-picker-search svg {
+  flex-shrink: 0;
+  color: var(--fill-secondary);
+}
+
+.claudero-icon-picker-search-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.claudero-icon-picker-search-input::placeholder {
+  color: var(--fill-secondary);
+}
+
+.claudero-icon-picker-color-preview {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--material-mix-quarternary);
+  flex-shrink: 0;
+  cursor: pointer;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.claudero-icon-picker-shuffle-btn {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  aspect-ratio: 1 / 1;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--fill-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 4px;
+  box-sizing: border-box;
+}
+.claudero-icon-picker-shuffle-btn svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.claudero-icon-picker-shuffle-btn:hover {
+  color: var(--fill-primary);
+}
+
+.claudero-icon-picker-color-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.claudero-icon-picker-reset-color {
+  padding: 2px 8px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fill-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.claudero-icon-picker-reset-color:hover {
+  background: var(--material-mix-tertiary);
+  color: var(--fill-primary);
+}
+
+.claudero-icon-picker.compact {
+  width: min(300px, calc(100vw - 32px));
+}
+
+.claudero-icon-picker.compact .claudero-icon-picker-search-row {
+  border-top: none;
+}
+
+.claudero-color-picker-popup {
+  position: absolute;
+  z-index: 10001;
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.2);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.claudero-color-picker-popup-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+
+.claudero-color-picker-popup-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition:
+    transform 0.15s,
+    border-color 0.15s;
+}
+
+.claudero-color-picker-popup-swatch:hover {
+  transform: scale(1.15);
+}
+
+.claudero-color-picker-popup-swatch.selected {
+  border-color: var(--fill-primary);
+}
+
+.claudero-icon-picker-upload-icon {
+  font-size: 32px;
+}
+
+.claudero-icon-picker-upload-hint {
+  font-size: 12px;
+  color: var(--fill-secondary);
+  text-align: center;
+}
+
+.claudero-icon-picker-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-icon-picker-tab {
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: var(--fill-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.claudero-icon-picker-tab:hover {
+  color: var(--fill-primary);
+  background: var(--material-mix-tertiary);
+}
+
+.claudero-icon-picker-tab.active {
+  color: #be4246;
+  border-bottom-color: #be4246;
+  font-weight: 500;
+}
+
+.claudero-icon-picker-content {
+  padding: 0 10px 10px;
+  max-height: 240px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+}
+
+.claudero-icon-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.claudero-icon-picker-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fill-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 12px 4px;
+}
+
+.claudero-icon-picker-item {
+  width: 36px;
+  height: 36px;
+  min-width: 0;
+  aspect-ratio: 1 / 1;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.12s;
+  font-size: 20px;
+  padding: 0;
+  appearance: none;
+  -moz-appearance: none;
+}
+
+.claudero-icon-picker-item:hover {
+  background: var(--material-mix-quinary);
+}
+
+.claudero-icon-picker-item.iconify-icon-item {
+  font-size: 24px;
+}
+
+.claudero-icon-picker-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.claudero-icon-picker-colors {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.claudero-icon-picker-color-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fill-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.claudero-icon-picker-color-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 6px;
+}
+
+.claudero-icon-picker-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.claudero-icon-picker-swatch:hover {
+  transform: scale(1.15);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.claudero-icon-picker-swatch.selected {
+  border-color: var(--fill-primary);
+  box-shadow: 0 0 0 2px var(--material-background);
+}
+
+.claudero-icon-picker-upload {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 32px;
+}
+
+.claudero-icon-picker-upload-info {
+  font-size: 14px;
+  color: var(--fill-secondary);
+  text-align: center;
+}
+
+.claudero-icon-picker-upload-btn {
+  padding: 8px 16px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  background: var(--material-background);
+  color: var(--fill-primary);
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.claudero-icon-picker-upload-btn:hover {
+}
+
+/* ── Prompt Editor Modal ─────────────────────────────────────────────────────── */
+
+.claudero-prompt-editor-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.claudero-prompt-editor-backdrop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.5);
+  backdrop-filter: blur(2px);
+}
+
+.claudero-prompt-editor-card {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  max-height: calc(100vh - 40px);
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.3);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.claudero-prompt-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-prompt-editor-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fill-primary);
+}
+
+.claudero-prompt-editor-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--fill-secondary);
+  font-size: 22px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+
+.claudero-prompt-editor-close:hover {
+  background: var(--material-mix-tertiary);
+  color: var(--fill-primary);
+}
+
+.claudero-prompt-editor-icon-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px 0;
+}
+
+.claudero-prompt-editor-icon-btn {
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  max-width: 48px;
+  max-height: 48px;
+  box-sizing: border-box;
+  aspect-ratio: 1 / 1;
+  flex-shrink: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--material-mix-quarternary);
+  background: transparent;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: var(--fill-secondary);
+  font-size: 24px;
+}
+
+.claudero-prompt-editor-icon-btn:hover {
+  border-color: #be4246;
+  color: #be4246;
+}
+
+.claudero-prompt-editor-icon-btn.empty {
+  color: var(--fill-secondary);
+}
+
+.claudero-prompt-editor-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 28px;
+}
+
+.claudero-prompt-editor-icon-label {
+  font-size: 13px;
+  color: var(--fill-secondary);
+}
+
+.claudero-prompt-editor-row {
+  padding: 6px 20px;
+}
+.claudero-prompt-editor-row:first-of-type {
+  padding-top: 4px;
+}
+
+.claudero-prompt-editor-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fill-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.claudero-prompt-editor-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  background: var(--material-background);
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.claudero-prompt-editor-input:focus {
+  border-color: #be4246;
+  box-shadow: 0 0 0 3px rgba(190, 66, 70, 0.1);
+}
+
+.claudero-prompt-editor-input.error {
+  border-color: #ef4444;
+}
+
+.claudero-prompt-editor-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  background: var(--material-background);
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 120px;
+  outline: none;
+  font-family: inherit;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.claudero-prompt-editor-textarea:focus {
+  border-color: #be4246;
+  box-shadow: 0 0 0 3px rgba(190, 66, 70, 0.1);
+}
+
+.claudero-prompt-editor-textarea.error {
+  border-color: #ef4444;
+}
+
+.claudero-prompt-editor-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 16px 20px;
+  border-top: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-prompt-editor-btn-secondary,
+.claudero-prompt-editor-btn-primary {
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.claudero-prompt-editor-btn-secondary {
+  border: 1px solid var(--material-mix-quarternary);
+  background: var(--material-background);
+  color: var(--fill-primary);
+}
+
+.claudero-prompt-editor-btn-secondary:hover {
+  background: var(--material-mix-tertiary);
+}
+
+.claudero-prompt-editor-btn-primary {
+  border: none;
+  background: #be4246;
+  color: white;
+}
+
+.claudero-prompt-editor-btn-primary:hover {
+  background: #a53438;
+}
+
+/* ── Prompt List Updates ─────────────────────────────────────────────────────── */
+
+.claudero-magic-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-magic-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fill-primary);
+}
+
+.claudero-magic-add-btn {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: #be4246;
+  border-radius: 30px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.claudero-magic-add-btn:hover {
+}
+
+.claudero-magic-add-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.claudero-magic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  max-height: min(420px, calc(100vh - 240px));
+  overflow-y: auto;
+}
+
+.claudero-prompt-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
+.claudero-prompt-icon-placeholder {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--material-mix-tertiary);
+  border-radius: 6px;
+  color: var(--fill-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.claudero-prompt-icon-emoji {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.claudero-prompt-icon-upload {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.claudero-prompt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.claudero-prompt-edit-btn {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--fill-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  opacity: 0;
+  padding: 0;
+}
+
+.claudero-magic-item:hover .claudero-prompt-edit-btn {
+  opacity: 1;
+}
+
+.claudero-prompt-edit-btn:hover {
+}
+
+.claudero-prompt-edit-btn svg {
+  display: block;
+}
+
+.claudero-prompt-delete-btn {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--fill-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  opacity: 0;
+  padding: 0;
+}
+
+.claudero-magic-item:hover .claudero-prompt-delete-btn {
+  opacity: 1;
+}
+
+.claudero-prompt-delete-btn:hover {
+}
+
+.claudero-prompt-delete-btn svg {
+  display: block;
+}
+
+/* ── Icon Rendering ─────────────────────────────────────────────────────────── */
+
+.claudero-prompt-icon-svg,
+.claudero-simple-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: currentColor;
+}
+
+.claudero-prompt-icon-svg svg,
+.claudero-simple-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ── Inline Editor in Popup ──────────────────────────────────────────── */
+
+.claudero-magic-back-btn {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--fill-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0;
+  transition: background 0.15s;
+}
+
+.claudero-magic-back-btn:hover {
+}
+
+/* Editor header: back button left, title right of it */
+.claudero-magic-popup .claudero-prompt-editor-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px 4px;
+}
+
+/* Shared form field padding inside the popup */
+.claudero-magic-popup .claudero-prompt-editor-icon-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 9px 6px;
+}
+
+.claudero-magic-popup .claudero-prompt-editor-icon-btn {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  max-width: 44px;
+  max-height: 44px;
+  box-sizing: border-box;
+  aspect-ratio: 1 / 1;
+  flex-shrink: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--material-mix-quarternary);
+  background: transparent;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: var(--fill-secondary);
+  font-size: 24px;
+  flex: 0 0 auto;
+}
+
+.claudero-magic-popup .claudero-prompt-editor-icon-btn:hover {
+  border-color: #be4246;
+  color: #be4246;
+}
+
+.claudero-magic-popup .claudero-prompt-editor-icon-btn.empty {
+  color: var(--fill-secondary);
+}
+
+.claudero-magic-popup .claudero-prompt-editor-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 26px;
+}
+
+.claudero-magic-popup .claudero-prompt-editor-icon-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.claudero-magic-popup .claudero-prompt-editor-icon-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fill-primary);
+}
+
+.claudero-magic-popup .claudero-prompt-editor-icon-hint {
+  font-size: 11px;
+  color: var(--fill-secondary);
+}
+
+.claudero-magic-popup .claudero-prompt-editor-row {
+  padding: 5px 9px;
+}
+
+.claudero-magic-popup .claudero-prompt-editor-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fill-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.claudero-magic-popup .claudero-prompt-editor-label-muted {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--fill-quarternary);
+  margin-left: 6px;
+}
+
+.claudero-magic-popup .claudero-prompt-editor-input,
+.claudero-magic-popup .claudero-prompt-editor-textarea {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 8px;
+  background: var(--material-background);
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.claudero-magic-popup .claudero-prompt-editor-input:focus,
+.claudero-magic-popup .claudero-prompt-editor-textarea:focus {
+  border-color: #be4246;
+  box-shadow: 0 0 0 3px rgba(190, 66, 70, 0.1);
+}
+
+.claudero-magic-popup .claudero-prompt-editor-input.error,
+.claudero-magic-popup .claudero-prompt-editor-textarea.error {
+  border-color: #ef4444;
+}
+
+.claudero-magic-popup .claudero-prompt-editor-textarea {
+  min-height: 90px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.claudero-magic-popup .claudero-magic-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 9px 4px;
+}
+
+.claudero-magic-popup .claudero-magic-form-actions .claudero-button {
+  padding: 6px 14px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--material-mix-quarternary);
+  background: var(--material-background);
+  color: var(--fill-primary);
+  transition: background 0.15s;
+}
+
+.claudero-magic-popup .claudero-magic-form-actions .claudero-button:hover {
+}
+
+.claudero-magic-popup .claudero-magic-form-actions .claudero-button-primary {
+  border: none;
+  background: #be4246;
+  color: white;
+}
+
+.claudero-magic-popup
+  .claudero-magic-form-actions
+  .claudero-button-primary:hover {
+  background: #a53438;
+}
+
+/* ── Prompt Library Redesign ────────────────────────────────────────────── */
+
+.claudero-suggestion.prompt-card {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  min-height: 54px;
+  height: auto;
+  padding: 9px 10px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  box-shadow: none;
+  transform: none;
+}
+
+.claudero-welcome-card .claudero-suggestion.prompt-card:hover,
+.claudero-suggestion.prompt-card:hover {
+  /* Hover background is applied inline per-card, derived from the icon's own
+     color (mirrors the Prompt Library rows: icon-color 8% over the quinary
+     mix). Keep this rule free of a background so the inline tint wins. */
+  box-shadow: none;
+  transform: none;
+}
+
+.claudero-suggestion.prompt-card .claudero-prompt-copy,
+.claudero-prompt-copy {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.claudero-prompt-title,
+.claudero-prompt-desc {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-magic-popup {
+  position: absolute;
+  left: auto !important;
+  width: min(260px, calc(100% - 24px));
+  max-height: min(480px, calc(100% - 96px));
+  overflow: hidden;
+  padding: 12px;
+  border: 1px solid
+    color-mix(in srgb, var(--material-mix-quarternary) 86%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--material-background) 96%, white 4%);
+  box-shadow: 0 22px 56px rgba(15, 23, 42, 0.22);
+  z-index: 1080;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+}
+
+.claudero-magic-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px 2px;
+  border: 0;
+}
+
+.claudero-magic-title {
+  min-width: 0;
+  color: var(--fill-primary);
+  font-size: 15px;
+  line-height: 1.25;
+  font-weight: 750;
+}
+
+.claudero-magic-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 30px;
+  color: #be4246;
+  background: transparent;
+  cursor: pointer;
+}
+
+.claudero-magic-add-btn:hover {
+  background-color: var(--material-mix-quinary);
+}
+
+.claudero-magic-search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.claudero-magic-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 10px;
+  background: var(--material-background);
+  color: var(--fill-secondary);
+  box-sizing: border-box;
+}
+
+.claudero-magic-search-input {
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 30px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.claudero-magic-search-input::placeholder {
+  color: var(--fill-tertiary);
+}
+
+.claudero-magic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  padding: 0 2px 2px;
+}
+
+.claudero-magic-empty {
+  padding: 20px 8px;
+  color: var(--fill-secondary);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.claudero-magic-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 58px;
+  border-radius: 12px;
+  overflow: hidden;
+  transition: background-color 0.12s ease;
+}
+
+.claudero-magic-row:hover,
+.claudero-magic-row:focus-within {
+  background-color: var(--material-mix-quinary);
+}
+
+.claudero-magic-row-main {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+  min-height: 58px;
+  padding: 8px 6px 8px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--fill-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.claudero-magic-row-main:focus-visible,
+.claudero-prompt-tool-btn:focus-visible,
+.claudero-magic-add-btn:focus-visible,
+.claudero-prompt-modal-close:focus-visible,
+.claudero-prompt-secondary-btn:focus-visible,
+.claudero-prompt-primary-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, #be4246 42%, transparent);
+  outline-offset: 2px;
+}
+
+.claudero-magic-row .claudero-prompt-icon-wrap {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: color-mix(in srgb, #6366f1 11%, transparent);
+  color: #6366f1;
+}
+
+.claudero-prompt-icon-empty {
+  font-size: 13px;
+  font-weight: 750;
+  color: currentColor;
+}
+
+.claudero-magic-row-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 0;
+  overflow: hidden;
+  padding-right: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    max-width 0.15s ease,
+    opacity 0.12s ease,
+    padding-right 0.15s ease;
+}
+
+.claudero-magic-row:hover .claudero-magic-row-tools,
+.claudero-magic-row:focus-within .claudero-magic-row-tools {
+  max-width: 80px;
+  padding-right: 6px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.claudero-prompt-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+}
+
+.claudero-prompt-tool-btn:hover {
+  color: var(--fill-primary);
+}
+
+.claudero-prompt-tool-btn.danger:hover {
+  color: #be4246;
+}
+
+.claudero-prompt-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 1090;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: color-mix(in srgb, var(--material-background) 46%, transparent);
+  backdrop-filter: blur(6px);
+  box-sizing: border-box;
+}
+
+.claudero-prompt-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(720px, calc(100% - 8px));
+  overflow: hidden;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 18px;
+  background: var(--material-background);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
+}
+
+.claudero-prompt-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-prompt-modal-title {
+  min-width: 0;
+  color: var(--fill-primary);
+  font-size: 15px;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.claudero-prompt-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+}
+
+.claudero-prompt-modal-close:hover {
+  color: var(--fill-primary);
+}
+
+.claudero-prompt-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px;
+}
+
+.claudero-prompt-modal-icon-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+/* Preview mirrors the final prompt-list icon (28px tinted rounded square) */
+.claudero-prompt-modal-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+}
+
+.claudero-prompt-modal-icon-button:hover {
+  opacity: 0.82;
+}
+
+/* Empty state: a dashed placeholder that invites a click */
+.claudero-prompt-modal-icon-button.is-empty {
+  width: 48px;
+  height: 48px;
+  border: 1.5px dashed var(--material-mix-quarternary);
+  border-radius: 12px;
+}
+
+.claudero-prompt-modal-icon-button.is-empty:hover {
+  opacity: 1;
+  border-color: color-mix(
+    in srgb,
+    #be4246 45%,
+    var(--material-mix-quarternary)
+  );
+  color: #be4246;
+}
+
+.claudero-prompt-modal-icon-preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+.claudero-prompt-modal-icon-copy {
+  min-width: 0;
+}
+
+.claudero-prompt-modal-icon-label {
+  color: var(--fill-primary);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.claudero-prompt-modal-icon-hint,
+.claudero-prompt-field-optional {
+  color: var(--fill-secondary);
+  font-size: 11.5px;
+}
+
+.claudero-prompt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.claudero-prompt-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fill-secondary);
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.claudero-prompt-input,
+.claudero-prompt-textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 10px;
+  background: var(--material-background);
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.claudero-prompt-input {
+  height: 38px;
+  padding: 0 11px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+}
+
+.claudero-prompt-textarea {
+  min-height: 170px;
+  resize: none;
+  padding: 10px 11px;
+  line-height: 1.45;
+}
+
+.claudero-prompt-input:focus,
+.claudero-prompt-textarea:focus {
+  border-color: #be4246;
+  box-shadow: none;
+}
+
+.claudero-prompt-input.error,
+.claudero-prompt-textarea.error {
+  border-color: #be4246;
+}
+
+.claudero-prompt-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 18px;
+  padding-top: 0;
+}
+
+.claudero-prompt-secondary-btn,
+.claudero-prompt-primary-btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.claudero-prompt-secondary-btn {
+  border: 1px solid var(--material-mix-quarternary);
+  background: var(--material-background);
+  color: var(--fill-primary);
+}
+
+.claudero-prompt-secondary-btn:hover {
+}
+
+.claudero-prompt-primary-btn {
+  border: 1px solid #be4246;
+  background: #be4246;
+  color: white;
+}
+
+.claudero-prompt-primary-btn:hover {
+  background: #a9373b;
+  border-color: #a9373b;
+}
+
+.claudero-prompt-modal-icon-slot {
+  min-width: 0;
+}
+
+.claudero-icon-picker.claudero-icon-picker-embedded {
+  position: static !important;
+  width: 100% !important;
+  max-width: none !important;
+  margin: -2px 0 0;
+  padding: 10px;
+  overflow: hidden;
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 12px;
+  box-shadow: none;
+  background: color-mix(
+    in srgb,
+    var(--material-background) 97%,
+    var(--fill-primary) 3%
+  );
+  box-sizing: border-box;
+}
+
+/* Keep the search row pinned; only the icon grid scrolls */
+.claudero-icon-picker.claudero-icon-picker-embedded
+  .claudero-icon-picker-content {
+  max-height: 168px;
+  overflow-y: auto;
+  margin-top: 8px;
+  padding: 0;
+}
+
+.claudero-icon-picker.claudero-icon-picker-embedded .claudero-icon-picker-grid {
+  grid-template-columns: repeat(auto-fill, minmax(30px, 1fr));
+  gap: 4px;
+}
+
+.claudero-icon-picker.claudero-icon-picker-embedded
+  .claudero-icon-picker-item:hover,
+.claudero-icon-picker.claudero-icon-picker-embedded
+  .claudero-icon-picker-shuffle-btn:hover,
+.claudero-icon-picker.claudero-icon-picker-embedded
+  .claudero-icon-picker-color-preview:hover {
+}
+
+/* ── Prompt Library Sidecar Panels ─────────────────────────────────────── */
+
+.claudero-magic-stack {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  z-index: 1120;
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 12px;
+  max-width: calc(100% - 24px);
+  pointer-events: none;
+}
+
+.claudero-magic-stack > * {
+  pointer-events: auto;
+}
+
+.claudero-magic-stack .claudero-magic-popup,
+.claudero-prompt-editor-panel,
+.claudero-icon-panel {
+  position: static !important;
+  flex: 0 1 280px;
+  width: min(280px, 100%);
+  max-height: min(620px, calc(100vh - 128px));
+  overflow: hidden;
+  border: 1px solid
+    color-mix(in srgb, var(--material-mix-quarternary) 86%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--material-background) 96%, white 4%);
+  box-shadow: 0 22px 56px rgba(15, 23, 42, 0.22);
+  box-sizing: border-box;
+}
+
+.claudero-magic-stack .claudero-magic-popup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.claudero-magic-stack .claudero-magic-header {
+  padding: 0;
+}
+
+.claudero-magic-stack .claudero-magic-title,
+.claudero-side-panel-title {
+  color: var(--fill-primary);
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1.25;
+}
+
+.claudero-magic-stack .claudero-magic-add-btn {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  box-sizing: border-box;
+  color: #be4246;
+}
+
+.claudero-magic-stack .claudero-magic-search-row {
+  gap: 6px;
+}
+
+.claudero-magic-stack .claudero-magic-search {
+  min-height: 30px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 10px;
+}
+
+.claudero-magic-stack .claudero-magic-search-input {
+  height: 30px;
+  font-size: 13px;
+}
+
+.claudero-magic-stack .claudero-magic-list {
+  gap: 2px;
+  padding: 0;
+}
+
+.claudero-magic-stack .claudero-magic-row {
+  min-height: 44px;
+  border-radius: 10px;
+}
+
+/* Top-align the icon (not centered) so its vertical inset equals padding-top,
+   and size the icon column to the icon width so its left inset equals
+   padding-left — making the gap above the icon match the gap to its left. */
+.claudero-magic-stack .claudero-magic-row-main {
+  min-height: 44px;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 8px;
+}
+
+.claudero-magic-stack .claudero-magic-row:hover,
+.claudero-magic-stack .claudero-magic-row:focus-within {
+  background-color: var(--material-mix-quinary);
+}
+
+.claudero-magic-stack .claudero-magic-row .claudero-prompt-icon-wrap {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+.claudero-magic-stack .claudero-prompt-title {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.claudero-magic-stack .claudero-prompt-desc {
+  font-size: 11.5px;
+  line-height: 1.2;
+}
+
+.claudero-magic-stack .claudero-magic-row-tools {
+  gap: 3px;
+  padding-right: 10px;
+}
+
+.claudero-magic-stack .claudero-prompt-tool-btn {
+  width: 30px;
+  height: 30px;
+  color: var(--fill-secondary);
+}
+
+.claudero-prompt-editor-panel,
+.claudero-icon-panel {
+  display: flex;
+  flex-direction: column;
+  flex-basis: 430px;
+}
+
+.claudero-icon-panel {
+  flex-basis: 330px;
+}
+
+.claudero-side-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-panel-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  max-width: 30px;
+  max-height: 30px;
+  flex-shrink: 0;
+  aspect-ratio: 1 / 1;
+  box-sizing: border-box;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+}
+
+.claudero-panel-close:hover {
+  background-color: var(--material-mix-quinary);
+}
+
+.claudero-prompt-editor-panel .claudero-prompt-editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+
+.claudero-prompt-editor-panel .claudero-prompt-modal-footer {
+  flex: 0 0 auto;
+}
+
+.claudero-icon-panel-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
+.claudero-icon-picker.claudero-icon-picker-sidecar {
+  position: static !important;
+  width: 100% !important;
+  max-width: none !important;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.claudero-icon-picker.claudero-icon-picker-sidecar
+  .claudero-icon-picker-search-row {
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.claudero-icon-picker.claudero-icon-picker-sidecar
+  .claudero-icon-picker-content {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.claudero-icon-picker.claudero-icon-picker-sidecar .claudero-icon-picker-grid {
+  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+  gap: 3px;
+}
+
+.claudero-color-picker-inline {
+  display: none;
+  grid-template-columns: repeat(9, 22px);
+  gap: 7px;
+  padding: 10px 2px 12px;
+  border-bottom: 1px solid var(--material-mix-quarternary);
+  margin-bottom: 10px;
+}
+
+.claudero-color-picker-inline.expanded,
+.claudero-icon-picker-sidecar .claudero-color-picker-inline {
+  display: grid;
+}
+
+.claudero-color-picker-popup-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.12);
+  cursor: pointer;
+}
+
+.claudero-color-picker-popup-swatch:hover,
+.claudero-color-picker-popup-swatch.selected {
+  border-color: var(--material-background);
+  outline: 2px solid color-mix(in srgb, #be4246 46%, transparent);
+}
+
+@media (max-width: 720px) {
+  .claudero-magic-stack {
+    overflow-x: auto;
+    justify-content: flex-start;
+  }
+
+  .claudero-magic-stack .claudero-magic-popup,
+  .claudero-prompt-editor-panel,
+  .claudero-icon-panel {
+    flex-basis: min(260px, calc(100vw - 44px));
+  }
+}
+
+/* ── Iconify Prompt Overlay Final Pass ─────────────────────────────────── */
+
+.claudero-magic-stack {
+  position: fixed !important;
+  left: 24px !important;
+  z-index: 2147483000;
+  max-width: none;
+  justify-content: flex-end;
+  align-items: flex-end;
+  overflow: visible;
+}
+
+.claudero-magic-stack .claudero-magic-popup {
+  flex: 0 0 260px;
+  width: 260px;
+  max-width: min(260px, calc(100vw - 48px));
+}
+
+.claudero-prompt-editor-panel {
+  flex: 0 0 300px;
+  width: 300px;
+  max-width: min(300px, calc(100vw - 48px));
+}
+
+.claudero-icon-panel {
+  flex: 0 0 260px;
+  width: 260px;
+  max-width: min(260px, calc(100vw - 48px));
+}
+
+.claudero-prompt-icon-wrap,
+.claudero-prompt-modal-icon-preview,
+.claudero-simple-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.claudero-prompt-icon-image,
+.claudero-icon-picker-img {
+  display: block;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.claudero-iconify-image {
+  filter: none;
+}
+
+.claudero-magic-stack .claudero-magic-row .claudero-prompt-icon-wrap {
+  background: color-mix(in srgb, #6366f1 12%, transparent);
+}
+
+.claudero-icon-picker-search-symbol {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  color: var(--fill-secondary);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.claudero-icon-picker.claudero-icon-picker-sidecar .claudero-icon-picker-item,
+.claudero-icon-picker .claudero-icon-picker-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 5px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  box-sizing: border-box;
+  overflow: hidden;
+  flex-shrink: 0;
+  aspect-ratio: 1 / 1;
+}
+
+.claudero-icon-picker.claudero-icon-picker-sidecar
+  .claudero-icon-picker-item:hover,
+.claudero-icon-picker .claudero-icon-picker-item:hover {
+  background: var(--material-mix-quinary);
+}
+
+.claudero-icon-picker .claudero-icon-picker-item.selected {
+  background-color: var(--material-mix-quinary);
+}
+
+.claudero-icon-picker-grid.loading {
+  opacity: 0.62;
+}
+
+.claudero-icon-picker.claudero-icon-picker-sidecar
+  .claudero-icon-picker-content {
+  max-height: 420px;
+}
+
+.claudero-icon-picker.claudero-icon-picker-sidecar .claudero-icon-picker-grid {
+  grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+  gap: 2px;
+}
+
+.claudero-color-picker-inline {
+  grid-template-columns: repeat(auto-fill, minmax(22px, 22px));
+}
+
+@media (max-width: 980px) {
+  .claudero-magic-stack {
+    overflow-x: auto;
+    justify-content: flex-start;
+  }
+}
+
+/* ── Right-click context menu ───────────────────────────────────────────── */
+
+.claudero-row-ctx-menu {
+  background: var(--material-background);
+  border: 1px solid var(--material-mix-quarternary);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+  padding: 8px;
+  width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.claudero-ctx-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 11px;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--fill-primary);
+  text-align: left;
+  box-sizing: border-box;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.claudero-ctx-item:hover {
+  background: color-mix(in srgb, var(--fill-primary) 6%, transparent);
+}
+
+.claudero-ctx-item svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+}
+
+.claudero-ctx-item span {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.claudero-ctx-item.danger {
+  color: #dc2626;
+}
+
+.claudero-ctx-item.danger:hover {
+  background: color-mix(in srgb, #dc2626 8%, transparent);
+}
+
+/* AskUserQuestion and ExitPlan inline dialogs */
+.claudero-question-dialog.modern {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  box-sizing: border-box;
+  color: var(--fill-primary);
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 12.5px;
+  line-height: 1.4;
+  outline: none;
+}
+
+.claudero-question-dialog.modern *,
+.claudero-question-dialog.modern *::before,
+.claudero-question-dialog.modern *::after {
+  box-sizing: border-box;
+}
+
+.claudero-ask-inline-title,
+.claudero-plan-inline-title {
+  color: var(--fill-secondary);
+  font-weight: 700;
+  line-height: 1.4;
+  padding: 6px 10px 0;
+}
+
+.claudero-question-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 4px 10px 8px;
+  border-bottom: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-question-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 14ch;
+  min-height: 24px;
+  padding: 2px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  line-height: 1.35;
+  appearance: none;
+  -moz-appearance: none;
+  outline: none;
+  box-shadow: none;
+}
+
+.claudero-question-tab:hover {
+  background: color-mix(in srgb, var(--fill-primary) 5%, transparent);
+  color: var(--fill-primary);
+}
+
+.claudero-question-tab.active {
+  background: color-mix(in srgb, var(--fill-primary) 8%, transparent);
+  color: var(--fill-primary);
+}
+
+.claudero-question-tab:focus,
+.claudero-question-tab:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.claudero-question-tab::-moz-focus-inner {
+  border: 0;
+}
+
+.claudero-question-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claudero-question-tab-tick,
+.claudero-ask-check.is-checked,
+.claudero-ask-check-mark {
+  color: #16a34a;
+  font-weight: 800;
+}
+
+.claudero-question-content,
+.claudero-question-block,
+.claudero-question-review {
+  min-width: 0;
+}
+
+.claudero-question-content {
+  padding: 8px 10px 0;
+}
+
+.claudero-question-block,
+.claudero-question-review,
+.claudero-exit-plan-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.claudero-question-text,
+.claudero-question-review-title {
+  color: var(--fill-primary);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.claudero-ask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin: 0 0 2px;
+}
+
+.claudero-ask-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  min-width: 0;
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fill-primary);
+  cursor: pointer;
+  line-height: 1.4;
+  outline: none;
+  user-select: none;
+}
+
+.claudero-ask-item:hover,
+.claudero-ask-item.is-focused {
+  background: color-mix(in srgb, var(--fill-primary) 6%, transparent);
+}
+
+.claudero-ask-item.is-disabled:hover,
+.claudero-ask-item.is-disabled.is-focused {
+  background: transparent;
+}
+
+.claudero-ask-item.is-selected .claudero-ask-item-label {
+  color: #16833a;
+}
+
+.claudero-ask-item.is-disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
+.claudero-ask-cursor {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 1.4em;
+  width: 1.4em;
+  height: 1.4em;
+  color: #8b5cf6;
+}
+
+.claudero-ask-arrow-svg {
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.claudero-ask-cursor.is-active .claudero-ask-arrow-svg {
+  opacity: 1;
+}
+
+.claudero-ask-item-num,
+.claudero-question-review-num {
+  flex: 0 0 auto;
+  color: var(--fill-secondary);
+  white-space: pre;
+}
+
+/* Real checkbox button replacing the [ ] / [✓] text */
+.claudero-ask-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 15px;
+  height: 15px;
+  margin: 1px 7px 0 0;
+  border: 1.5px solid color-mix(in srgb, var(--fill-secondary) 70%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.claudero-ask-checkbox.is-checked {
+  background: #16a34a;
+  border-color: #16a34a;
+}
+
+.claudero-ask-checkbox-tick {
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.claudero-ask-checkbox.is-checked .claudero-ask-checkbox-tick {
+  opacity: 1;
+}
+
+.claudero-ask-item-content,
+.claudero-question-review-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.claudero-ask-label-row {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.claudero-ask-item-label {
+  min-width: 0;
+  color: var(--fill-primary);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.claudero-ask-item-desc {
+  color: var(--fill-secondary);
+  font-weight: 400;
+  line-height: 1.4;
+  margin-top: 1px;
+  overflow-wrap: anywhere;
+}
+
+.claudero-question-other-input.claudero-ask-custom-text,
+.claudero-question-other-input.claudero-ask-custom-text:hover,
+.claudero-question-other-input.claudero-ask-custom-text:focus {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fill-primary);
+  font: inherit;
+  line-height: 1.4;
+  outline: none;
+  appearance: none;
+  -moz-appearance: none;
+}
+
+.claudero-question-other-input.claudero-ask-custom-text::placeholder {
+  color: color-mix(in srgb, var(--fill-secondary) 70%, transparent);
+}
+
+.claudero-question-review {
+  gap: 6px;
+}
+
+.claudero-question-review-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  width: 100%;
+  padding: 3px 4px;
+  border-radius: 3px;
+  color: var(--fill-primary);
+  cursor: pointer;
+}
+
+.claudero-question-review-row:hover {
+  background: color-mix(in srgb, var(--fill-primary) 5%, transparent);
+}
+
+.claudero-question-review-question {
+  color: var(--fill-secondary);
+  font-weight: 600;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
+.claudero-question-review-answer {
+  color: var(--fill-primary);
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
+.claudero-question-review-answer.empty {
+  color: color-mix(in srgb, var(--fill-secondary) 70%, transparent);
+  font-style: italic;
+}
+
+.claudero-question-review-prompt {
+  color: var(--fill-secondary);
+  margin-top: 4px;
+}
+
+.claudero-ask-hints {
+  color: color-mix(in srgb, var(--fill-secondary) 66%, transparent);
+  padding-top: 8px;
+  border-top: 1px solid var(--material-mix-quarternary);
+  line-height: 1.4;
+}
+
+.claudero-exit-plan-dialog > .claudero-ask-list {
+  margin: 8px 10px 2px;
+}
+
+.claudero-exit-plan-dialog > .claudero-ask-hints {
+  margin: 0 10px;
+}
+
+.claudero-question-header {
+  color: var(--fill-secondary);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.claudero-exit-plan-preview,
+.claudero-exit-plan-permissions {
+  max-height: 220px;
+  overflow: auto;
+  margin: 8px 10px 0;
+  padding: 0 0 8px;
+  border: 0;
+  border-bottom: 1px solid var(--material-mix-quarternary);
+  border-radius: 0;
+  background: transparent;
+  color: var(--fill-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.claudero-exit-plan-permissions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  white-space: normal;
+}
+
+.claudero-exit-plan-permission {
+  color: var(--fill-secondary);
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }

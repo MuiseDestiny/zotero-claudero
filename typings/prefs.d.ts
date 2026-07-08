@@ -8,7 +8,27 @@ declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
       "enable": boolean;
-      "input": string;
+      "nodePath": string;
+      "provider": string;
+      "settingsProvider": string;
+      "providerConfigs": string;
+      "enableZoteroMcp": boolean;
+      "mcpServers": string;
+      "claudePath": string;
+      "codexPath": string;
+      "helperPort": number;
+      "workspacePath": string;
+      "proxy": string;
+      "environmentVariables": string;
+      "permissionMode": string;
+      "model": string;
+      "effort": string;
+      "claudeModel": string;
+      "claudeEffort": string;
+      "codexModel": string;
+      "codexEffort": string;
+      "defaultPrompts": string;
+      "fontScale": number;
     };
   }
 }

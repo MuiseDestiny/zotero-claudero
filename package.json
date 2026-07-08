@@ -1,28 +1,31 @@
 {
-  "name": "zotero-plugin-template",
+  "name": "claudero",
   "type": "module",
-  "version": "3.1.0",
-  "description": "Zotero Plugin Template",
+  "version": "0.1.0",
+  "description": "Claude Code assistant embedded in Zotero",
   "config": {
-    "addonName": "Zotero Plugin Template",
-    "addonID": "addontemplate@euclpts.com",
-    "addonRef": "addontemplate",
-    "addonInstance": "AddonTemplate",
-    "prefsPrefix": "extensions.zotero.addontemplate"
+    "addonName": "Claudero",
+    "addonID": "claudero@muisedestiny.com",
+    "addonRef": "claudero",
+    "addonInstance": "Claudero",
+    "prefsPrefix": "extensions.zotero.claudero"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/windingwind/zotero-plugin-template.git"
+    "url": "git+https://github.com/muisedestiny/claudero.git"
   },
-  "author": "windingwind",
+  "author": "muisedestiny",
   "bugs": {
-    "url": "https://github.com/windingwind/zotero-plugin-template/issues"
+    "url": "https://github.com/muisedestiny/claudero/issues"
   },
-  "homepage": "https://github.com/windingwind/zotero-plugin-template#readme",
+  "homepage": "https://github.com/muisedestiny/claudero#readme",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "start": "zotero-plugin serve",
+    "restart": "zotero-plugin serve",
     "build": "zotero-plugin build && tsc --noEmit",
+    "test:helper": "npm run build && node scripts/smoke-helper-communication.mjs --full",
+    "test:helper:quick": "npm run build && node scripts/smoke-helper-communication.mjs",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
     "release": "zotero-plugin release",
@@ -30,10 +33,20 @@
     "update-deps": "npm update --save"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.186",
+    "@iconify-json/lucide": "^1.2.114",
+    "@iconify-json/tabler": "^1.2.35",
+    "highlight.js": "^11.11.1",
+    "iconify-icon": "^3.0.2",
+    "katex": "0.16.25",
+    "markdown-it": "^14.2.0",
+    "markdown-it-katex": "^2.0.3",
+    "zod": "^4.0.0",
     "zotero-plugin-toolkit": "^5.1.0-beta.13"
   },
   "devDependencies": {
     "@types/chai": "^5.2.3",
+    "@types/markdown-it": "^14.1.2",
     "@types/mocha": "^10.0.10",
     "@types/node": "^24.10.0",
     "@zotero-plugin/eslint-config": "^0.6.7",
@@ -59,5 +72,10 @@
         }
       }
     ]
+  },
+  "overrides": {
+    "markdown-it-katex": {
+      "katex": "0.16.25"
+    }
   }
 }

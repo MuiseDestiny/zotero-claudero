@@ -1,131 +1,469 @@
-import { config } from "../../package.json";
-import { getString } from "../utils/locale";
+import {
+  getCodexInstallationMethod,
+  getCodexSafeMode,
+  getCodexWslDistro,
+  getHostKey,
+  getProviderCliPath,
+  getProviderEnvironment,
+  setCodexInstallationMethod,
+  setCodexSafeMode,
+  setCodexWslDistro,
+  setProviderCliPath,
+  setProviderEnvironment,
+  type AiProvider,
+} from "./providerRegistry";
+import {
+  getCustomMcpServersRaw,
+  isZoteroMcpEnabled,
+  parseManagedMcpServers,
+  parseCustomMcpServers,
+  serializeManagedMcpServers,
+  setCustomMcpServersRaw,
+  setZoteroMcpEnabled,
+  type ManagedMcpServerConfig,
+} from "./mcpSettings";
+import { getPref, setPref } from "../utils/prefs";
 
-export async function registerPrefsScripts(_window: Window) {
-  // This function is called when the prefs window is opened
-  // See addon/content/preferences.xhtml onpaneload
-  if (!addon.data.prefs) {
-    addon.data.prefs = {
-      window: _window,
-      columns: [
-        {
-          dataKey: "title",
-          label: getString("prefs-table-title"),
-          fixedWidth: true,
-          width: 100,
-        },
-        {
-          dataKey: "detail",
-          label: getString("prefs-table-detail"),
-        },
-      ],
-      rows: [
-        {
-          title: "Orange",
-          detail: "It's juicy",
-        },
-        {
-          title: "Banana",
-          detail: "It's sweet",
-        },
-        {
-          title: "Apple",
-          detail: "I mean the fruit APPLE",
-        },
-      ],
-    };
-  } else {
-    addon.data.prefs.window = _window;
+export async function registerPrefsScripts(window: Window) {
+  const doc = window.document;
+  const testButton = doc.querySelector<HTMLButtonElement>(
+    "#claudero-test-helper",
+  );
+  testButton?.addEventListener("click", () => {
+    window.alert(
+      "Open the Claudero item pane, select an item, and send a prompt to start the helper.",
+    );
+  });
+
+  const hostKey = getHostKey();
+  doc.querySelector<HTMLElement>("#claudero-pref-host-key")!.textContent =
+    hostKey;
+  doc.querySelector<HTMLElement>("#claudero-pref-host-key-codex")!.textContent =
+    hostKey;
+
+  const tabs = Array.from(
+    doc.querySelectorAll(".claudero-pref-tab"),
+  ) as HTMLButtonElement[];
+  const panels = Array.from(
+    doc.querySelectorAll(".claudero-pref-panel"),
+  ) as HTMLElement[];
+  const showPanel = (name: string) => {
+    const normalized = ["general", "claude", "codex", "mcp"].includes(name)
+      ? name
+      : "general";
+    setPref("settingsProvider", normalized);
+    tabs.forEach((tab) =>
+      tab.classList.toggle("active", tab.dataset.panel === normalized),
+    );
+    panels.forEach((panel) => {
+      panel.hidden = panel.id !== `claudero-pref-panel-${normalized}`;
+    });
+  };
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () =>
+      showPanel(tab.dataset.panel || "general"),
+    );
+  });
+
+  bindProviderPath(doc, "claude");
+  bindProviderPath(doc, "codex");
+  bindProviderEnvironment(doc, "claude");
+  bindProviderEnvironment(doc, "codex");
+  bindCodexSettings(doc);
+  bindMcpSettings(doc);
+  showPanel(String(getPref("settingsProvider") || "general"));
+}
+
+function bindProviderPath(doc: Document, provider: AiProvider): void {
+  const input = doc.querySelector<HTMLInputElement>(
+    `#claudero-pref-${provider}-path`,
+  );
+  if (!input) return;
+  input.value = getProviderCliPath(provider);
+  input.addEventListener("change", () => {
+    setProviderCliPath(provider, input.value);
+  });
+  input.addEventListener("blur", () => {
+    setProviderCliPath(provider, input.value);
+  });
+}
+
+function bindProviderEnvironment(doc: Document, provider: AiProvider): void {
+  const input = doc.querySelector<HTMLTextAreaElement>(
+    `#claudero-pref-${provider}-env`,
+  );
+  if (!input) return;
+  input.value = getProviderEnvironment(provider);
+  input.addEventListener("change", () => {
+    setProviderEnvironment(provider, input.value);
+  });
+  input.addEventListener("blur", () => {
+    setProviderEnvironment(provider, input.value);
+  });
+}
+
+function bindCodexSettings(doc: Document): void {
+  const installation = doc.querySelector<HTMLSelectElement>(
+    "#claudero-pref-codex-installation",
+  );
+  const distro = doc.querySelector<HTMLInputElement>(
+    "#claudero-pref-codex-wsl-distro",
+  );
+  const safeMode = doc.querySelector<HTMLSelectElement>(
+    "#claudero-pref-codex-safe-mode",
+  );
+
+  if (installation) {
+    installation.value = getCodexInstallationMethod();
+    installation.addEventListener("change", () => {
+      setCodexInstallationMethod(installation.value);
+      if (distro) distro.disabled = installation.value !== "wsl";
+    });
   }
-  updatePrefsUI();
-  bindPrefEvents();
+  if (distro) {
+    distro.value = getCodexWslDistro();
+    distro.disabled = installation?.value !== "wsl";
+    distro.addEventListener("change", () => setCodexWslDistro(distro.value));
+    distro.addEventListener("blur", () => setCodexWslDistro(distro.value));
+  }
+  if (safeMode) {
+    safeMode.value = getCodexSafeMode();
+    safeMode.addEventListener("change", () => {
+      setCodexSafeMode(safeMode.value);
+    });
+  }
 }
 
-async function updatePrefsUI() {
-  // You can initialize some UI elements on prefs window
-  // with addon.data.prefs.window.document
-  // Or bind some events to the elements
-  const renderLock = ztoolkit.getGlobal("Zotero").Promise.defer();
-  if (addon.data.prefs?.window == undefined) return;
-  const tableHelper = new ztoolkit.VirtualizedTable(addon.data.prefs?.window)
-    .setContainerId(`${config.addonRef}-table-container`)
-    .setProp({
-      id: `${config.addonRef}-prefs-table`,
-      // Do not use setLocale, as it modifies the Zotero.Intl.strings
-      // Set locales directly to columns
-      columns: addon.data.prefs?.columns,
-      showHeader: true,
-      multiSelect: true,
-      staticColumns: true,
-      disableFontSizeScaling: true,
-    })
-    .setProp("getRowCount", () => addon.data.prefs?.rows.length || 0)
-    .setProp(
-      "getRowData",
-      (index) =>
-        addon.data.prefs?.rows[index] || {
-          title: "no data",
-          detail: "no data",
-        },
-    )
-    // Show a progress window when selection changes
-    .setProp("onSelectionChange", (selection) => {
-      new ztoolkit.ProgressWindow(config.addonName)
-        .createLine({
-          text: `Selected line: ${addon.data.prefs?.rows
-            .filter((v, i) => selection.isSelected(i))
-            .map((row) => row.title)
-            .join(",")}`,
-          progress: 100,
-        })
-        .show();
-    })
-    // When pressing delete, delete selected line and refresh table.
-    // Returning false to prevent default event.
-    .setProp("onKeyDown", (event: KeyboardEvent) => {
-      if (event.key == "Delete" || (Zotero.isMac && event.key == "Backspace")) {
-        addon.data.prefs!.rows =
-          addon.data.prefs?.rows.filter(
-            (v, i) => !tableHelper.treeInstance.selection.isSelected(i),
-          ) || [];
-        tableHelper.render();
-        return false;
+function bindMcpSettings(doc: Document): void {
+  const zoteroMcp = doc.querySelector("#claudero-pref-enable-zotero-mcp") as
+    | (HTMLElement & { checked?: boolean })
+    | null;
+  const servers = doc.querySelector<HTMLTextAreaElement>(
+    "#claudero-pref-mcp-servers",
+  );
+  const list = doc.querySelector<HTMLElement>("#claudero-pref-mcp-list");
+  const addStdio = doc.querySelector<HTMLButtonElement>(
+    "#claudero-pref-mcp-add-stdio",
+  );
+  const addHttp = doc.querySelector<HTMLButtonElement>(
+    "#claudero-pref-mcp-add-http",
+  );
+  const status = doc.querySelector<HTMLElement>("#claudero-pref-mcp-status");
+  const win = doc.defaultView;
+  const createHtml = <K extends keyof HTMLElementTagNameMap>(
+    tag: K,
+    className?: string,
+  ): HTMLElementTagNameMap[K] => {
+    const el = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      tag,
+    ) as HTMLElementTagNameMap[K];
+    if (className) el.className = className;
+    return el;
+  };
+
+  const readHelperToken = async (): Promise<string> => {
+    const tokenPath = [Zotero.Profile.dir, "claudero", "helper", ".token"].join(
+      "/",
+    );
+    try {
+      return (await (IOUtils as any).readUTF8(tokenPath)).trim();
+    } catch {
+      return "";
+    }
+  };
+
+  const testMcpServer = async (
+    config: ManagedMcpServerConfig,
+  ): Promise<{
+    success: boolean;
+    serverName?: string;
+    serverVersion?: string;
+    tools?: Array<{
+      name: string;
+      description?: string;
+      inputSchema?: Record<string, unknown>;
+      enabled: boolean;
+    }>;
+    error?: string;
+  }> => {
+    const port = Number(getPref("helperPort") || 38660);
+    const token = await readHelperToken();
+    const response = await fetch(`http://127.0.0.1:${port}/test-mcp`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ config }),
+    });
+    if (!response.ok) {
+      throw new Error(`Helper returned ${response.status}`);
+    }
+    return (await response.json() as unknown) as {
+      success: boolean;
+      serverName?: string;
+      serverVersion?: string;
+      tools?: Array<{
+        name: string;
+        description?: string;
+        inputSchema?: Record<string, unknown>;
+        enabled: boolean;
+      }>;
+      error?: string;
+    };
+  };
+
+  if (zoteroMcp) {
+    zoteroMcp.checked = isZoteroMcpEnabled();
+    zoteroMcp.addEventListener("command", () => {
+      setZoteroMcpEnabled(zoteroMcp.checked === true);
+    });
+    zoteroMcp.addEventListener("change", () => {
+      setZoteroMcpEnabled(zoteroMcp.checked === true);
+    });
+  }
+
+  const renderStatus = (raw: string) => {
+    if (!status) return;
+    const value = raw.trim();
+    status.classList.remove("error", "success");
+    if (!value) {
+      status.textContent = "No external MCP servers configured";
+      return;
+    }
+    try {
+      const count = Object.keys(parseCustomMcpServers(value)).length;
+      status.textContent = `MCP JSON saved (${count} server${count === 1 ? "" : "s"})`;
+      status.classList.add("success");
+    } catch (error) {
+      status.textContent =
+        error instanceof Error ? `Invalid MCP JSON: ${error.message}` : "Invalid MCP JSON";
+      status.classList.add("error");
+    }
+  };
+
+  const readManaged = (): Record<string, ManagedMcpServerConfig> => {
+    try {
+      return parseManagedMcpServers(servers?.value || "");
+    } catch {
+      return {};
+    }
+  };
+
+  const saveManaged = (
+    value: Record<string, ManagedMcpServerConfig>,
+  ): void => {
+    if (!servers) return;
+    servers.value = serializeManagedMcpServers(value);
+    setCustomMcpServersRaw(servers.value);
+    renderStatus(servers.value);
+    renderList();
+  };
+
+  const serverType = (config: ManagedMcpServerConfig): string => {
+    if (config.command) return "stdio";
+    const type = typeof config.type === "string" ? config.type : "";
+    if (type) return type;
+    return config.url ? "http" : "custom";
+  };
+
+  const serverPreview = (config: ManagedMcpServerConfig): string => {
+    if (config.command) {
+      const args = Array.isArray(config.args) ? config.args.join(" ") : "";
+      return [config.command, args].filter(Boolean).join(" ");
+    }
+    return String(config.url || "");
+  };
+
+  const renderList = () => {
+    if (!list) return;
+    list.replaceChildren();
+    const managed = readManaged();
+    const entries = Object.entries(managed);
+    if (entries.length === 0) {
+      const empty = doc.createElementNS(
+        "http://www.w3.org/1999/xhtml",
+        "div",
+      );
+      empty.className = "claudero-pref-mcp-empty";
+      empty.textContent = "No MCP servers configured.";
+      list.appendChild(empty);
+      return;
+    }
+    for (const [name, config] of entries) {
+      const card = createHtml("div");
+      card.className =
+        "claudero-pref-mcp-card" +
+        (config.enabled === false ? " disabled" : "");
+      const content = createHtml("div", "claudero-pref-mcp-card-content");
+      const row = createHtml("div", "claudero-pref-mcp-card-row");
+      const main = createHtml("div");
+      main.className = "claudero-pref-mcp-card-main";
+      const title = createHtml("div");
+      title.className = "claudero-pref-mcp-card-title";
+      title.textContent = name;
+      const meta = createHtml("div");
+      meta.className = "claudero-pref-mcp-card-meta";
+      meta.textContent = `${serverType(config)} · ${config.contextSaving ? "@" : "always"} · ${serverPreview(config) || "no command/url"}`;
+      main.append(title, meta);
+
+      const toolsPanel = createHtml("div", "claudero-pref-mcp-tools");
+      const actions = createHtml("div");
+      actions.className = "claudero-pref-mcp-card-actions";
+      const makeButton = (label: string, onClick: () => void) => {
+        const button = createHtml("button") as HTMLButtonElement;
+        button.type = "button";
+        button.textContent = label;
+        button.addEventListener("click", onClick);
+        return button;
+      };
+      actions.append(
+        makeButton("Verify", () => {
+          toolsPanel.textContent = "Testing...";
+          void testMcpServer(config)
+            .then((result) => {
+              toolsPanel.replaceChildren();
+              if (!result.success) {
+                toolsPanel.textContent = result.error || "Verification failed";
+                toolsPanel.classList.add("error");
+                return;
+              }
+              toolsPanel.classList.remove("error");
+              const heading = createHtml("div", "claudero-pref-mcp-tools-head");
+              const label = [result.serverName, result.serverVersion]
+                .filter(Boolean)
+                .join(" ");
+              heading.textContent = label
+                ? `${label} tools`
+                : "Available tools";
+              toolsPanel.appendChild(heading);
+              const toolRows = result.tools || [];
+              if (toolRows.length === 0) {
+                const empty = createHtml("div", "claudero-pref-mcp-tool-row");
+                empty.textContent = "No tools reported.";
+                toolsPanel.appendChild(empty);
+                return;
+              }
+              for (const tool of toolRows) {
+                const toolRow = createHtml("div", "claudero-pref-mcp-tool-row");
+                const body = createHtml("div", "claudero-pref-mcp-tool-body");
+                const toolName = createHtml("div", "claudero-pref-mcp-tool-name");
+                toolName.textContent = tool.name;
+                const desc = createHtml("div", "claudero-pref-mcp-tool-desc");
+                desc.textContent = tool.description || "";
+                body.append(toolName, desc);
+                const toggle = makeButton(tool.enabled ? "Disable" : "Enable", () => {
+                  const next = readManaged();
+                  const current = next[name] || {};
+                  const disabled = new Set(current.disabledTools || []);
+                  if (disabled.has(tool.name)) disabled.delete(tool.name);
+                  else disabled.add(tool.name);
+                  next[name] = {
+                    ...current,
+                    disabledTools: [...disabled].sort(),
+                  };
+                  saveManaged(next);
+                });
+                toolRow.append(body, toggle);
+                toolsPanel.appendChild(toolRow);
+              }
+            })
+            .catch((error) => {
+              toolsPanel.textContent =
+                error instanceof Error ? error.message : String(error);
+              toolsPanel.classList.add("error");
+            });
+        }),
+        makeButton(config.enabled === false ? "Enable" : "Disable", () => {
+          const next = readManaged();
+          next[name] = { ...next[name], enabled: config.enabled === false };
+          saveManaged(next);
+        }),
+        makeButton(config.contextSaving ? "Always" : "@", () => {
+          const next = readManaged();
+          next[name] = { ...next[name], contextSaving: !config.contextSaving };
+          saveManaged(next);
+        }),
+        makeButton("Edit", () => {
+          const raw = win?.prompt(
+            `Edit MCP server "${name}" JSON`,
+            JSON.stringify(config, null, 2),
+          );
+          if (raw === null || raw === undefined) return;
+          try {
+            const parsed = JSON.parse(raw) as ManagedMcpServerConfig;
+            const next = readManaged();
+            next[name] = parsed;
+            saveManaged(next);
+          } catch (error) {
+            win?.alert(
+              error instanceof Error ? error.message : "Invalid MCP JSON",
+            );
+          }
+        }),
+        makeButton("Delete", () => {
+          if (!win?.confirm(`Delete MCP server "${name}"?`)) return;
+          const next = readManaged();
+          delete next[name];
+          saveManaged(next);
+        }),
+      );
+      row.append(main, actions);
+      content.append(row, toolsPanel);
+      card.appendChild(content);
+      list.appendChild(card);
+    }
+  };
+
+  if (servers) {
+    servers.value = getCustomMcpServersRaw();
+    renderStatus(servers.value);
+    const save = () => {
+      try {
+        parseCustomMcpServers(servers.value);
+        setCustomMcpServersRaw(servers.value);
+      } catch {
+        // Keep invalid edits visible, but don't persist them.
       }
-      return true;
-    })
-    // For find-as-you-type
-    .setProp(
-      "getRowString",
-      (index) => addon.data.prefs?.rows[index].title || "",
-    )
-    // Render the table.
-    .render(-1, () => {
-      renderLock.resolve();
+      renderStatus(servers.value);
+      renderList();
+    };
+    servers.addEventListener("change", save);
+    servers.addEventListener("blur", save);
+    servers.addEventListener("input", () => {
+      renderStatus(servers.value);
+      renderList();
     });
-  await renderLock.promise;
-  ztoolkit.log("Preference table rendered!");
-}
+    renderList();
+  }
 
-function bindPrefEvents() {
-  addon.data
-    .prefs!.window.document?.querySelector(
-      `#zotero-prefpane-${config.addonRef}-enable`,
-    )
-    ?.addEventListener("command", (e: Event) => {
-      ztoolkit.log(e);
-      addon.data.prefs!.window.alert(
-        `Successfully changed to ${(e.target as XUL.Checkbox).checked}!`,
-      );
-    });
+  addStdio?.addEventListener("click", () => {
+    const name = win?.prompt("MCP server name", "filesystem")?.trim();
+    if (!name) return;
+    const command = win?.prompt("Command", "npx")?.trim();
+    if (!command) return;
+    const argsText =
+      win?.prompt(
+        "Arguments, separated by spaces",
+        "-y @modelcontextprotocol/server-filesystem /tmp",
+      ) || "";
+    const next = readManaged();
+    next[name] = {
+      enabled: true,
+      command,
+      args: argsText.split(/\s+/).filter(Boolean),
+    };
+    saveManaged(next);
+  });
 
-  addon.data
-    .prefs!.window.document?.querySelector(
-      `#zotero-prefpane-${config.addonRef}-input`,
-    )
-    ?.addEventListener("change", (e: Event) => {
-      ztoolkit.log(e);
-      addon.data.prefs!.window.alert(
-        `Successfully changed to ${(e.target as HTMLInputElement).value}!`,
-      );
-    });
+  addHttp?.addEventListener("click", () => {
+    const name = win?.prompt("MCP server name", "remote")?.trim();
+    if (!name) return;
+    const url = win?.prompt("HTTP/SSE URL", "http://127.0.0.1:3000/sse")?.trim();
+    if (!url) return;
+    const next = readManaged();
+    next[name] = { enabled: true, type: "sse", url };
+    saveManaged(next);
+  });
 }
