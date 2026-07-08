@@ -50,6 +50,7 @@ import {
   loadLatestConversation,
   saveCurrentConversation,
 } from "./conversationController";
+import { applyProviderSessionEvent } from "./providerSessionState";
 import { renderMarkdown } from "./messageRenderer";
 import { renderPromptIcon } from "./iconPickerView";
 import { showConversationHistoryPopup } from "./conversationHistoryView";
@@ -535,41 +536,6 @@ function restoreConversation(state: PaneState, conv: SavedConversation): void {
   applyConversation(state, conv);
   renderConversationTurns(state);
   setStatusDot(state, "ready");
-}
-
-function applyProviderSessionEvent(
-  state: PaneState,
-  session:
-    | {
-        provider: "claude" | "codex";
-        sessionId?: string;
-        threadId?: string;
-        sessionFilePath?: string;
-        turnId?: string;
-      }
-    | undefined,
-): void {
-  if (!session) return;
-  const providerState: ConversationProviderState = {
-    ...(state.providerState || {}),
-  };
-  if (session.provider === "codex") {
-    const codexState = {
-      ...(providerState.codex || {}),
-      threadId: session.threadId || providerState.codex?.threadId,
-      sessionFilePath:
-        session.sessionFilePath || providerState.codex?.sessionFilePath,
-    };
-    if (session.threadId) delete codexState.forkSource;
-    providerState.codex = codexState;
-  } else if (session.sessionId) {
-    providerState.claude = {
-      ...(providerState.claude || {}),
-      sessionId: session.sessionId,
-    };
-  }
-  if (session.turnId) state.currentProviderTurnId = session.turnId;
-  state.providerState = providerState;
 }
 
 async function restoreLatestConversation(state: PaneState): Promise<void> {
@@ -2273,8 +2239,11 @@ function attachMessageActions(
       ),
     );
     meta.appendChild(
-      createMessageActionButton(doc, "fork", "分叉", () =>
-        void forkConversationAtTurn(state, options.turnIndex),
+      createMessageActionButton(
+        doc,
+        "fork",
+        "分叉",
+        () => void forkConversationAtTurn(state, options.turnIndex),
       ),
     );
     meta.appendChild(time);
@@ -2298,8 +2267,11 @@ function attachMessageActions(
       );
     }
     meta.appendChild(
-      createMessageActionButton(doc, "fork", "分叉", () =>
-        void forkConversationAtTurn(state, options.turnIndex),
+      createMessageActionButton(
+        doc,
+        "fork",
+        "分叉",
+        () => void forkConversationAtTurn(state, options.turnIndex),
       ),
     );
   }
