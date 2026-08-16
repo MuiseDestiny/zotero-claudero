@@ -27,7 +27,7 @@ export interface CommandDefinition {
 }
 
 export interface ProviderSessionState {
-  provider: "claude" | "codex";
+  provider: "claude" | "codex" | "deepseek";
   sessionId?: string;
   threadId?: string;
   sessionFilePath?: string;
@@ -41,6 +41,13 @@ export type AgentStreamEvent =
   | { type: "text_snapshot"; text: string }
   | { type: "thinking"; text: string }
   | { type: "thinking_snapshot"; text: string }
+  | { type: "context_compaction"; phase: "started" | "completed" }
+  | {
+      type: "connection_status";
+      status: "reconnecting";
+      attempt: number;
+      maxAttempts: number;
+    }
   | { type: "tool_use"; tool: ToolUseEvent }
   | {
       type: "tool_use_delta";
@@ -66,7 +73,7 @@ export type AgentControlEvent = { type: "ready" } | { type: "done" };
 export type AgentEventPayload = AgentStreamEvent | AgentControlEvent;
 
 export interface AgentEventSource {
-  provider?: "claude" | "codex";
+  provider?: "claude" | "codex" | "deepseek";
   conversationId?: string;
   sessionId?: string;
   threadId?: string;
@@ -74,7 +81,9 @@ export interface AgentEventSource {
   runtime?: "helper" | "browser" | "test";
 }
 
-export interface AgentEventEnvelope<T extends AgentEventPayload = AgentEventPayload> {
+export interface AgentEventEnvelope<
+  T extends AgentEventPayload = AgentEventPayload,
+> {
   protocol: typeof AGENT_EVENT_PROTOCOL;
   version: typeof AGENT_EVENT_PROTOCOL_VERSION;
   id: string;
@@ -101,6 +110,8 @@ const EVENT_TYPES = new Set<string>([
   "text_snapshot",
   "thinking",
   "thinking_snapshot",
+  "context_compaction",
+  "connection_status",
   "tool_use",
   "tool_use_delta",
   "tool_result",
@@ -115,8 +126,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object";
 }
 
-export function isAgentEventPayload(value: unknown): value is AgentEventPayload {
-  return isRecord(value) && typeof value.type === "string" && EVENT_TYPES.has(value.type);
+export function isAgentEventPayload(
+  value: unknown,
+): value is AgentEventPayload {
+  return (
+    isRecord(value) &&
+    typeof value.type === "string" &&
+    EVENT_TYPES.has(value.type)
+  );
 }
 
 export function createAgentEventEnvelope<T extends AgentEventPayload>(
@@ -160,7 +177,10 @@ export class AgentEventRecorder {
     };
   }
 
-  record(event: AgentEventPayload, source: AgentEventSource = {}): AgentEventEnvelope {
+  record(
+    event: AgentEventPayload,
+    source: AgentEventSource = {},
+  ): AgentEventEnvelope {
     const envelope = createAgentEventEnvelope(event, {
       traceId: this.trace.traceId,
       sequence: ++this.sequence,

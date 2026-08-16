@@ -6,12 +6,14 @@ pref-provider = Default provider
 pref-tab-general = General
 pref-tab-claude = Claude
 pref-tab-codex = Codex
+pref-tab-deepseek = DeepSeek
 pref-tab-mcp = MCP
 pref-tab-skills = Skills
 pref-tab-diagnostics = Diagnostics
 pref-current-host = Current device key
 pref-claude-path = Claude Code CLI path
 pref-codex-path = Codex CLI path
+pref-deepseek-path = DeepSeek Harness CLI path
 pref-provider-env = Provider environment variables
 pref-codex-installation = Codex installation method
 pref-codex-installation-native =
@@ -45,4 +47,29 @@ pref-skills-import-placeholder =
 pref-skills-import-button = Import skill
 pref-diagnostics-refresh = Refresh diagnostics
 pref-diagnostics-export = Export diagnostic log
+pref-diagnostics-restart = Force restart services
 pref-help = { $name } Build { $version } { $time }
+pref-node-path-placeholder =
+    .placeholder = /opt/homebrew/bin/node
+pref-workspace-path-placeholder =
+    .placeholder = Leave empty to use the Zotero profile
+pref-proxy-placeholder =
+    .placeholder = http://127.0.0.1:7890 (leave empty to disable)
+pref-env-placeholder =
+    .placeholder = PATH=/opt/homebrew/bin:/usr/local/bin:$PATH
+pref-claude-path-placeholder =
+    .placeholder = /Users/you/.claude/local/claude
+pref-claude-env-placeholder =
+    .placeholder = ANTHROPIC_API_KEY=...
+pref-codex-path-placeholder =
+    .placeholder = /opt/homebrew/bin/codex
+pref-codex-wsl-placeholder =
+    .placeholder = Ubuntu
+pref-codex-env-placeholder =
+    .placeholder = OPENAI_API_KEY=...
+pref-deepseek-path-placeholder =
+    .placeholder = /opt/homebrew/bin/dsh
+pref-deepseek-env-placeholder =
+    .placeholder = DEEPSEEK_API_KEY=...\nDEEPSEEK_BASE_URL=https://api.deepseek.com
+pref-mcp-servers-placeholder =
+    .placeholder = Paste MCP servers JSON here

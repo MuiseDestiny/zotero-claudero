@@ -29,6 +29,8 @@ const entries: DiagnosticLogEntry[] = [];
 
 const EVIDENCE_TOOL_NAMES = new Set([
   "get_evidence_pack",
+  "get_numbered_evidence_pack",
+  "expand_evidence_range",
   "locate_quote",
   "verify_citations",
   "build_trust_report",

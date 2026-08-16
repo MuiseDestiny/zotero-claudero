@@ -9,36 +9,51 @@ on:
       - main
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
+  cross-platform:
+    name: ${{ matrix.os }} quality and runtime
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
     env:
-      GITHUB_TOKEN: ${{ secrets.GitHub_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Setup JS
         uses: zotero-plugin-dev/workflows/setup-js@main
+      - name: Use Node.js 24 for provider smoke tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Run Lint
         run: npm run lint:check
-
-  build:
-    runs-on: ubuntu-latest
-    env:
-      GITHUB_TOKEN: ${{ secrets.GitHub_TOKEN }}
-    steps:
-      - name: Setup JS
-        uses: zotero-plugin-dev/workflows/setup-js@main
       - name: Run Build
         run: npm run build
+      - name: Run provider runtime and platform tests
+        run: npm run test:runtime
+      - name: Run mock helper and CLI smoke
+        run: npm run test:helper:mock
+      - name: Run evidence contract smoke
+        run: npm run test:evidence:ci
       - name: Upload build result
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: build-result
           path: .scaffold/build
 
-  test:
+  zotero-browser:
+    name: Zotero browser tests (Ubuntu)
     runs-on: ubuntu-latest
     needs:
-      - build
+      - cross-platform
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Setup JS
         uses: zotero-plugin-dev/workflows/setup-js@main
-      - run: npm run test
+      - name: Run Zotero browser tests
+        run: npm run test

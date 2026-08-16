@@ -4,6 +4,8 @@
 // why the old menulist inevitably displayed "Haiku · Low" instead of just
 // "Low": the only way to surface the model in one collapsed widget was to
 // rewrite the menuitem label. Decoupling display from value fixes that.
+import { getString } from "../utils/locale";
+
 export interface DivSelect {
   value: string;
   disabled: boolean;
@@ -222,26 +224,25 @@ function confirmDangerousPermissionMode(doc: Document): Promise<boolean> {
     closeBtn.className = "claudero-danger-confirm-close";
     if (closeBtn.localName !== "toolbarbutton")
       (closeBtn as HTMLButtonElement).type = "button";
-    closeBtn.setAttribute("aria-label", "Cancel");
-    closeBtn.setAttribute("title", "Cancel");
-    closeBtn.setAttribute("tooltiptext", "Cancel");
+    closeBtn.setAttribute("aria-label", getString("ui-cancel"));
+    closeBtn.setAttribute("title", getString("ui-cancel"));
+    closeBtn.setAttribute("tooltiptext", getString("ui-cancel"));
     closeBtn.appendChild(closeSvg(doc));
 
     const title = createEl(doc, "div", "claudero-danger-confirm-title");
     title.id = "claudero-danger-confirm-title";
-    title.textContent = "Enable bypass permissions?";
+    title.textContent = getString("composer-bypass-title");
 
     const body = createEl(doc, "div", "claudero-danger-confirm-body");
-    body.textContent =
-      "Bypass permissions lets Claude use tools without approval. It can modify Zotero data and local files without another prompt.";
+    body.textContent = getString("composer-bypass-description");
 
     const actions = createEl(doc, "div", "claudero-danger-confirm-actions");
     const cancel = createEl(doc, "button", "claudero-danger-confirm-cancel");
     cancel.type = "button";
-    cancel.textContent = "Cancel";
+    cancel.textContent = getString("ui-cancel");
     const confirm = createEl(doc, "button", "claudero-danger-confirm-primary");
     confirm.type = "button";
-    confirm.textContent = "Enable bypass permissions";
+    confirm.textContent = getString("composer-bypass-confirm");
     actions.append(cancel, confirm);
     card.append(closeBtn, title, body, actions);
     overlay.appendChild(card);
@@ -606,13 +607,13 @@ export function createComposerView<S>(
   const atBtn = createEl(doc, "button", "claudero-at-button");
   atBtn.innerHTML = `<svg class="icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="16" height="16" aria-hidden="true"><path d="M554.76 549.889v341c0 26.51-21.491 48-48 48-26.51 0-48-21.49-48-48v-341H114.172c-26.51 0-48-21.49-48-48s21.49-48 48-48H458.76v-340c0-26.51 21.49-48 48-48s48 21.49 48 48v340h346.414c26.51 0 48 21.49 48 48s-21.49 48-48 48H554.76z" fill="currentColor"></path></svg>`;
   atBtn.setAttribute("tabindex", "-1");
-  atBtn.setAttribute("title", "Add context");
-  atBtn.setAttribute("aria-label", "Add context");
+  atBtn.setAttribute("title", getString("composer-add-context"));
+  atBtn.setAttribute("aria-label", getString("composer-add-context"));
 
   const spacer = createEl(doc, "div", "claudero-toolbar-spacer");
   const magicBtn = createEl(doc, "button", "claudero-magic-button");
   magicBtn.setAttribute("tabindex", "-1");
-  magicBtn.setAttribute("title", "Quick prompts");
+  magicBtn.setAttribute("title", getString("composer-quick-prompts"));
   magicBtn.innerHTML = `<svg class="icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="18" height="18"><path d="M591.296 912c-17.536 0-29.824-11.264-36.48-33.536-12.672-68.16-23.424-117.696-32.192-148.8a96.256 96.256 0 0 0-58.304-65.472c-30.08-13.696-83.456-25.856-160.384-36.48-21.248-3.904-31.936-15.68-31.936-35.2 0-21.248 10.24-32.832 30.528-34.752 76.8-12.672 130.368-25.28 160.384-37.952 29.44-10.88 51.712-35.328 59.712-65.664 8.768-32 19.52-81.664 32.128-148.8 6.848-22.272 19.008-33.344 36.544-33.344 19.328 0 31.616 11.072 36.352 33.344 11.776 67.136 22.336 116.8 32.128 148.8 8.96 30.272 31.552 54.592 61.12 65.664 31.104 12.672 84.672 25.28 160.384 37.952 20.48 2.816 30.72 14.592 30.72 34.944 0 19.328-10.24 31.104-30.72 34.944-75.712 10.56-129.28 22.848-160.384 36.352a100.48 100.48 0 0 0-61.12 65.664 1346.368 1346.368 0 0 0-32.128 153.152c-4.928 19.328-17.024 29.184-36.352 29.184zM271.68 432c-8.832 0-14.976-5.632-18.304-16.768-6.336-34.048-11.648-58.88-16.064-74.368a48.128 48.128 0 0 0-29.184-32.768c-14.976-6.848-41.664-12.928-80.128-18.24-10.624-1.92-16-7.872-16-17.6 0-10.624 5.12-16.384 15.296-17.408 38.4-6.272 65.152-12.608 80.128-18.944a48 48 0 0 0 29.888-32.832c4.416-16 9.728-40.832 16.064-74.368 3.456-11.2 9.472-16.704 18.304-16.704 9.6 0 15.744 5.504 18.176 16.64 5.824 33.6 11.136 58.432 16 74.432 4.48 15.168 15.808 27.328 30.592 32.832 15.552 6.336 42.304 12.672 80.192 18.944 10.24 1.408 15.36 7.296 15.36 17.472 0 9.664-5.12 15.552-15.36 17.536-37.888 5.248-64.64 11.392-80.192 18.176a50.24 50.24 0 0 0-30.528 32.832c-6.848 25.152-12.224 50.752-16.064 76.544-2.496 9.664-8.576 14.592-18.176 14.592z" fill="currentColor"/></svg>`;
 
   const sendButton = createEl(doc, "button", "claudero-send-button");
@@ -622,7 +623,7 @@ export function createComposerView<S>(
   readerChip.style.display = "none";
   textChip.style.display = "none";
   annotationChip.style.display = "none";
-  input.placeholder = "Ask anything about this paper...";
+  input.placeholder = getString("composer-ask-placeholder");
   input.rows = 2;
 
   chips.append(itemChip, readerChip, textChip, annotationChip);

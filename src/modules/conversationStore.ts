@@ -6,7 +6,8 @@ export interface ConversationImage {
   id: string;
   mediaType: string;
   data: string;
-  dataUrl: string;
+  /** Legacy history may contain this duplicate preview value. New records omit it. */
+  dataUrl?: string;
 }
 
 export interface ConversationTurn {
@@ -26,7 +27,9 @@ export interface ConversationTurn {
   contextSnapshot?: unknown;
   assistantMessageId?: string;
   sessionId?: string;
-  provider?: "claude" | "codex";
+  provider?: "claude" | "codex" | "deepseek";
+  /** Locator metadata for short evidence links; excluded from model history. */
+  evidenceReferences?: Record<string, unknown>;
 }
 
 export interface ConversationProviderState {
@@ -41,6 +44,9 @@ export interface ConversationProviderState {
       resumeAt?: string;
       sourceConversationId?: string;
     };
+  };
+  deepseek?: {
+    sessionId?: string;
   };
 }
 
@@ -58,6 +64,7 @@ export type ConversationBlock =
   | { type: "notice"; kind?: string; title: string; text: string };
 
 export interface SavedConversation {
+  schemaVersion: number;
   id: string;
   title: string;
   createdAt: number;
@@ -93,6 +100,41 @@ export interface ConversationIndexEntry {
   updatedAt: number;
   turnCount: number;
   titleSource?: "fallback" | "ai" | "user";
+  schemaVersion?: number;
+  byteSize?: number;
+}
+
+interface ConversationIndexDocument {
+  schemaVersion: number;
+  updatedAt: number;
+  entries: ConversationIndexEntry[];
+}
+
+export interface ConversationStoragePolicy {
+  maxConversations: number;
+  maxAgeDays: number;
+  maxTotalBytes: number;
+  maxConversationBytes: number;
+}
+
+export const CONVERSATION_SCHEMA_VERSION = 1;
+export const CONVERSATION_INDEX_SCHEMA_VERSION = 1;
+export const DEFAULT_CONVERSATION_STORAGE_POLICY: ConversationStoragePolicy = {
+  maxConversations: 200,
+  maxAgeDays: 365,
+  maxTotalBytes: 256 * 1024 * 1024,
+  maxConversationBytes: 32 * 1024 * 1024,
+};
+
+export class ConversationStorageError extends Error {
+  constructor(
+    readonly operation: string,
+    message: string,
+    readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = "ConversationStorageError";
+  }
 }
 
 export interface ConversationTitleChange {
@@ -117,7 +159,7 @@ function emitConversationTitleChange(change: ConversationTitleChange): void {
     try {
       listener(change);
     } catch (error) {
-      ztoolkit.log(`[History] title change listener failed: ${String(error)}`);
+      historyLog(`[History] title change listener failed: ${String(error)}`);
     }
   }
 }
@@ -130,12 +172,120 @@ function getHistoryDir(): string {
   return PathUtils.join(getClauderoDir(), "history");
 }
 
+function assertConversationId(id: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(id)) {
+    throw new ConversationStorageError(
+      "validate",
+      "Conversation ID contains unsupported characters.",
+    );
+  }
+  return id;
+}
+
+function getConversationPath(id: string): string {
+  return PathUtils.join(getHistoryDir(), `${assertConversationId(id)}.json`);
+}
+
 function getCustomPromptsPath(): string {
   return PathUtils.join(getClauderoDir(), "custom-prompts.json");
 }
 
 function getConversationIndexPath(): string {
   return PathUtils.join(getClauderoDir(), "conversation-index.json");
+}
+
+function backupPath(filePath: string): string {
+  return `${filePath}.bak`;
+}
+
+function temporaryPath(filePath: string): string {
+  return `${filePath}.tmp`;
+}
+
+function describeStorageError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function historyLog(message: string): void {
+  if (typeof ztoolkit !== "undefined") {
+    ztoolkit.log(message);
+  } else {
+    Zotero.debug(message);
+  }
+}
+
+async function atomicWriteUTF8(
+  filePath: string,
+  contents: string,
+  options: { backup?: boolean } = {},
+): Promise<void> {
+  await IOUtils.writeUTF8(filePath, contents, {
+    tmpPath: temporaryPath(filePath),
+    ...(options.backup === false ? {} : { backupFile: backupPath(filePath) }),
+    flush: true,
+    mode: "overwrite",
+  });
+}
+
+async function fileSize(filePath: string): Promise<number> {
+  try {
+    return Number((await IOUtils.stat(filePath)).size || 0);
+  } catch {
+    return 0;
+  }
+}
+
+async function conversationDiskSize(filePath: string): Promise<number> {
+  return (await fileSize(filePath)) + (await fileSize(backupPath(filePath)));
+}
+
+async function removeIfPresent(filePath: string): Promise<void> {
+  if (await IOUtils.exists(filePath)) await IOUtils.remove(filePath);
+}
+
+async function removeConversationFiles(id: string): Promise<void> {
+  const filePath = getConversationPath(id);
+  await removeIfPresent(filePath);
+  await removeIfPresent(backupPath(filePath));
+  await removeIfPresent(temporaryPath(filePath));
+  const quarantineDir = PathUtils.join(getHistoryDir(), "corrupt");
+  if (await IOUtils.exists(quarantineDir)) {
+    for (const candidate of await IOUtils.getChildren(quarantineDir)) {
+      if (PathUtils.filename(candidate).startsWith(`${id}-`)) {
+        await removeIfPresent(candidate);
+      }
+    }
+  }
+}
+
+async function quarantineConversationFiles(id: string): Promise<void> {
+  const filePath = getConversationPath(id);
+  const quarantineDir = PathUtils.join(getHistoryDir(), "corrupt");
+  await IOUtils.makeDirectory(quarantineDir, { createAncestors: true });
+  const suffix = Date.now();
+  for (const [candidate, label] of [
+    [filePath, "primary"],
+    [backupPath(filePath), "backup"],
+  ] as const) {
+    if (!(await IOUtils.exists(candidate))) continue;
+    await IOUtils.move(
+      candidate,
+      PathUtils.join(quarantineDir, `${id}-${suffix}-${label}.json`),
+    );
+  }
+  await removeIfPresent(temporaryPath(filePath));
+}
+
+let storageQueue: Promise<void> = Promise.resolve();
+let conversationIndexInitialized = false;
+
+function runStorageTask<T>(task: () => Promise<T>): Promise<T> {
+  const result = storageQueue.then(task, task);
+  storageQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
 }
 
 function conversationTitle(turns: ConversationTurn[]): string {
@@ -148,29 +298,324 @@ function conversationTitle(turns: ConversationTurn[]): string {
   return base.slice(0, 80) || "Untitled";
 }
 
-async function readConversationIndex(): Promise<ConversationIndexEntry[]> {
-  try {
-    const filePath = getConversationIndexPath();
-    if (!(await IOUtils.exists(filePath))) return [];
-    const data = JSON.parse(await IOUtils.readUTF8(filePath));
-    return Array.isArray(data) ? (data as ConversationIndexEntry[]) : [];
-  } catch {
-    return [];
+function normalizeConversation(
+  value: unknown,
+  fallbackId: string,
+): SavedConversation | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Partial<SavedConversation>;
+  if (
+    typeof raw.schemaVersion === "number" &&
+    raw.schemaVersion > CONVERSATION_SCHEMA_VERSION
+  ) {
+    return null;
   }
+  if (!Array.isArray(raw.turns) || raw.turns.length === 0) return null;
+  const id = typeof raw.id === "string" && raw.id ? raw.id : fallbackId;
+  try {
+    assertConversationId(id);
+  } catch {
+    return null;
+  }
+  const createdAt =
+    typeof raw.createdAt === "number" && Number.isFinite(raw.createdAt)
+      ? raw.createdAt
+      : raw.turns[0]?.ts || Date.now();
+  const updatedAt =
+    typeof raw.updatedAt === "number" && Number.isFinite(raw.updatedAt)
+      ? raw.updatedAt
+      : createdAt;
+  return {
+    ...raw,
+    schemaVersion: CONVERSATION_SCHEMA_VERSION,
+    id,
+    title:
+      typeof raw.title === "string" && raw.title.trim()
+        ? raw.title.trim().slice(0, 80)
+        : conversationTitle(raw.turns),
+    createdAt,
+    updatedAt,
+    turns: raw.turns,
+  } as SavedConversation;
+}
+
+function normalizeIndexEntries(
+  value: unknown,
+): ConversationIndexEntry[] | null {
+  if (!Array.isArray(value)) return null;
+  const entries: ConversationIndexEntry[] = [];
+  const ids = new Set<string>();
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const raw = candidate as Partial<ConversationIndexEntry>;
+    if (typeof raw.id !== "string" || ids.has(raw.id)) continue;
+    try {
+      assertConversationId(raw.id);
+    } catch {
+      continue;
+    }
+    ids.add(raw.id);
+    entries.push({
+      id: raw.id,
+      title:
+        typeof raw.title === "string" && raw.title.trim()
+          ? raw.title.trim().slice(0, 80)
+          : "Untitled",
+      createdAt: typeof raw.createdAt === "number" ? raw.createdAt : Date.now(),
+      updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : Date.now(),
+      turnCount:
+        typeof raw.turnCount === "number" ? Math.max(0, raw.turnCount) : 0,
+      titleSource: raw.titleSource,
+      schemaVersion:
+        typeof raw.schemaVersion === "number"
+          ? raw.schemaVersion
+          : CONVERSATION_SCHEMA_VERSION,
+      byteSize:
+        typeof raw.byteSize === "number"
+          ? Math.max(0, raw.byteSize)
+          : undefined,
+    });
+  }
+  return entries;
+}
+
+async function readJsonFile(filePath: string): Promise<unknown> {
+  return JSON.parse(await IOUtils.readUTF8(filePath)) as unknown;
+}
+
+async function readConversationFile(
+  id: string,
+): Promise<SavedConversation | null> {
+  const filePath = getConversationPath(id);
+  for (const [candidatePath, recovered] of [
+    [filePath, false],
+    [backupPath(filePath), true],
+  ] as const) {
+    try {
+      if (!(await IOUtils.exists(candidatePath))) continue;
+      const raw = await readJsonFile(candidatePath);
+      const normalized = normalizeConversation(raw, id);
+      if (!normalized) continue;
+      if (recovered) {
+        await atomicWriteUTF8(filePath, JSON.stringify(normalized, null, 2), {
+          backup: false,
+        });
+        historyLog(`[History] restored conversation ${id} from backup`);
+      } else if (
+        !raw ||
+        typeof raw !== "object" ||
+        (raw as Partial<SavedConversation>).schemaVersion !==
+          CONVERSATION_SCHEMA_VERSION
+      ) {
+        await atomicWriteUTF8(filePath, JSON.stringify(normalized, null, 2));
+        historyLog(`[History] migrated conversation ${id} schema`);
+      }
+      return normalized;
+    } catch (error) {
+      historyLog(
+        `[History] failed to read ${candidatePath}: ${describeStorageError(error)}`,
+      );
+    }
+  }
+  return null;
+}
+
+async function readConversationIndexDocument(): Promise<{
+  entries: ConversationIndexEntry[];
+  needsMigration: boolean;
+}> {
+  const filePath = getConversationIndexPath();
+  for (const [candidatePath, recovered] of [
+    [filePath, false],
+    [backupPath(filePath), true],
+  ] as const) {
+    try {
+      if (!(await IOUtils.exists(candidatePath))) continue;
+      const raw = await readJsonFile(candidatePath);
+      const legacyEntries = normalizeIndexEntries(raw);
+      const document =
+        raw && typeof raw === "object" && !Array.isArray(raw)
+          ? (raw as Partial<ConversationIndexDocument>)
+          : null;
+      const documentEntries = normalizeIndexEntries(document?.entries);
+      const entries = legacyEntries || documentEntries;
+      if (!entries) continue;
+      const needsMigration =
+        !!legacyEntries ||
+        document?.schemaVersion !== CONVERSATION_INDEX_SCHEMA_VERSION;
+      if (recovered) {
+        await writeConversationIndex(entries, { backup: false });
+        historyLog("[History] restored conversation index from backup");
+      }
+      return { entries, needsMigration: needsMigration || recovered };
+    } catch (error) {
+      historyLog(
+        `[History] failed to read ${candidatePath}: ${describeStorageError(error)}`,
+      );
+    }
+  }
+  return { entries: [], needsMigration: true };
 }
 
 async function writeConversationIndex(
   entries: ConversationIndexEntry[],
+  options: { backup?: boolean } = {},
 ): Promise<void> {
-  try {
-    await IOUtils.makeDirectory(getClauderoDir(), { createAncestors: true });
-    await IOUtils.writeUTF8(
-      getConversationIndexPath(),
-      JSON.stringify(entries, null, 2),
-    );
-  } catch {
-    // Best effort.
+  await IOUtils.makeDirectory(getClauderoDir(), { createAncestors: true });
+  const document: ConversationIndexDocument = {
+    schemaVersion: CONVERSATION_INDEX_SCHEMA_VERSION,
+    updatedAt: Date.now(),
+    entries: [...entries].sort(
+      (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+    ),
+  };
+  await atomicWriteUTF8(
+    getConversationIndexPath(),
+    JSON.stringify(document, null, 2),
+    options,
+  );
+}
+
+function entryFromConversation(
+  conversation: SavedConversation,
+  byteSize: number,
+): ConversationIndexEntry {
+  return {
+    id: conversation.id,
+    title: conversation.title,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+    turnCount: conversation.turns.length,
+    titleSource: conversation.titleSource,
+    schemaVersion: conversation.schemaVersion,
+    byteSize,
+  };
+}
+
+export function selectRetainedConversationEntries(
+  entries: ConversationIndexEntry[],
+  policy: ConversationStoragePolicy = DEFAULT_CONVERSATION_STORAGE_POLICY,
+  protectedId?: string,
+  now = Date.now(),
+): {
+  retained: ConversationIndexEntry[];
+  removed: ConversationIndexEntry[];
+} {
+  const maxAgeMs = Math.max(0, policy.maxAgeDays) * 24 * 60 * 60 * 1000;
+  const cutoff = maxAgeMs > 0 ? now - maxAgeMs : Number.NEGATIVE_INFINITY;
+  const sorted = [...entries].sort((a, b) => {
+    if (a.id === protectedId && b.id !== protectedId) return -1;
+    if (b.id === protectedId && a.id !== protectedId) return 1;
+    return (b.updatedAt || 0) - (a.updatedAt || 0);
+  });
+  const retained: ConversationIndexEntry[] = [];
+  const removed: ConversationIndexEntry[] = [];
+  let totalBytes = 0;
+  for (const entry of sorted) {
+    const protectedEntry = entry.id === protectedId;
+    const byteSize = Math.max(0, entry.byteSize || 0);
+    const expired = !protectedEntry && (entry.updatedAt || 0) < cutoff;
+    const overCount =
+      !protectedEntry &&
+      retained.length >= Math.max(1, policy.maxConversations);
+    const overQuota =
+      !protectedEntry &&
+      retained.length > 0 &&
+      totalBytes + byteSize > Math.max(1, policy.maxTotalBytes);
+    if (expired || overCount || overQuota) {
+      removed.push(entry);
+      continue;
+    }
+    retained.push(entry);
+    totalBytes += byteSize;
   }
+  retained.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return { retained, removed };
+}
+
+async function scanConversationDirectory(): Promise<ConversationIndexEntry[]> {
+  const dir = getHistoryDir();
+  if (!(await IOUtils.exists(dir))) return [];
+  const children = await IOUtils.getChildren(dir);
+  const entries: ConversationIndexEntry[] = [];
+  for (const filePath of children) {
+    const leafName = PathUtils.filename(filePath);
+    if (!leafName.endsWith(".json")) continue;
+    const id = leafName.slice(0, -".json".length);
+    try {
+      const conversation = await readConversationFile(id);
+      if (!conversation) continue;
+      entries.push(
+        entryFromConversation(
+          conversation,
+          await conversationDiskSize(getConversationPath(id)),
+        ),
+      );
+    } catch (error) {
+      historyLog(
+        `[History] skipped invalid conversation file ${leafName}: ${describeStorageError(error)}`,
+      );
+    }
+  }
+  return entries;
+}
+
+async function hydrateEntrySizes(
+  entries: ConversationIndexEntry[],
+): Promise<ConversationIndexEntry[]> {
+  return Promise.all(
+    entries.map(async (entry) => ({
+      ...entry,
+      byteSize: await conversationDiskSize(getConversationPath(entry.id)),
+    })),
+  );
+}
+
+async function applyRetentionPolicy(
+  entries: ConversationIndexEntry[],
+  policy: ConversationStoragePolicy,
+  protectedId?: string,
+): Promise<ConversationIndexEntry[]> {
+  const sizedEntries = await hydrateEntrySizes(entries);
+  const { retained, removed } = selectRetainedConversationEntries(
+    sizedEntries,
+    policy,
+    protectedId,
+  );
+  for (const entry of removed) {
+    await removeConversationFiles(entry.id);
+  }
+  await writeConversationIndex(retained);
+  if (removed.length) {
+    historyLog(`[History] retention removed ${removed.length} conversation(s)`);
+  }
+  return retained;
+}
+
+async function ensureConversationIndex(): Promise<ConversationIndexEntry[]> {
+  const current = await readConversationIndexDocument();
+  if (conversationIndexInitialized && !current.needsMigration) {
+    return current.entries;
+  }
+
+  const scanned = await scanConversationDirectory();
+  const merged = new Map<string, ConversationIndexEntry>();
+  for (const entry of current.entries) merged.set(entry.id, entry);
+  for (const entry of scanned) merged.set(entry.id, entry);
+  conversationIndexInitialized = true;
+  return applyRetentionPolicy(
+    [...merged.values()],
+    DEFAULT_CONVERSATION_STORAGE_POLICY,
+  );
+}
+
+export function enforceConversationRetention(
+  policy: ConversationStoragePolicy = DEFAULT_CONVERSATION_STORAGE_POLICY,
+): Promise<void> {
+  return runStorageTask(async () => {
+    const entries = await ensureConversationIndex();
+    await applyRetentionPolicy(entries, policy);
+  });
 }
 
 export function newConversationId(): string {
@@ -191,92 +636,64 @@ export async function saveConversationData(
   > = {},
 ): Promise<void> {
   if (turns.length === 0) return;
-  try {
-    const dir = getHistoryDir();
-    await IOUtils.makeDirectory(dir, { createAncestors: true });
-    const filePath = PathUtils.join(dir, `${id}.json`);
-    let existingTitle = "";
-    let existingCreatedAt: number | undefined;
-    let existingTitleSource: SavedConversation["titleSource"];
-    let existingProviderState: SavedConversation["providerState"];
-    let existingParentConversationId: string | undefined;
-    let existingForkedAtTurnIndex: number | undefined;
-    let existingCompactedAt: number | undefined;
+  return runStorageTask(async () => {
     try {
-      if (await IOUtils.exists(filePath)) {
-        const existing = JSON.parse(
-          await IOUtils.readUTF8(filePath),
-        ) as Partial<SavedConversation>;
-        existingTitle =
-          typeof existing.title === "string" ? existing.title.trim() : "";
-        existingCreatedAt =
-          typeof existing.createdAt === "number"
-            ? existing.createdAt
-            : undefined;
-        existingTitleSource = existing.titleSource;
-        existingProviderState = existing.providerState;
-        existingParentConversationId =
-          typeof existing.parentConversationId === "string"
-            ? existing.parentConversationId
-            : undefined;
-        existingForkedAtTurnIndex =
-          typeof existing.forkedAtTurnIndex === "number"
-            ? existing.forkedAtTurnIndex
-            : undefined;
-        existingCompactedAt =
-          typeof existing.compactedAt === "number"
-            ? existing.compactedAt
-            : undefined;
+      assertConversationId(id);
+      const dir = getHistoryDir();
+      await IOUtils.makeDirectory(dir, { createAncestors: true });
+      const index = await ensureConversationIndex();
+      const existing = await readConversationFile(id);
+      const indexEntry = index.find((entry) => entry.id === id);
+      const existingTitle = existing?.title?.trim() || indexEntry?.title || "";
+      const title = existingTitle || conversationTitle(turns);
+      const data: SavedConversation = {
+        schemaVersion: CONVERSATION_SCHEMA_VERSION,
+        id,
+        title,
+        createdAt: existing?.createdAt ?? turns[0]?.ts ?? Date.now(),
+        updatedAt: Date.now(),
+        turns,
+        titleSource:
+          existing?.titleSource ||
+          indexEntry?.titleSource ||
+          (existingTitle ? undefined : "fallback"),
+        providerState: metadata.providerState ?? existing?.providerState,
+        parentConversationId:
+          metadata.parentConversationId ?? existing?.parentConversationId,
+        forkedAtTurnIndex:
+          metadata.forkedAtTurnIndex ?? existing?.forkedAtTurnIndex,
+        compactedAt: metadata.compactedAt ?? existing?.compactedAt,
+      };
+      const serialized = JSON.stringify(data, null, 2);
+      const encodedBytes = new TextEncoder().encode(serialized).byteLength;
+      if (
+        encodedBytes > DEFAULT_CONVERSATION_STORAGE_POLICY.maxConversationBytes
+      ) {
+        throw new ConversationStorageError(
+          "save",
+          `Conversation is ${Math.ceil(encodedBytes / 1024 / 1024)} MB and exceeds the ${Math.floor(DEFAULT_CONVERSATION_STORAGE_POLICY.maxConversationBytes / 1024 / 1024)} MB per-conversation limit. Remove large image attachments or start a new conversation.`,
+        );
       }
-    } catch {
-      existingTitle = "";
-      existingCreatedAt = undefined;
-      existingTitleSource = undefined;
-      existingProviderState = undefined;
-      existingParentConversationId = undefined;
-      existingForkedAtTurnIndex = undefined;
-      existingCompactedAt = undefined;
-    }
-    if (!existingTitle) {
-      const indexEntry = (await readConversationIndex()).find(
-        (entry) => entry.id === id,
+      const filePath = getConversationPath(id);
+      await atomicWriteUTF8(filePath, serialized);
+      const nextIndex = index.filter((entry) => entry.id !== id);
+      nextIndex.unshift(
+        entryFromConversation(data, await conversationDiskSize(filePath)),
       );
-      existingTitle = indexEntry?.title?.trim() || "";
-      existingTitleSource = indexEntry?.titleSource;
+      await applyRetentionPolicy(
+        nextIndex,
+        DEFAULT_CONVERSATION_STORAGE_POLICY,
+        id,
+      );
+    } catch (error) {
+      if (error instanceof ConversationStorageError) throw error;
+      throw new ConversationStorageError(
+        "save",
+        `Claudero could not save this conversation: ${describeStorageError(error)}`,
+        error,
+      );
     }
-    const title = existingTitle || conversationTitle(turns);
-    const data: SavedConversation = {
-      id,
-      title,
-      createdAt: existingCreatedAt ?? turns[0]?.ts ?? Date.now(),
-      updatedAt: Date.now(),
-      turns,
-      titleSource:
-        existingTitleSource || (existingTitle ? undefined : "fallback"),
-      providerState: metadata.providerState ?? existingProviderState,
-      parentConversationId:
-        metadata.parentConversationId ?? existingParentConversationId,
-      forkedAtTurnIndex:
-        metadata.forkedAtTurnIndex ?? existingForkedAtTurnIndex,
-      compactedAt: metadata.compactedAt ?? existingCompactedAt,
-    };
-    await IOUtils.writeUTF8(filePath, JSON.stringify(data, null, 2));
-    const index = (await readConversationIndex()).filter(
-      (entry) => entry.id !== id,
-    );
-    index.unshift({
-      id,
-      title,
-      createdAt: data.createdAt,
-      updatedAt: data.updatedAt,
-      turnCount: turns.length,
-      titleSource: data.titleSource,
-    });
-    index.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    await writeConversationIndex(index.slice(0, 200));
-  } catch {
-    // Best effort — conversation history should not block chat.
-  }
+  });
 }
 
 export async function renameConversation(
@@ -290,23 +707,18 @@ export async function renameConversation(
 ): Promise<boolean> {
   const cleanTitle = title.replace(/\s+/g, " ").trim().slice(0, 80);
   if (!id || !cleanTitle) return false;
-  try {
-    const filePath = PathUtils.join(getHistoryDir(), `${id}.json`);
-    let currentTitle = "";
-    let currentSource: SavedConversation["titleSource"];
-    let persisted = false;
-    if (await IOUtils.exists(filePath)) {
-      const data = JSON.parse(
-        await IOUtils.readUTF8(filePath),
-      ) as SavedConversation;
-      currentTitle = data.title || "";
-      currentSource = data.titleSource;
+  return runStorageTask(async () => {
+    try {
+      const data = await readConversationFile(id);
+      if (!data) return false;
+      const currentTitle = data.title || "";
+      const currentSource = data.titleSource;
       if (
         (options.expectedTitle !== undefined &&
           currentTitle !== options.expectedTitle) ||
         (options.onlyIfNoUserTitle && currentSource === "user")
       ) {
-        ztoolkit.log(
+        historyLog(
           `[History] rename CAS rejected id=${id} expected=${JSON.stringify(options.expectedTitle ?? null)} actual=${JSON.stringify(currentTitle)} source=${currentSource || "legacy"}`,
         );
         return false;
@@ -314,70 +726,42 @@ export async function renameConversation(
       data.title = cleanTitle;
       data.titleSource = options.source || "user";
       data.updatedAt = Date.now();
-      await IOUtils.writeUTF8(filePath, JSON.stringify(data, null, 2));
-      persisted = true;
-    }
-    const index = await readConversationIndex();
-    const idx = index.findIndex((entry) => entry.id === id);
-    if (idx >= 0) {
-      if (!currentTitle) {
-        currentTitle = index[idx]!.title || "";
-        currentSource = index[idx]!.titleSource;
-        if (
-          (options.expectedTitle !== undefined &&
-            currentTitle !== options.expectedTitle) ||
-          (options.onlyIfNoUserTitle && currentSource === "user")
-        ) {
-          ztoolkit.log(
-            `[History] rename index CAS rejected id=${id} expected=${JSON.stringify(options.expectedTitle ?? null)} actual=${JSON.stringify(currentTitle)} source=${currentSource || "legacy"}`,
-          );
-          return false;
-        }
-      }
-      index[idx] = {
-        ...index[idx],
-        title: cleanTitle,
-        titleSource: options.source || "user",
-        updatedAt: Date.now(),
-      };
+      const filePath = getConversationPath(id);
+      await atomicWriteUTF8(filePath, JSON.stringify(data, null, 2));
+      const index = (await ensureConversationIndex()).filter(
+        (entry) => entry.id !== id,
+      );
+      index.unshift(
+        entryFromConversation(data, await conversationDiskSize(filePath)),
+      );
       await writeConversationIndex(index);
-      persisted = true;
-    }
-    if (persisted) {
       emitConversationTitleChange({
         id,
         title: cleanTitle,
         source: options.source || "user",
       });
+      return true;
+    } catch (error) {
+      historyLog(
+        `[History] rename persistence failed id=${id}: ${describeStorageError(error)}`,
+      );
+      return false;
     }
-    return persisted;
-  } catch (error) {
-    // Best effort.
-    ztoolkit.log(
-      `[History] rename persistence failed id=${id}: ${String(error)}`,
-    );
-    return false;
-  }
+  });
 }
 
 export async function getConversationTitle(id: string): Promise<string | null> {
   if (!id) return null;
   try {
-    const filePath = PathUtils.join(getHistoryDir(), `${id}.json`);
-    if (await IOUtils.exists(filePath)) {
-      const data = JSON.parse(
-        await IOUtils.readUTF8(filePath),
-      ) as Partial<SavedConversation>;
-      if (typeof data.title === "string" && data.title.trim()) {
-        return data.title.trim();
-      }
-    }
+    const data = await readConversationFile(id);
+    if (data?.title.trim()) return data.title.trim();
     return (
-      (await readConversationIndex()).find((entry) => entry.id === id)?.title ||
-      null
+      (await readConversationIndexDocument()).entries.find(
+        (entry) => entry.id === id,
+      )?.title || null
     );
   } catch (error) {
-    ztoolkit.log(
+    historyLog(
       `[History] failed to read latest title id=${id}: ${String(error)}`,
     );
     return null;
@@ -386,65 +770,112 @@ export async function getConversationTitle(id: string): Promise<string | null> {
 
 export async function deleteConversation(id: string): Promise<void> {
   if (!id) return;
-  try {
-    const filePath = PathUtils.join(getHistoryDir(), `${id}.json`);
-    if (await IOUtils.exists(filePath)) {
-      await IOUtils.remove(filePath);
+  return runStorageTask(async () => {
+    try {
+      await removeConversationFiles(id);
+      const index = (await ensureConversationIndex()).filter(
+        (entry) => entry.id !== id,
+      );
+      await writeConversationIndex(index);
+    } catch (error) {
+      throw new ConversationStorageError(
+        "delete",
+        `Claudero could not permanently delete this conversation: ${describeStorageError(error)}`,
+        error,
+      );
     }
-  } catch {
-    // Best effort.
-  }
-  try {
-    const index = (await readConversationIndex()).filter(
-      (entry) => entry.id !== id,
-    );
-    await writeConversationIndex(index);
-  } catch {
-    // Best effort.
-  }
+  });
+}
+
+export function deleteAllConversations(): Promise<void> {
+  return runStorageTask(async () => {
+    try {
+      await IOUtils.remove(getHistoryDir(), {
+        recursive: true,
+        ignoreAbsent: true,
+        retryReadonly: true,
+      });
+      await IOUtils.makeDirectory(getHistoryDir(), { createAncestors: true });
+      await writeConversationIndex([]);
+      conversationIndexInitialized = true;
+    } catch (error) {
+      throw new ConversationStorageError(
+        "delete-all",
+        `Claudero could not permanently delete all conversations: ${describeStorageError(error)}`,
+        error,
+      );
+    }
+  });
+}
+
+export function exportConversationToFile(
+  id: string,
+  destinationPath: string,
+): Promise<void> {
+  return runStorageTask(async () => {
+    try {
+      const conversation = await readConversationFile(id);
+      if (!conversation) {
+        throw new Error(
+          "Conversation was not found or could not be recovered.",
+        );
+      }
+      const exported = {
+        format: "claudero-conversation",
+        exportVersion: 1,
+        exportedAt: new Date().toISOString(),
+        conversation,
+      };
+      await atomicWriteUTF8(
+        destinationPath,
+        JSON.stringify(exported, null, 2),
+        { backup: false },
+      );
+    } catch (error) {
+      throw new ConversationStorageError(
+        "export",
+        `Claudero could not export this conversation: ${describeStorageError(error)}`,
+        error,
+      );
+    }
+  });
 }
 
 export async function listConversationIndex(): Promise<
   ConversationIndexEntry[]
 > {
-  const index = await readConversationIndex();
-  if (index.length)
-    return index.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  const conversations = await listConversations();
-  return conversations.map((conv) => ({
-    id: conv.id,
-    title: conv.title,
-    createdAt: conv.createdAt,
-    updatedAt: conv.updatedAt,
-    turnCount: conv.turns.length,
-    titleSource: conv.titleSource,
-  }));
+  return runStorageTask(async () =>
+    (await ensureConversationIndex()).sort(
+      (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+    ),
+  );
 }
 
 export async function listConversations(): Promise<SavedConversation[]> {
-  try {
-    const dir = getHistoryDir();
-    if (!(await IOUtils.exists(dir))) return [];
-    const children: string[] = await (IOUtils as any).getChildren(dir);
+  return runStorageTask(async () => {
+    const index = await ensureConversationIndex();
     const conversations: SavedConversation[] = [];
-    for (const filePath of children) {
-      if (!filePath.endsWith(".json")) continue;
-      try {
-        const data = JSON.parse(
-          await IOUtils.readUTF8(filePath),
-        ) as SavedConversation;
-        if (data && Array.isArray(data.turns) && data.turns.length > 0) {
-          conversations.push(data);
-        }
-      } catch {
-        // Skip corrupt history entries.
+    const unreadableIds: string[] = [];
+    for (const entry of index) {
+      const conversation = await readConversationFile(entry.id);
+      if (conversation) {
+        conversations.push(conversation);
+      } else {
+        unreadableIds.push(entry.id);
       }
+    }
+    if (unreadableIds.length) {
+      for (const id of unreadableIds) await quarantineConversationFiles(id);
+      await writeConversationIndex(
+        index.filter((entry) => !unreadableIds.includes(entry.id)),
+      );
+      historyLog(
+        `[History] quarantined ${unreadableIds.length} unreadable conversation(s)`,
+      );
     }
     conversations.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     return conversations;
-  } catch {
-    return [];
-  }
+  });
 }
 
 export async function loadCustomPrompts(): Promise<CustomPrompt[]> {

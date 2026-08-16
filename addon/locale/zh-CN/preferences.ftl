@@ -6,12 +6,14 @@ pref-provider = 默认服务
 pref-tab-general = 通用
 pref-tab-claude = Claude
 pref-tab-codex = Codex
+pref-tab-deepseek = DeepSeek
 pref-tab-mcp = MCP
 pref-tab-skills = Skills
 pref-tab-diagnostics = 诊断
 pref-current-host = 当前设备键
 pref-claude-path = Claude Code CLI 路径
 pref-codex-path = Codex CLI 路径
+pref-deepseek-path = DeepSeek Harness CLI 路径
 pref-provider-env = 服务环境变量
 pref-codex-installation = Codex 安装方式
 pref-codex-installation-native =
@@ -45,4 +47,29 @@ pref-skills-import-placeholder =
 pref-skills-import-button = 导入 Skill
 pref-diagnostics-refresh = 刷新诊断
 pref-diagnostics-export = 导出诊断日志
+pref-diagnostics-restart = 强制重启服务
 pref-help = { $name } Build { $version } { $time }
+pref-node-path-placeholder =
+    .placeholder = /opt/homebrew/bin/node
+pref-workspace-path-placeholder =
+    .placeholder = 留空则使用 Zotero 配置目录
+pref-proxy-placeholder =
+    .placeholder = http://127.0.0.1:7890（留空表示禁用）
+pref-env-placeholder =
+    .placeholder = PATH=/opt/homebrew/bin:/usr/local/bin:$PATH
+pref-claude-path-placeholder =
+    .placeholder = /Users/you/.claude/local/claude
+pref-claude-env-placeholder =
+    .placeholder = ANTHROPIC_API_KEY=...
+pref-codex-path-placeholder =
+    .placeholder = /opt/homebrew/bin/codex
+pref-codex-wsl-placeholder =
+    .placeholder = Ubuntu
+pref-codex-env-placeholder =
+    .placeholder = OPENAI_API_KEY=...
+pref-deepseek-path-placeholder =
+    .placeholder = /opt/homebrew/bin/dsh
+pref-deepseek-env-placeholder =
+    .placeholder = DEEPSEEK_API_KEY=...\nDEEPSEEK_BASE_URL=https://api.deepseek.com
+pref-mcp-servers-placeholder =
+    .placeholder = 在此粘贴 MCP servers JSON

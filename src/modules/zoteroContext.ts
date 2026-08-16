@@ -186,9 +186,13 @@ function getActiveCollectionContext(
   return undefined;
 }
 
-function getCurrentReaderObject(): any | null {
+function contextWindow(targetWindow?: Window | null): Window {
+  return targetWindow || Zotero.getMainWindow();
+}
+
+function getCurrentReaderObject(targetWindow?: Window | null): any | null {
   try {
-    const win = Zotero.getMainWindow() as Window & {
+    const win = contextWindow(targetWindow) as Window & {
       Zotero_Tabs?: { selectedID?: string; selectedType?: string };
       Zotero?: typeof Zotero & {
         Reader?: { getByTabID?: (tabID: string | undefined) => unknown };
@@ -201,14 +205,14 @@ function getCurrentReaderObject(): any | null {
   }
 }
 
-function getCurrentReaderStats(): {
+function getCurrentReaderStats(targetWindow?: Window | null): {
   pageIndex?: number;
   pageNumber?: number;
   pageLabel?: string;
   pagesCount?: number;
 } {
   try {
-    const reader = getCurrentReaderObject() as any;
+    const reader = getCurrentReaderObject(targetWindow) as any;
     if (!reader) return {};
     const Cu = (globalThis as any).Components?.utils;
     const rawInternal = reader._internalReader;
@@ -264,10 +268,15 @@ async function getAttachmentContext(
   };
 }
 
-export async function getSelectedZoteroContext(): Promise<ClauderoSelectionContext> {
-  const pane = Zotero.getActiveZoteroPane();
+export async function getSelectedZoteroContext(
+  targetWindow?: Window | null,
+): Promise<ClauderoSelectionContext> {
+  const win = contextWindow(targetWindow) as Window & {
+    ZoteroPane?: ReturnType<typeof Zotero.getActiveZoteroPane>;
+  };
+  const pane = win.ZoteroPane || Zotero.getActiveZoteroPane();
   const tabs = (
-    Zotero.getMainWindow() as Window & {
+    win as Window & {
       Zotero_Tabs?: { selectedType?: string; selectedID?: string };
     }
   ).Zotero_Tabs;
@@ -326,28 +335,28 @@ export async function getSelectedZoteroContext(): Promise<ClauderoSelectionConte
     selectedTabID,
     items,
     activeCollection: getActiveCollectionContext(pane),
-    reader: getCurrentReaderAttachmentContext(),
-    selectedText: truncateContextText(getSelectedReaderText(), 6000),
-    selectedAnnotations: getSelectedReaderAnnotations(),
+    reader: getCurrentReaderAttachmentContext(win),
+    selectedText: truncateContextText(getSelectedReaderText(win), 6000),
+    selectedAnnotations: getSelectedReaderAnnotations(win),
   };
 }
 
-export function getCurrentReaderFilePath(): string {
+export function getCurrentReaderFilePath(targetWindow?: Window | null): string {
   try {
-    const path = getCurrentReaderItem()?.getFilePath?.();
+    const path = getCurrentReaderItem(targetWindow)?.getFilePath?.();
     return typeof path === "string" ? path : "";
   } catch {
     return "";
   }
 }
 
-function getCurrentReaderAttachmentContext():
-  | ClauderoAttachmentContext
-  | undefined {
-  const item = getCurrentReaderItem();
+function getCurrentReaderAttachmentContext(
+  targetWindow?: Window | null,
+): ClauderoAttachmentContext | undefined {
+  const item = getCurrentReaderItem(targetWindow);
   if (!item) return undefined;
   const parent = item.parentItem;
-  const stats = getCurrentReaderStats();
+  const stats = getCurrentReaderStats(targetWindow);
   return {
     id: typeof item.id === "number" ? item.id : 0,
     key: typeof item.key === "string" ? item.key : "",
@@ -362,7 +371,7 @@ function getCurrentReaderAttachmentContext():
       typeof item.attachmentContentType === "string"
         ? item.attachmentContentType
         : "",
-    path: getCurrentReaderFilePath() || undefined,
+    path: getCurrentReaderFilePath(targetWindow) || undefined,
     parentItemID: parent?.id,
     parentItemKey: parent?.key,
     parentItemType: parent?.itemType,
@@ -373,13 +382,13 @@ function getCurrentReaderAttachmentContext():
   };
 }
 
-export function getCurrentReaderItem():
-  | (Zotero.Item & { getFilePath?: () => string })
-  | null {
+export function getCurrentReaderItem(
+  targetWindow?: Window | null,
+): (Zotero.Item & { getFilePath?: () => string }) | null {
   try {
     return (
       (
-        getCurrentReaderObject() as {
+        getCurrentReaderObject(targetWindow) as {
           _item?: Zotero.Item & { getFilePath?: () => string };
         } | null
       )?._item ?? null
@@ -389,9 +398,9 @@ export function getCurrentReaderItem():
   }
 }
 
-export function getSelectedReaderText(): string {
+export function getSelectedReaderText(targetWindow?: Window | null): string {
   try {
-    const win = Zotero.getMainWindow() as Window & {
+    const win = contextWindow(targetWindow) as Window & {
       Zotero_Tabs?: { selectedID?: string; selectedType?: string };
       Zotero?: typeof Zotero & {
         Reader?: {
@@ -410,9 +419,11 @@ export function getSelectedReaderText(): string {
   }
 }
 
-export function getSelectedReaderAnnotations(): ClauderoAnnotationContext[] {
+export function getSelectedReaderAnnotations(
+  targetWindow?: Window | null,
+): ClauderoAnnotationContext[] {
   try {
-    const win = Zotero.getMainWindow() as Window & {
+    const win = contextWindow(targetWindow) as Window & {
       Zotero_Tabs?: { selectedID?: string; selectedType?: string };
       Zotero?: typeof Zotero & {
         Reader?: { getByTabID?: (id: string | undefined) => unknown };

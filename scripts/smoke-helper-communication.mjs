@@ -96,6 +96,24 @@ function resolveProviderPath(provider) {
     );
   }
 
+  if (provider === "deepseek") {
+    const configured =
+      args["deepseek-path"] || process.env.CLAUDERO_SMOKE_DEEPSEEK_PATH;
+    if (isExecutableFile(configured)) return configured;
+    return (
+      findInPath(process.platform === "win32" ? "dsh.cmd" : "dsh") ||
+      firstExecutable([
+        path.join(homedir(), ".npm-global/bin/dsh"),
+        path.join(homedir(), ".local/bin/dsh"),
+        path.join(homedir(), ".bun/bin/dsh"),
+        path.join(homedir(), ".volta/bin/dsh"),
+        "/opt/homebrew/bin/dsh",
+        "/usr/local/bin/dsh",
+        "/usr/bin/dsh",
+      ])
+    );
+  }
+
   const configured =
     args["codex-path"] || process.env.CLAUDERO_SMOKE_CODEX_PATH;
   if (isExecutableFile(configured)) return configured;
@@ -270,6 +288,22 @@ function providerPayload(provider) {
       ),
     };
   }
+  if (provider === "deepseek") {
+    assert(
+      executablePath,
+      `${provider} CLI not found. Set --deepseek-path or CLAUDERO_SMOKE_DEEPSEEK_PATH.`,
+    );
+    return {
+      provider,
+      deepseekPath: executablePath,
+      model: String(
+        args["deepseek-model"] ||
+          process.env.CLAUDERO_SMOKE_DEEPSEEK_MODEL ||
+          "deepseek-v4-flash",
+      ),
+      effort: "none",
+    };
+  }
   if (!args["codex-auto-path"]) {
     assert(
       executablePath,
@@ -434,7 +468,10 @@ async function main() {
     .filter(Boolean);
   assert(
     providers.every(
-      (provider) => provider === "claude" || provider === "codex",
+      (provider) =>
+        provider === "claude" ||
+        provider === "codex" ||
+        provider === "deepseek",
     ),
     `Unsupported provider list: ${providersValue}`,
   );

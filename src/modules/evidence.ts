@@ -1,9 +1,22 @@
+import {
+  encodeEvidenceMarker,
+  encodeEvidenceReference,
+} from "../shared/evidenceLinkCodec";
+import { detectEvidenceContradiction } from "../shared/evidenceSemantics";
+import {
+  figurePageViewBox,
+  figureInspectionSearchPlan,
+  isRenderableCanvasLike,
+  selectFigurePageCandidate,
+} from "../shared/figureInspectionPolicy";
+
 export interface EvidenceLocator {
   itemId: number;
   itemKey: string;
   attachmentId?: number;
   attachmentKey?: string;
   title: string;
+  excerpt?: string;
   sourceType: "metadata" | "fulltext" | "pdfjs" | "annotation";
   pageIndex?: number;
   pageNumber?: number;
@@ -18,6 +31,7 @@ export interface EvidenceLocator {
 export interface EvidencePosition {
   pageIndex: number;
   rects?: number[][];
+  nextPageRects?: number[][];
   lines?: EvidenceLine[];
 }
 
@@ -31,8 +45,48 @@ export interface EvidenceParagraph {
   id: string;
   text: string;
   locator: EvidenceLocator;
+  markdownLink?: string;
   score?: number;
   matchReason?: string;
+}
+
+export interface NumberedEvidenceSource {
+  sourceId: string;
+  kind: "paragraph" | "annotation" | "metadata";
+  text: string;
+  locator: EvidenceLocator;
+  citationMarkdown: string;
+  pageNumber?: number;
+  paragraphIndex?: number;
+}
+
+export interface DocumentMapSection {
+  id: string;
+  title: string;
+  pageStart?: number;
+  pageEnd?: number;
+  printedPageStart?: number;
+  printedPageEnd?: number;
+  mapSource?: "pdf-outline" | "text-toc" | "page-chunk" | "annotations";
+  sourceStart: string;
+  sourceEnd: string;
+  paragraphCount: number;
+  samples: Array<{
+    sourceId: string;
+    pageNumber?: number;
+    excerpt: string;
+  }>;
+}
+
+export interface NumberedEvidencePack {
+  item: EvidencePack["item"];
+  attachment?: EvidencePack["attachment"];
+  mode: "full" | "map";
+  contextText: string;
+  sources: NumberedEvidenceSource[];
+  documentMap?: DocumentMapSection[];
+  warnings: string[];
+  citationGuidance: string[];
 }
 
 export interface EvidenceFigureTableCandidate {
@@ -94,6 +148,11 @@ export interface EvidenceImageInput {
 }
 
 export interface FigureTablePageInspection {
+  status: "candidate_found" | "not_found" | "page_needs_inspection";
+  found: boolean;
+  searchComplete: boolean;
+  terminal: boolean;
+  recommendedAction: string;
   target: {
     itemId?: number;
     attachmentId?: number;
@@ -235,12 +294,35 @@ interface TextPage {
   text: string;
 }
 
+interface DocumentOutlineEntry {
+  title: string;
+  pageNumber?: number;
+  level: number;
+}
+
+interface TocEntry {
+  title: string;
+  printedPage: number;
+  pageNumber?: number;
+  level: number;
+}
+
 interface PdfJsTextItem {
   str?: string;
   hasEOL?: boolean;
   transform?: number[];
   width?: number;
   height?: number;
+}
+
+interface ZoteroReaderChar {
+  c?: string;
+  rect?: number[];
+  inlineRect?: number[];
+  lineBreakAfter?: boolean;
+  spaceAfter?: boolean;
+  paragraphBreakAfter?: boolean;
+  ignorable?: boolean;
 }
 
 interface PdfJsLine {
@@ -253,6 +335,23 @@ interface PdfJsLine {
 interface PdfJsAppContext {
   app: any;
   pages: any[];
+  internalReader?: any;
+  view?: any;
+  primaryView?: any;
+}
+
+interface EvidenceCorpus {
+  item: Zotero.Item;
+  attachment?: Zotero.Item;
+  paragraphs: EvidenceParagraph[];
+  annotations: EvidenceParagraph[];
+  pageTexts: TextPage[];
+  outline: DocumentOutlineEntry[];
+  warnings: string[];
+  cachePath?: string;
+  indexState?: number;
+  path?: string;
+  pageCount?: number;
 }
 
 type CreatorLike = {
@@ -290,6 +389,169 @@ function compact(value: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
+function normalizeMapText(value: string): string {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/\u3000/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function mapTitleKey(value: string): string {
+  return normalizeMapText(value)
+    .replace(/\s+/g, "")
+    .replace(/[：:]/g, ":")
+    .replace(/[—–－-]+/g, "-")
+    .toLowerCase();
+}
+
+function cleanMapTitle(value: string): string {
+  return normalizeMapText(value)
+    .replace(/\s+/g, "")
+    .replace(/(?:\.|·|…|．)+$/g, "")
+    .trim();
+}
+
+function inferMapLevel(title: string): number {
+  if (/^第[一二三四五六七八九十百]+章/.test(title)) return 1;
+  if (/^第[一二三四五六七八九十百]+节/.test(title)) return 2;
+  if (/^[一二三四五六七八九十]+、/.test(title)) return 3;
+  if (/^本章小结$/.test(title)) return 2;
+  return 1;
+}
+
+function tocPageScore(text: string): number {
+  const value = normalizeMapText(text);
+  const titleHit = /目\s*录/.test(value) ? 8 : 0;
+  const chapterHits = (value.match(/第[一二三四五六七八九十百]+[章节]/g) || [])
+    .length;
+  const leaderHits = (value.match(/(?:\.|·|…|．){3,}/g) || []).length;
+  const trailingPageHits = (
+    value.match(
+      /[^\d](?:\d{1,3})(?=\s+(?:第|[一二三四五六七八九十]、|本章|参考|致|攻读|$))/g,
+    ) || []
+  ).length;
+  return titleHit + chapterHits + leaderHits + trailingPageHits;
+}
+
+function parseTocEntries(pageTexts: TextPage[]): TocEntry[] {
+  const tocPages = pageTexts
+    .filter((page) => typeof page.pageIndex !== "number" || page.pageIndex < 40)
+    .map((page) => ({ ...page, score: tocPageScore(page.text) }))
+    .filter((page) => page.score >= 8)
+    .slice(0, 8);
+  if (!tocPages.length) return [];
+
+  const joined = normalizeMapText(tocPages.map((page) => page.text).join(" "));
+  const pattern =
+    /(引\s*言|绪\s*论|结\s*论|第[一二三四五六七八九十百]+章\s*[^.…·．]{2,80}|第[一二三四五六七八九十百]+节\s*[^.…·．]{2,100}|[一二三四五六七八九十]+、\s*[^.…·．]{2,100}|本章小结|参考文献|致\s*谢|攻读学位期间研究成果|附\s*录)\s*(?:\.|·|…|．|\s){2,}\s*(\d{1,4})/g;
+  const entries: TocEntry[] = [];
+  const seen = new Set<string>();
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(joined))) {
+    const title = cleanMapTitle(match[1]);
+    const printedPage = Number(match[2]);
+    const key = `${title}:${printedPage}`;
+    if (!title || !Number.isFinite(printedPage) || seen.has(key)) continue;
+    seen.add(key);
+    entries.push({
+      title,
+      printedPage,
+      level: inferMapLevel(title),
+    });
+  }
+  return entries;
+}
+
+function matchingOutlineOffsets(
+  entries: TocEntry[],
+  outline: DocumentOutlineEntry[],
+): number[] {
+  const outlineByTitle = new Map<string, DocumentOutlineEntry[]>();
+  for (const entry of outline) {
+    if (!entry.pageNumber) continue;
+    const key = mapTitleKey(entry.title);
+    const list = outlineByTitle.get(key) || [];
+    list.push(entry);
+    outlineByTitle.set(key, list);
+  }
+  return entries.flatMap((entry) =>
+    (outlineByTitle.get(mapTitleKey(entry.title)) || []).map(
+      (outlineEntry) => Number(outlineEntry.pageNumber) - entry.printedPage,
+    ),
+  );
+}
+
+function textHeadingOffsets(
+  entries: TocEntry[],
+  pageTexts: TextPage[],
+): number[] {
+  const candidates = entries
+    .filter((entry) => entry.title.length >= 2)
+    .slice(0, 40);
+  const offsets: number[] = [];
+  for (const entry of candidates) {
+    const key = mapTitleKey(entry.title);
+    if (!key) continue;
+    for (const page of pageTexts) {
+      if (typeof page.pageIndex !== "number") continue;
+      const pageKey = mapTitleKey(compact(page.text, 260));
+      if (!pageKey.includes(key.slice(0, Math.min(key.length, 18)))) continue;
+      offsets.push(page.pageIndex + 1 - entry.printedPage);
+      break;
+    }
+  }
+  return offsets;
+}
+
+function dominantOffset(offsets: number[]): number | undefined {
+  const counts = new Map<number, number>();
+  for (const offset of offsets.filter(Number.isFinite)) {
+    counts.set(offset, (counts.get(offset) || 0) + 1);
+  }
+  const [offset, count] =
+    [...counts.entries()].sort((a, b) => b[1] - a[1])[0] || [];
+  return typeof offset === "number" && Number(count) >= 2 ? offset : undefined;
+}
+
+function resolveTocPages(
+  entries: TocEntry[],
+  outline: DocumentOutlineEntry[],
+  pageTexts: TextPage[],
+): TocEntry[] {
+  if (!entries.length) return [];
+  const offset =
+    dominantOffset(matchingOutlineOffsets(entries, outline)) ??
+    dominantOffset(textHeadingOffsets(entries, pageTexts));
+  if (typeof offset !== "number") return [];
+
+  const outlineByTitle = new Map<string, DocumentOutlineEntry[]>();
+  for (const entry of outline) {
+    if (!entry.pageNumber) continue;
+    const key = mapTitleKey(entry.title);
+    const list = outlineByTitle.get(key) || [];
+    list.push(entry);
+    outlineByTitle.set(key, list);
+  }
+
+  return entries.map((entry) => {
+    const expectedPage = entry.printedPage + offset;
+    const closest = (outlineByTitle.get(mapTitleKey(entry.title)) || [])
+      .map((candidate) => ({
+        candidate,
+        distance: Math.abs(Number(candidate.pageNumber) - expectedPage),
+      }))
+      .sort((a, b) => a.distance - b.distance)[0];
+    return {
+      ...entry,
+      pageNumber:
+        closest && closest.distance <= 2
+          ? closest.candidate.pageNumber
+          : expectedPage,
+    };
+  });
+}
+
 function dataUrlToImageInput(dataUrl?: string): EvidenceImageInput | undefined {
   const match = String(dataUrl || "").match(
     /^data:(image\/(?:jpeg|png));base64,(.+)$/i,
@@ -301,13 +563,93 @@ function dataUrlToImageInput(dataUrl?: string): EvidenceImageInput | undefined {
   };
 }
 
+const SEARCH_STOPWORDS = new Set([
+  "about",
+  "above",
+  "after",
+  "again",
+  "against",
+  "also",
+  "among",
+  "article",
+  "because",
+  "before",
+  "being",
+  "below",
+  "between",
+  "could",
+  "does",
+  "doing",
+  "during",
+  "find",
+  "from",
+  "give",
+  "given",
+  "have",
+  "having",
+  "into",
+  "main",
+  "more",
+  "most",
+  "only",
+  "original",
+  "paper",
+  "paragraph",
+  "quote",
+  "sentence",
+  "should",
+  "source",
+  "study",
+  "such",
+  "than",
+  "that",
+  "their",
+  "then",
+  "there",
+  "these",
+  "this",
+  "those",
+  "through",
+  "using",
+  "what",
+  "when",
+  "where",
+  "which",
+  "while",
+  "with",
+  "would",
+]);
+
+function cjkSearchTerms(sequence: string): string[] {
+  if (sequence.length <= 4) return [sequence];
+  const terms: string[] = [];
+  for (let index = 0; index < sequence.length - 1; index += 1) {
+    terms.push(sequence.slice(index, index + 2));
+  }
+  return terms;
+}
+
 function tokenize(value: string): string[] {
   const normalized = normalizeForMatch(value);
-  const latin = normalized.split(/\s+/).filter((term) => term.length > 2);
-  const cjk = Array.from(normalized.matchAll(/[\p{Script=Han}]{2,}/gu)).map(
-    (match) => match[0],
-  );
+  const latin = Array.from(
+    normalized.matchAll(/[\p{Script=Latin}\p{N}][\p{Script=Latin}\p{N}-]*/gu),
+  )
+    .map((match) => match[0])
+    .filter(
+      (term) => term.length > 2 && !SEARCH_STOPWORDS.has(term.toLowerCase()),
+    );
+  const cjk = Array.from(normalized.matchAll(/[\p{Script=Han}]{2,}/gu))
+    .flatMap((match) => cjkSearchTerms(match[0]))
+    .filter((term) => term.length > 1);
   return [...new Set([...latin, ...cjk])].slice(0, 80);
+}
+
+function minimumMatchScore(query: string): number {
+  const terms = tokenize(query);
+  if (!terms.length) return 1;
+  if (terms.length === 1) return 1;
+  if (terms.length === 2) return 0.5;
+  return Math.min(0.4, 2 / terms.length);
 }
 
 function scoreText(
@@ -317,6 +659,10 @@ function scoreText(
   const q = normalizeForMatch(query);
   const t = normalizeForMatch(text);
   if (!q || !t) return { score: 0, reason: "empty query" };
+  const contradiction = detectEvidenceContradiction(t, q);
+  if (contradiction) {
+    return { score: 0, reason: `possible contradiction: ${contradiction}` };
+  }
   if (t.includes(q)) return { score: 1, reason: "exact normalized match" };
 
   const terms = tokenize(q);
@@ -571,15 +917,34 @@ function itemRect(item: PdfJsTextItem): number[] | null {
   const x = Number(transform[4]);
   const y = Number(transform[5]);
   const width = Number(item.width || 0);
-  const height = Number(item.height || transform[0] || 0);
+  const height = Number(
+    item.height || Math.abs(transform[3] || transform[0]) || 0,
+  );
   if (![x, y, width, height].every(Number.isFinite)) return null;
-  return [x, y, x + Math.max(width, 0), y + Math.max(height, 0)];
+  const yPadding = Math.max(1.5, height * 0.35);
+  return [
+    x,
+    y - yPadding,
+    x + Math.max(width, 0),
+    y + Math.max(height, 0) + yPadding,
+  ];
 }
 
 function compactRects(rects: number[][]): number[][] {
   return rects
     .filter((rect) => rect.length === 4 && rect.every(Number.isFinite))
     .map((rect) => rect.map((value) => Number(value.toFixed(3))));
+}
+
+function boundingRect(rects: number[][]): number[] | null {
+  const valid = compactRects(rects);
+  if (!valid.length) return null;
+  return [
+    Math.min(...valid.map((rect) => rect[0])),
+    Math.min(...valid.map((rect) => rect[1])),
+    Math.max(...valid.map((rect) => rect[2])),
+    Math.max(...valid.map((rect) => rect[3])),
+  ];
 }
 
 function flushPdfJsLine(
@@ -598,6 +963,57 @@ function flushPdfJsLine(
   line.text = "";
   line.items = [];
   line.rects = [];
+}
+
+function flushReaderCharLine(
+  lines: PdfJsLine[],
+  pageIndex: number,
+  line: { text: string; rects: number[][] },
+): void {
+  const text = line.text.replace(/\s+/g, " ").trim();
+  const rect = boundingRect(line.rects);
+  if (text && rect) {
+    lines.push({
+      text,
+      items: [],
+      rects: compactRects([rect]),
+      pageIndex,
+    });
+  }
+  line.text = "";
+  line.rects = [];
+}
+
+function readerCharsToLines(
+  chars: ZoteroReaderChar[] | undefined,
+  pageIndex: number,
+): PdfJsLine[] {
+  if (!Array.isArray(chars) || !chars.length) return [];
+  const lines: PdfJsLine[] = [];
+  const line = { text: "", rects: [] as number[][] };
+  for (const char of chars) {
+    if (!char.ignorable) {
+      const text = String(char.c || "");
+      if (text) line.text += text;
+      const rect = Array.isArray(char.inlineRect) ? char.inlineRect : char.rect;
+      if (
+        Array.isArray(rect) &&
+        rect.length === 4 &&
+        rect.every((value) => Number.isFinite(Number(value)))
+      ) {
+        line.rects.push(rect.map((value) => Number(value)));
+      }
+      if (char.spaceAfter) line.text += " ";
+    }
+    if (char.lineBreakAfter || char.paragraphBreakAfter) {
+      flushReaderCharLine(lines, pageIndex, line);
+    }
+    if (char.paragraphBreakAfter) {
+      lines.push({ text: "", items: [], rects: [], pageIndex });
+    }
+  }
+  flushReaderCharLine(lines, pageIndex, line);
+  return lines;
 }
 
 function linesToParagraphs(lines: PdfJsLine[]): Array<{
@@ -693,7 +1109,13 @@ function getPdfJsAppContext(attachmentId: number): PdfJsAppContext | null {
       iframeWin?.PDFViewerApplication;
     const pages = app?.pdfViewer?._pages;
     if (!app || !Array.isArray(pages) || pages.length === 0) return null;
-    return { app, pages };
+    return {
+      app,
+      pages,
+      internalReader: internal,
+      view,
+      primaryView: internal?._primaryView,
+    };
   } catch {
     return null;
   }
@@ -704,16 +1126,69 @@ async function waitForPdfJsPages(context: PdfJsAppContext): Promise<void> {
   await context.app.pdfViewer?.pagesPromise;
 }
 
+async function extractPdfJsOutline(
+  attachment: Zotero.Item | undefined,
+): Promise<DocumentOutlineEntry[]> {
+  if (!attachment) return [];
+  const context = getPdfJsAppContext(attachment.id);
+  if (!context) return [];
+  try {
+    await waitForPdfJsPages(context);
+    const pdfDocument =
+      context.app.pdfDocument ||
+      (context.app.pdfLoadingTask?.promise
+        ? await context.app.pdfLoadingTask.promise
+        : undefined);
+    const outline = await pdfDocument?.getOutline?.();
+    if (!Array.isArray(outline)) return [];
+
+    const destinationPageNumber = async (
+      dest: unknown,
+    ): Promise<number | undefined> => {
+      try {
+        const resolved =
+          typeof dest === "string"
+            ? await pdfDocument.getDestination(dest)
+            : dest;
+        if (!Array.isArray(resolved) || !resolved[0]) return undefined;
+        const pageIndex = await pdfDocument.getPageIndex(resolved[0]);
+        return typeof pageIndex === "number" ? pageIndex + 1 : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+
+    const out: DocumentOutlineEntry[] = [];
+    const walk = async (items: any[], level: number): Promise<void> => {
+      for (const item of items) {
+        const title = normalizeMapText(String(item?.title || ""));
+        if (title) {
+          out.push({
+            title,
+            pageNumber: await destinationPageNumber(item.dest),
+            level,
+          });
+        }
+        if (Array.isArray(item?.items) && item.items.length) {
+          await walk(item.items, level + 1);
+        }
+      }
+    };
+    await walk(outline, 1);
+    return out.filter((entry) => entry.title);
+  } catch {
+    return [];
+  }
+}
+
 function canvasFromPageView(pageView: any): HTMLCanvasElement | null {
   const canvas =
     pageView?.canvas ||
     pageView?.div?.querySelector?.("canvas") ||
     pageView?.canvasWrapper?.querySelector?.("canvas");
-  if (!canvas || typeof canvas.toDataURL !== "function") return null;
-  if (typeof HTMLCanvasElement === "undefined") {
-    return canvas as HTMLCanvasElement;
-  }
-  return canvas instanceof HTMLCanvasElement ? canvas : null;
+  // Reader canvases belong to the PDF iframe's realm, so checking them with
+  // the plugin window's HTMLCanvasElement rejects valid rendered pages.
+  return isRenderableCanvasLike(canvas) ? (canvas as HTMLCanvasElement) : null;
 }
 
 function pageImageFallback(
@@ -761,6 +1236,105 @@ function scaledCanvasDataUrl(
   };
 }
 
+async function pdfJsPageViewBox(
+  context: PdfJsAppContext,
+  pageIndex: number,
+): Promise<[number, number, number, number] | null> {
+  const pageView = context.pages[pageIndex];
+  const cached =
+    figurePageViewBox(context.view?._pdfPages?.[pageIndex]?.viewBox) ||
+    figurePageViewBox(pageView?.pdfPage?._pageInfo?.view) ||
+    figurePageViewBox(pageView?.pdfPage?.view);
+  if (cached) return cached;
+
+  const pdfDocument =
+    context.app.pdfDocument ||
+    (context.app.pdfLoadingTask?.promise
+      ? await context.app.pdfLoadingTask.promise
+      : undefined);
+  const pdfPage = await pdfDocument?.getPage?.(pageIndex + 1);
+  return figurePageViewBox(pdfPage?.view);
+}
+
+async function scaledImageDataUrl(
+  dataUrl: string,
+  doc: Document,
+  maxWidth: number,
+): Promise<{
+  dataUrl: string;
+  width: number;
+  height: number;
+  mediaType: "image/jpeg";
+} | null> {
+  const image = doc.createElement("img");
+  await new Promise<void>((resolve, reject) => {
+    image.addEventListener("load", () => resolve(), { once: true });
+    image.addEventListener(
+      "error",
+      () => reject(new Error("Rendered PDF page image could not be decoded.")),
+      { once: true },
+    );
+    image.src = dataUrl;
+  });
+
+  const sourceWidth = Number(image.naturalWidth || image.width || 0);
+  const sourceHeight = Number(image.naturalHeight || image.height || 0);
+  if (!sourceWidth || !sourceHeight) return null;
+  const targetWidth = Math.min(Math.max(320, maxWidth), sourceWidth);
+  const scale = targetWidth / sourceWidth;
+  const targetHeight = Math.max(1, Math.round(sourceHeight * scale));
+  const out = doc.createElement("canvas");
+  out.width = Math.round(targetWidth);
+  out.height = targetHeight;
+  const ctx = out.getContext("2d");
+  if (!ctx) return null;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.drawImage(image, 0, 0, out.width, out.height);
+  return {
+    dataUrl: out.toDataURL("image/jpeg", 0.82),
+    width: out.width,
+    height: out.height,
+    mediaType: "image/jpeg",
+  };
+}
+
+async function renderPdfJsPageImage(
+  context: PdfJsAppContext,
+  pageIndex: number,
+  maxWidth: number,
+): Promise<{
+  dataUrl: string;
+  width: number;
+  height: number;
+  mediaType: "image/jpeg";
+} | null> {
+  const renderer = context.view?._pdfRenderer;
+  if (typeof renderer?._renderAnnotationImage !== "function") return null;
+  const viewBox = await pdfJsPageViewBox(context, pageIndex);
+  if (!viewBox) return null;
+
+  const request = {
+    position: { pageIndex, rects: [viewBox] },
+    // Required by Zotero's annotation-image renderer; this is not a UI color.
+    color: "#eee",
+  };
+  const Cu = (globalThis as any).Components?.utils;
+  const clonedRequest =
+    Cu?.cloneInto && context.primaryView
+      ? Cu.cloneInto(request, context.primaryView)
+      : request;
+  const rawDataUrl = await renderer._renderAnnotationImage(clonedRequest);
+  if (typeof rawDataUrl !== "string" || !rawDataUrl.startsWith("data:image/")) {
+    return null;
+  }
+  const doc =
+    context.primaryView?._iframeWindow?.document ||
+    context.view?._iframeWindow?.document ||
+    globalThis.document;
+  return doc ? scaledImageDataUrl(rawDataUrl, doc, maxWidth) : null;
+}
+
 async function capturePdfJsPageImage(options: {
   attachment?: Zotero.Item;
   pageIndex: number;
@@ -788,19 +1362,33 @@ async function capturePdfJsPageImage(options: {
     await waitForPdfJsPages(context);
     const pageView = context.pages[pageIndex];
     const canvas = canvasFromPageView(pageView);
-    if (!canvas) {
-      return pageImageFallback(
-        attachment,
-        pageIndex,
-        "PDF.js page canvas has not been rendered yet. Open or scroll to this page, then request evidence again.",
-      );
+    const failures: string[] = [];
+    let image: ReturnType<typeof scaledCanvasDataUrl> = null;
+    if (canvas) {
+      try {
+        image = scaledCanvasDataUrl(canvas, options.maxWidth);
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : String(error));
+      }
     }
-    const image = scaledCanvasDataUrl(canvas, options.maxWidth);
+    if (!image) {
+      try {
+        image = await renderPdfJsPageImage(
+          context,
+          pageIndex,
+          options.maxWidth,
+        );
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : String(error));
+      }
+    }
     if (!image) {
       return pageImageFallback(
         attachment,
         pageIndex,
-        "PDF.js page canvas could not be converted to a page screenshot.",
+        `Zotero could not render the requested PDF page as a screenshot.${
+          failures.length ? ` ${failures.join("; ")}` : ""
+        }`,
       );
     }
     return {
@@ -844,6 +1432,7 @@ function makeEvidenceUri(
     attachmentId: locator.attachmentId,
     attachmentKey: locator.attachmentKey,
     title: locator.title,
+    excerpt: locator.excerpt ? compact(locator.excerpt, 520) : undefined,
     sourceType: locator.sourceType,
     pageIndex: locator.pageIndex,
     pageNumber: locator.pageNumber,
@@ -855,12 +1444,48 @@ function makeEvidenceUri(
       ? {
           pageIndex: locator.position.pageIndex,
           rects: locator.position.rects?.slice(0, 48),
+          nextPageRects: locator.position.nextPageRects?.slice(0, 48),
         }
       : undefined,
   };
-  return `claudero-evidence:${encodeURIComponent(
-    JSON.stringify(compactLocator),
-  )}`;
+  return `claudero-evidence:${encodeEvidenceReference(compactLocator)}`;
+}
+
+function evidenceMarkdownLink(
+  locator: EvidenceLocator | undefined,
+  label: string,
+): string {
+  return locator
+    ? encodeEvidenceMarker(locator as unknown as Record<string, unknown>)
+    : markdownCell(label);
+}
+
+function normalizeEvidencePosition(
+  position: EvidencePosition | undefined,
+): EvidencePosition | undefined {
+  if (!position || typeof position.pageIndex !== "number") return position;
+  if (!position.lines?.length) {
+    return {
+      ...position,
+      rects: compactRects(position.rects || []),
+      nextPageRects: compactRects(position.nextPageRects || []),
+    };
+  }
+  const rects = compactRects(
+    position.lines
+      .filter((line) => line.pageIndex === position.pageIndex)
+      .flatMap((line) => line.rects),
+  );
+  const nextPageRects = compactRects(
+    position.lines
+      .filter((line) => line.pageIndex === position.pageIndex + 1)
+      .flatMap((line) => line.rects),
+  );
+  return {
+    ...position,
+    rects,
+    nextPageRects,
+  };
 }
 
 function itemMetadata(item: Zotero.Item): EvidencePack["item"] {
@@ -892,21 +1517,25 @@ function paragraphEvidence(options: {
     title:
       options.item.getDisplayTitle?.() ||
       String(options.item.getField("title") || ""),
+    excerpt: compact(options.text, 520),
     sourceType: options.sourceType,
     pageIndex: options.pageIndex,
     pageNumber:
       typeof options.pageIndex === "number" ? options.pageIndex + 1 : undefined,
     paragraphIndex: options.paragraphIndex,
-    position: options.position,
+    position: normalizeEvidencePosition(options.position),
     openUri: makeOpenPdfUri(options.attachment, options.pageIndex),
   };
+  const id = `${options.idPrefix}-${options.paragraphIndex + 1}`;
+  const evidenceLocator = {
+    ...locator,
+    evidenceUri: makeEvidenceUri(locator),
+  };
   return {
-    id: `${options.idPrefix}-${options.paragraphIndex + 1}`,
+    id,
     text: compact(options.text, 2400),
-    locator: {
-      ...locator,
-      evidenceUri: makeEvidenceUri(locator),
-    },
+    locator: evidenceLocator,
+    markdownLink: evidenceMarkdownLink(evidenceLocator, id),
   };
 }
 
@@ -914,9 +1543,14 @@ async function extractPdfJsParagraphEvidence(
   item: Zotero.Item,
   attachment: Zotero.Item,
   maxPages: number,
-): Promise<{ paragraphs: EvidenceParagraph[]; warnings: string[] }> {
+): Promise<{
+  paragraphs: EvidenceParagraph[];
+  warnings: string[];
+  pageTexts: TextPage[];
+  pageCount?: number;
+}> {
   const context = getPdfJsAppContext(attachment.id);
-  if (!context) return { paragraphs: [], warnings: [] };
+  if (!context) return { paragraphs: [], warnings: [], pageTexts: [] };
 
   try {
     await waitForPdfJsPages(context);
@@ -933,12 +1567,32 @@ async function extractPdfJsParagraphEvidence(
     }
 
     const lines: PdfJsLine[] = [];
+    const pageTexts: TextPage[] = [];
     for (let pageIndex = 0; pageIndex < pageLimit; pageIndex += 1) {
+      try {
+        await context.internalReader?._ensureBasicPageData?.(pageIndex);
+        const readerLines = readerCharsToLines(
+          context.internalReader?._pdfPages?.[pageIndex]?.chars,
+          pageIndex,
+        );
+        if (readerLines.length) {
+          lines.push(...readerLines);
+          pageTexts.push({
+            pageIndex,
+            text: readerLines.map((line) => line.text).join("\n"),
+          });
+          continue;
+        }
+      } catch {
+        // Fall back to PDF.js text content below when Reader char data is unavailable.
+      }
+
       const pageView = context.pages[pageIndex];
       const textContent = await pageView?.pdfPage?.getTextContent?.();
       const rawItems = Array.isArray(textContent?.items)
         ? (textContent.items as PdfJsTextItem[])
         : [];
+      const pageLines: PdfJsLine[] = [];
       const line = {
         text: "",
         items: [] as PdfJsTextItem[],
@@ -955,6 +1609,15 @@ async function extractPdfJsParagraphEvidence(
         if (textItem.hasEOL) flushPdfJsLine(lines, pageIndex, line);
       }
       flushPdfJsLine(lines, pageIndex, line);
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        const candidate = lines[index];
+        if (candidate.pageIndex !== pageIndex) break;
+        pageLines.unshift(candidate);
+      }
+      pageTexts.push({
+        pageIndex,
+        text: pageLines.map((entry) => entry.text).join("\n"),
+      });
     }
 
     return {
@@ -975,6 +1638,8 @@ async function extractPdfJsParagraphEvidence(
         }),
       ),
       warnings,
+      pageTexts,
+      pageCount: context.pages.length,
     };
   } catch (error) {
     return {
@@ -984,6 +1649,8 @@ async function extractPdfJsParagraphEvidence(
           error instanceof Error ? error.message : String(error)
         }`,
       ],
+      pageTexts: [],
+      pageCount: context.pages.length,
     };
   }
 }
@@ -993,18 +1660,27 @@ function rankParagraphs(
   query = "",
   maxParagraphs = 12,
 ): EvidenceParagraph[] {
+  const trimmedQuery = query.trim();
+  const minimumScore = trimmedQuery ? minimumMatchScore(trimmedQuery) : 0;
   const scored = paragraphs.map((paragraph) => {
-    const score = query
-      ? scoreText(paragraph.text, query)
+    const score = trimmedQuery
+      ? scoreText(paragraph.text, trimmedQuery)
       : { score: 0.5, reason: "document order" };
     return { ...paragraph, score: score.score, matchReason: score.reason };
   });
-  scored.sort((a, b) => {
-    if (query && (b.score || 0) !== (a.score || 0))
+  const ranked = trimmedQuery
+    ? scored.filter((paragraph) => (paragraph.score || 0) >= minimumScore)
+    : scored;
+  ranked.sort((a, b) => {
+    if (trimmedQuery && (b.score || 0) !== (a.score || 0))
       return (b.score || 0) - (a.score || 0);
     return (a.locator.paragraphIndex || 0) - (b.locator.paragraphIndex || 0);
   });
-  return scored.slice(0, Math.max(1, Math.min(maxParagraphs, 50)));
+  return ranked
+    .slice(0, Math.max(1, Math.min(maxParagraphs, 50)))
+    .map((paragraph) =>
+      trimmedQuery ? focusParagraphOnQuery(paragraph, trimmedQuery) : paragraph,
+    );
 }
 
 function figureTablePageContext(
@@ -1163,6 +1839,7 @@ async function annotationEvidence(
         attachmentId: att.id,
         attachmentKey: att.key,
         title: item.getDisplayTitle?.() || String(item.getField("title") || ""),
+        excerpt: compact(text, 520),
         sourceType: "annotation",
         pageIndex: page?.pageIndex,
         pageNumber:
@@ -1172,30 +1849,28 @@ async function annotationEvidence(
         position: page,
         openUri: makeOpenPdfUri(att, page?.pageIndex, annotation.key),
       };
+      const id = `anno-${annotation.id}`;
+      const evidenceLocator = {
+        ...locator,
+        evidenceUri: makeEvidenceUri(locator),
+      };
       out.push({
-        id: `anno-${annotation.id}`,
+        id,
         text: compact(text, 1800),
-        locator: {
-          ...locator,
-          evidenceUri: makeEvidenceUri(locator),
-        },
+        locator: evidenceLocator,
+        markdownLink: evidenceMarkdownLink(evidenceLocator, id),
       });
     }
   }
   return out;
 }
 
-export async function buildEvidencePack(payload: {
+async function collectEvidenceCorpus(payload: {
   itemId?: number;
   attachmentId?: number;
-  query?: string;
-  maxParagraphs?: number;
   maxPages?: number;
   includeAnnotations?: boolean;
-  includePageImages?: boolean;
-  maxPageImages?: number;
-  pageImageMaxWidth?: number;
-}): Promise<EvidencePack | { error: string }> {
+}): Promise<EvidenceCorpus | { error: string }> {
   const target = await resolveEvidenceTarget(payload);
   if (!target)
     return {
@@ -1209,10 +1884,14 @@ export async function buildEvidencePack(payload: {
       ? []
       : await annotationEvidence(item, attachment);
   const paragraphs: EvidenceParagraph[] = [];
+  let pageTexts: TextPage[] = [];
+  let outline: DocumentOutlineEntry[] = [];
   let cachePath: string | undefined;
   let indexState: number | undefined;
+  let pageCount: number | undefined;
 
   if (attachment) {
+    outline = await extractPdfJsOutline(attachment);
     const precise = await extractPdfJsParagraphEvidence(
       item,
       attachment,
@@ -1220,14 +1899,19 @@ export async function buildEvidencePack(payload: {
     );
     paragraphs.push(...precise.paragraphs);
     warnings.push(...precise.warnings);
+    pageTexts = precise.pageTexts;
+    pageCount = precise.pageCount;
 
     if (paragraphs.length === 0) {
       const cache = await readFulltextCache(attachment);
       cachePath = cache.cachePath;
       indexState = cache.indexState;
       if (cache.warning) warnings.push(cache.warning);
+      const pages = splitPages(cache.text);
+      pageTexts = pages;
+      if (pages.length) pageCount = pages.length;
       let paragraphIndex = 0;
-      for (const page of splitPages(cache.text)) {
+      for (const page of pages) {
         for (const text of splitParagraphText(page.text)) {
           if (text.length < 40) continue;
           paragraphs.push(
@@ -1268,6 +1952,52 @@ export async function buildEvidencePack(payload: {
     }
   }
 
+  const path = attachment ? await attachmentPath(attachment) : undefined;
+  return {
+    item,
+    attachment,
+    paragraphs,
+    annotations,
+    pageTexts,
+    outline,
+    warnings,
+    cachePath,
+    indexState,
+    path,
+    pageCount,
+  };
+}
+
+export async function buildEvidencePack(payload: {
+  itemId?: number;
+  attachmentId?: number;
+  query?: string;
+  maxParagraphs?: number;
+  maxPages?: number;
+  includeAnnotations?: boolean;
+  includePageImages?: boolean;
+  maxPageImages?: number;
+  pageImageMaxWidth?: number;
+}): Promise<EvidencePack | { error: string }> {
+  const corpus = await collectEvidenceCorpus({
+    itemId: payload.itemId,
+    attachmentId: payload.attachmentId,
+    maxPages: payload.maxPages,
+    includeAnnotations: payload.includeAnnotations,
+  });
+  if ("error" in corpus) return corpus;
+
+  const {
+    item,
+    attachment,
+    paragraphs,
+    annotations,
+    warnings,
+    cachePath,
+    indexState,
+    path,
+  } = corpus;
+
   const rankedParagraphs = rankParagraphs(
     paragraphs,
     String(payload.query || ""),
@@ -1278,8 +2008,22 @@ export async function buildEvidencePack(payload: {
     String(payload.query || ""),
     Math.min(Number(payload.maxParagraphs || 12), 20),
   );
-  const path = attachment ? await attachmentPath(attachment) : undefined;
-  const figureTableCandidates = extractFigureTableCandidates(paragraphs);
+  if (
+    String(payload.query || "").trim() &&
+    rankedParagraphs.length === 0 &&
+    rankedAnnotations.length === 0
+  ) {
+    warnings.push(
+      "No reliable lexical evidence match found for the query. Use more specific source-language terms or call locate_quote with an exact quote before citing.",
+    );
+  }
+  const figureTableQuery = /(?:\bfig(?:ure)?\b|\btable\b|图|表)/i.test(
+    String(payload.query || ""),
+  );
+  const figureTableCandidates =
+    payload.includePageImages === true || figureTableQuery
+      ? extractFigureTableCandidates(paragraphs)
+      : [];
   const figureTableImages = await figureTablePageImages({
     candidates: figureTableCandidates,
     attachment,
@@ -1309,15 +2053,586 @@ export async function buildEvidencePack(payload: {
     query: payload.query,
     paragraphs: rankedParagraphs,
     annotations: rankedAnnotations,
-    figuresTables: extractFigureTableCandidates(paragraphs, figureTableImages),
+    figuresTables:
+      figureTableCandidates.length > 0
+        ? extractFigureTableCandidates(paragraphs, figureTableImages)
+        : [],
     warnings,
     citationGuidance: [
-      "Use evidence ids such as [para-3] or [anno-ABC] while drafting, then cite the locator page/openUri in final prose.",
+      "Copy each markdownLink marker exactly before sentence-ending punctuation, for example: 支持的句子[Eabc123]。 Do not expand it into a URI or Markdown link; the UI resolves the marker to a quiet clickable number. Avoid labels such as Evidence:, Source:, References:, or 证据: unless the user explicitly asks for an audit table.",
       "Direct quotes must appear verbatim in an evidence paragraph or annotation; otherwise label them as paraphrases.",
       "Prefer paragraph or annotation evidence over item-level metadata for empirical claims.",
       "For figure/table claims, inspect the candidate pageImage when available; treat the full rendered page as the visual source of truth for captions, figures, tables, and surrounding interpretation.",
       "If pageImage contains only an openUri, open that PDF page or request includePageImages=true while the attachment is open in Zotero Reader.",
     ],
+  };
+}
+
+function sourceId(prefix: string, index: number): string {
+  return `${prefix}${String(index + 1).padStart(4, "0")}`;
+}
+
+function sourceKind(
+  paragraph: EvidenceParagraph,
+): NumberedEvidenceSource["kind"] {
+  if (paragraph.locator.sourceType === "annotation") return "annotation";
+  if (paragraph.locator.sourceType === "metadata") return "metadata";
+  return "paragraph";
+}
+
+function numberEvidenceSources(
+  corpus: EvidenceCorpus,
+): NumberedEvidenceSource[] {
+  let paragraphIndex = 0;
+  let annotationIndex = 0;
+  let metadataIndex = 0;
+  const toSource = (paragraph: EvidenceParagraph): NumberedEvidenceSource => {
+    const kind = sourceKind(paragraph);
+    const id =
+      kind === "annotation"
+        ? sourceId("A", annotationIndex++)
+        : kind === "metadata"
+          ? sourceId("M", metadataIndex++)
+          : sourceId("P", paragraphIndex++);
+    return {
+      sourceId: id,
+      kind,
+      text: paragraph.text,
+      locator: paragraph.locator,
+      citationMarkdown: evidenceMarkdownLink(paragraph.locator, id),
+      pageNumber: paragraph.locator.pageNumber,
+      paragraphIndex: paragraph.locator.paragraphIndex,
+    };
+  };
+  return [...corpus.paragraphs, ...corpus.annotations].map(toSource);
+}
+
+function sourceLocationLabel(source: NumberedEvidenceSource): string {
+  return [
+    source.pageNumber ? `p. ${source.pageNumber}` : "",
+    typeof source.paragraphIndex === "number"
+      ? `para ${source.paragraphIndex + 1}`
+      : "",
+    source.kind === "annotation" ? "annotation" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function numberedContextLine(source: NumberedEvidenceSource): string {
+  const location = sourceLocationLabel(source);
+  return [
+    `${source.citationMarkdown}${location ? ` ${location}` : ""}`,
+    compact(source.text, 2400),
+  ].join("\n");
+}
+
+function numberedContextText(sources: NumberedEvidenceSource[]): string {
+  return sources.map(numberedContextLine).join("\n\n");
+}
+
+function lineQueryScore(line: EvidenceLine, query: string): number {
+  return scoreText(line.text, query).score;
+}
+
+function focusedLinesForQuery(
+  lines: EvidenceLine[] | undefined,
+  query: string,
+): EvidenceLine[] {
+  if (!Array.isArray(lines) || !lines.length || !query.trim()) return [];
+  const threshold = Math.max(0.18, minimumMatchScore(query) * 0.65);
+  const scored = lines.map((line, index) => ({
+    line,
+    index,
+    score: lineQueryScore(line, query),
+  }));
+  const matching = scored.filter((entry) => entry.score >= threshold);
+  const selected = matching.length
+    ? matching
+    : scored.filter((entry) => entry.score > 0);
+  if (!selected.length) return [];
+
+  const best = selected.reduce((winner, entry) =>
+    entry.score > winner.score ? entry : winner,
+  );
+  const bestScoreFloor = Math.max(threshold, best.score * 0.72);
+  const selectedIndexes = new Set<number>([best.index]);
+  for (let index = best.index - 1; index >= 0; index -= 1) {
+    const entry = scored[index];
+    if (!entry || entry.score < bestScoreFloor) break;
+    selectedIndexes.add(index);
+    if (selectedIndexes.size >= 3) break;
+  }
+  for (let index = best.index + 1; index < scored.length; index += 1) {
+    const entry = scored[index];
+    if (!entry || entry.score < bestScoreFloor) break;
+    selectedIndexes.add(index);
+    if (selectedIndexes.size >= 3) break;
+  }
+
+  return [...selectedIndexes]
+    .sort((a, b) => a - b)
+    .map((index) => lines[index])
+    .filter(Boolean);
+}
+
+function focusParagraphOnQuery(
+  paragraph: EvidenceParagraph,
+  query: string,
+): EvidenceParagraph {
+  const paragraphLines = paragraph.locator.position?.lines;
+  const focusedLines = focusedLinesForQuery(paragraphLines, query);
+  if (!focusedLines.length) return paragraph;
+
+  const pageIndex = focusedLines[0].pageIndex;
+  const focusedLineSet = new Set(focusedLines);
+  const currentPageLines = (paragraphLines || []).filter(
+    (line) => line.pageIndex === pageIndex,
+  );
+  const orderedCurrentPageLines = [
+    ...focusedLines.filter((line) => line.pageIndex === pageIndex),
+    ...currentPageLines.filter((line) => !focusedLineSet.has(line)),
+  ];
+  const nextPageLines = (paragraphLines || []).filter(
+    (line) => line.pageIndex === pageIndex + 1,
+  );
+  const lineRects = (lines: EvidenceLine[]): number[][] =>
+    lines.flatMap((line) => {
+      const rect = boundingRect(line.rects);
+      return rect ? [rect] : [];
+    });
+  const locator: Omit<EvidenceLocator, "evidenceUri"> = {
+    ...paragraph.locator,
+    pageIndex,
+    pageNumber: pageIndex + 1,
+    excerpt: compact(paragraph.text, 520),
+    position: normalizeEvidencePosition({
+      pageIndex,
+      // Keep the paragraph as the evidence unit, but put the best-matching
+      // line first so Zotero centers the reader on the actual hit.
+      rects: lineRects(orderedCurrentPageLines),
+      nextPageRects: lineRects(nextPageLines),
+    }),
+  };
+  const evidenceLocator = {
+    ...locator,
+    evidenceUri: makeEvidenceUri(locator),
+  };
+  return {
+    ...paragraph,
+    locator: evidenceLocator,
+    markdownLink: evidenceMarkdownLink(evidenceLocator, paragraph.id),
+  };
+}
+
+function sourceSortIndex(source: NumberedEvidenceSource): number {
+  const match = source.sourceId.match(/[A-Z](\d+)/);
+  return match ? Number(match[1]) : 0;
+}
+
+function parseSourceId(
+  value: unknown,
+): { prefix: string; index: number } | null {
+  const match = String(value || "")
+    .trim()
+    .match(/^([PAM])0*([1-9]\d*)$/i);
+  if (!match) return null;
+  return {
+    prefix: match[1].toUpperCase(),
+    index: Number(match[2]),
+  };
+}
+
+function sectionId(index: number): string {
+  return `S${String(index + 1).padStart(3, "0")}`;
+}
+
+function sectionSamples(
+  sources: NumberedEvidenceSource[],
+): DocumentMapSection["samples"] {
+  return sources
+    .filter((_, index) =>
+      sources.length <= 3
+        ? true
+        : index === 0 ||
+          index === Math.floor(sources.length / 2) ||
+          index === sources.length - 1,
+    )
+    .map((source) => ({
+      sourceId: source.sourceId,
+      pageNumber: source.pageNumber,
+      excerpt: compact(source.text, 220),
+    }));
+}
+
+function pageRangeSources(
+  sources: NumberedEvidenceSource[],
+  pageStart: number,
+  pageEnd: number,
+): NumberedEvidenceSource[] {
+  return sources.filter(
+    (source) =>
+      source.kind !== "annotation" &&
+      typeof source.pageNumber === "number" &&
+      source.pageNumber >= pageStart &&
+      source.pageNumber <= pageEnd,
+  );
+}
+
+function entryEndPage<T extends { level: number; pageNumber?: number }>(
+  entries: T[],
+  index: number,
+  pageCount?: number,
+): number | undefined {
+  const entry = entries[index];
+  if (!entry.pageNumber) return undefined;
+  const next = entries
+    .slice(index + 1)
+    .find(
+      (candidate) => candidate.pageNumber && candidate.level <= entry.level,
+    );
+  const endPage = next?.pageNumber
+    ? Math.max(entry.pageNumber, next.pageNumber - 1)
+    : pageCount;
+  return typeof endPage === "number"
+    ? Math.max(entry.pageNumber, endPage)
+    : undefined;
+}
+
+function buildSectionsFromOutline(
+  outline: DocumentOutlineEntry[],
+  sources: NumberedEvidenceSource[],
+  pageCount?: number,
+): DocumentMapSection[] {
+  const entries = outline.filter(
+    (entry) => entry.title && typeof entry.pageNumber === "number",
+  );
+  if (entries.length < 3) return [];
+  const sections: DocumentMapSection[] = [];
+  for (const [index, entry] of entries.entries()) {
+    const pageStart = Number(entry.pageNumber);
+    const pageEnd = entryEndPage(entries, index, pageCount) || pageStart;
+    const matching = pageRangeSources(sources, pageStart, pageEnd);
+    if (!matching.length) continue;
+    sections.push({
+      id: sectionId(sections.length),
+      title: entry.title,
+      pageStart,
+      pageEnd,
+      mapSource: "pdf-outline",
+      sourceStart: matching[0].sourceId,
+      sourceEnd: matching[matching.length - 1].sourceId,
+      paragraphCount: matching.length,
+      samples: sectionSamples(matching),
+    });
+  }
+  return sections;
+}
+
+function buildSectionsFromToc(
+  corpus: EvidenceCorpus,
+  sources: NumberedEvidenceSource[],
+): DocumentMapSection[] {
+  const entries = resolveTocPages(
+    parseTocEntries(corpus.pageTexts),
+    corpus.outline,
+    corpus.pageTexts,
+  ).filter((entry) => typeof entry.pageNumber === "number");
+  if (entries.length < 3) return [];
+  const sections: DocumentMapSection[] = [];
+  for (const [index, entry] of entries.entries()) {
+    const pageStart = Number(entry.pageNumber);
+    const pageEnd = entryEndPage(entries, index, corpus.pageCount) || pageStart;
+    const matching = pageRangeSources(sources, pageStart, pageEnd);
+    if (!matching.length) continue;
+    const next = entries
+      .slice(index + 1)
+      .find(
+        (candidate) => candidate.printedPage && candidate.level <= entry.level,
+      );
+    sections.push({
+      id: sectionId(sections.length),
+      title: entry.title,
+      pageStart,
+      pageEnd,
+      printedPageStart: entry.printedPage,
+      printedPageEnd: next
+        ? Math.max(entry.printedPage, next.printedPage - 1)
+        : undefined,
+      mapSource: "text-toc",
+      sourceStart: matching[0].sourceId,
+      sourceEnd: matching[matching.length - 1].sourceId,
+      paragraphCount: matching.length,
+      samples: sectionSamples(matching),
+    });
+  }
+  return sections;
+}
+
+function buildDocumentMapFromSources(
+  sources: NumberedEvidenceSource[],
+  options: {
+    corpus?: EvidenceCorpus;
+    targetChars?: number;
+    targetPages?: number;
+  } = {},
+): DocumentMapSection[] {
+  const outlineSections = options.corpus
+    ? buildSectionsFromOutline(
+        options.corpus.outline,
+        sources,
+        options.corpus.pageCount,
+      )
+    : [];
+  if (outlineSections.length >= 3) return outlineSections;
+
+  const tocSections = options.corpus
+    ? buildSectionsFromToc(options.corpus, sources)
+    : [];
+  if (tocSections.length >= 3) return tocSections;
+
+  const paragraphSources = sources.filter(
+    (source) => source.kind !== "annotation",
+  );
+  const targetChars = Math.max(4000, Number(options.targetChars || 9000));
+  const targetPages = Math.max(4, Number(options.targetPages || 8));
+  const sections: DocumentMapSection[] = [];
+  let current: NumberedEvidenceSource[] = [];
+  let currentChars = 0;
+  let currentPageStart: number | undefined;
+
+  const flush = () => {
+    if (!current.length) return;
+    const pageNumbers = current
+      .map((source) => source.pageNumber)
+      .filter((page): page is number => typeof page === "number");
+    const pageStart = pageNumbers.length ? Math.min(...pageNumbers) : undefined;
+    const pageEnd = pageNumbers.length ? Math.max(...pageNumbers) : undefined;
+    const id = sectionId(sections.length);
+    sections.push({
+      id,
+      title:
+        typeof pageStart === "number" && typeof pageEnd === "number"
+          ? pageStart === pageEnd
+            ? `Page ${pageStart}`
+            : `Pages ${pageStart}-${pageEnd}`
+          : `Sources ${current[0].sourceId}-${current[current.length - 1].sourceId}`,
+      pageStart,
+      pageEnd,
+      mapSource: "page-chunk",
+      sourceStart: current[0].sourceId,
+      sourceEnd: current[current.length - 1].sourceId,
+      paragraphCount: current.length,
+      samples: sectionSamples(current),
+    });
+    current = [];
+    currentChars = 0;
+    currentPageStart = undefined;
+  };
+
+  for (const source of paragraphSources) {
+    const pageNumber = source.pageNumber;
+    if (current.length && typeof pageNumber === "number") {
+      const pageSpan =
+        typeof currentPageStart === "number"
+          ? pageNumber - currentPageStart + 1
+          : 1;
+      if (pageSpan > targetPages || currentChars > targetChars) flush();
+    } else if (current.length && currentChars > targetChars) {
+      flush();
+    }
+    if (!current.length) currentPageStart = pageNumber;
+    current.push(source);
+    currentChars += source.text.length;
+  }
+  flush();
+
+  const annotationSources = sources.filter(
+    (source) => source.kind === "annotation",
+  );
+  if (annotationSources.length) {
+    sections.push({
+      id: sectionId(sections.length),
+      title: "Annotations",
+      mapSource: "annotations",
+      sourceStart: annotationSources[0].sourceId,
+      sourceEnd: annotationSources[annotationSources.length - 1].sourceId,
+      paragraphCount: annotationSources.length,
+      samples: annotationSources.slice(0, 5).map((source) => ({
+        sourceId: source.sourceId,
+        pageNumber: source.pageNumber,
+        excerpt: compact(source.text, 220),
+      })),
+    });
+  }
+  return sections;
+}
+
+function numberedEvidenceGuidance(
+  mode: NumberedEvidencePack["mode"],
+): string[] {
+  return [
+    mode === "full"
+      ? "Read the numbered source paragraphs below and choose the paragraph ids that directly support your answer."
+      : "This response is a document map, not the full paper. Choose relevant sections/pages and call expand_evidence_range before making page-specific or claim-specific answers.",
+    "When citing a supported sentence, copy the source citationMarkdown marker exactly before sentence-ending punctuation. Do not add a URL; the UI resolves it to a quiet clickable number.",
+    "Do not cite a source id unless that paragraph directly supports the sentence. If the provided context is insufficient, say which section/page range should be expanded.",
+    "Use locate_quote only for exact source-language quotations, not broad questions or paraphrases.",
+  ];
+}
+
+export async function buildNumberedEvidencePack(payload: {
+  itemId?: number;
+  attachmentId?: number;
+  maxPages?: number;
+  includeAnnotations?: boolean;
+  maxContextChars?: number;
+  forceFull?: boolean;
+}): Promise<NumberedEvidencePack | { error: string }> {
+  const corpus = await collectEvidenceCorpus({
+    itemId: payload.itemId,
+    attachmentId: payload.attachmentId,
+    maxPages: payload.maxPages || 500,
+    includeAnnotations: payload.includeAnnotations,
+  });
+  if ("error" in corpus) return corpus;
+
+  const warnings = [...corpus.warnings];
+  const sources = numberEvidenceSources(corpus);
+  const maxContextChars = Math.max(
+    8000,
+    Number(payload.maxContextChars || 60000),
+  );
+  const estimatedChars = sources.reduce(
+    (sum, source) => sum + source.text.length + 40,
+    0,
+  );
+  const tooLong =
+    payload.forceFull !== true &&
+    (estimatedChars > maxContextChars ||
+      Number(corpus.pageCount || 0) > 60 ||
+      sources.length > 220);
+  if (tooLong) {
+    warnings.push(
+      `Document is too long for a single evidence prompt (${sources.length} sources, ${corpus.pageCount || "unknown"} pages). Returned a map; call expand_evidence_range for relevant sections/pages.`,
+    );
+  }
+  const selectedSources = tooLong
+    ? []
+    : sources.filter(
+        (source) =>
+          source.kind !== "annotation" || payload.includeAnnotations !== false,
+      );
+  const documentMap = buildDocumentMapFromSources(sources, { corpus });
+  return {
+    item: itemMetadata(corpus.item),
+    attachment: corpus.attachment
+      ? {
+          id: corpus.attachment.id,
+          key: corpus.attachment.key,
+          title: corpus.attachment.getDisplayTitle?.() || "",
+          path: corpus.path,
+          cachePath: corpus.cachePath,
+          indexState: corpus.indexState,
+        }
+      : undefined,
+    mode: tooLong ? "map" : "full",
+    contextText: tooLong ? "" : numberedContextText(selectedSources),
+    sources: tooLong ? sources.slice(0, 24) : selectedSources,
+    documentMap,
+    warnings,
+    citationGuidance: numberedEvidenceGuidance(tooLong ? "map" : "full"),
+  };
+}
+
+export async function expandEvidenceRange(payload: {
+  itemId?: number;
+  attachmentId?: number;
+  pageStart?: number;
+  pageEnd?: number;
+  sourceStart?: string;
+  sourceEnd?: string;
+  sourceIds?: string[];
+  maxPages?: number;
+  includeAnnotations?: boolean;
+  maxContextChars?: number;
+}): Promise<NumberedEvidencePack | { error: string }> {
+  const corpus = await collectEvidenceCorpus({
+    itemId: payload.itemId,
+    attachmentId: payload.attachmentId,
+    maxPages: payload.maxPages || 500,
+    includeAnnotations: payload.includeAnnotations,
+  });
+  if ("error" in corpus) return corpus;
+
+  const allSources = numberEvidenceSources(corpus);
+  const requestedIds = Array.isArray(payload.sourceIds)
+    ? new Set(payload.sourceIds.map((id) => String(id).toUpperCase()))
+    : undefined;
+  const start = parseSourceId(payload.sourceStart);
+  const end = parseSourceId(payload.sourceEnd);
+  const pageStart = Number(payload.pageStart || 0) || undefined;
+  const pageEnd = Number(payload.pageEnd || 0) || pageStart;
+  const filtered = allSources.filter((source) => {
+    if (requestedIds?.has(source.sourceId.toUpperCase())) return true;
+    if (start && end && source.sourceId[0].toUpperCase() === start.prefix) {
+      const parsed = parseSourceId(source.sourceId);
+      if (parsed && parsed.index >= start.index && parsed.index <= end.index) {
+        return true;
+      }
+    }
+    if (pageStart && pageEnd && source.pageNumber) {
+      return source.pageNumber >= pageStart && source.pageNumber <= pageEnd;
+    }
+    return false;
+  });
+  const sorted = filtered.sort((a, b) => {
+    const pageA = a.pageNumber || 0;
+    const pageB = b.pageNumber || 0;
+    if (pageA !== pageB) return pageA - pageB;
+    return sourceSortIndex(a) - sourceSortIndex(b);
+  });
+  const maxContextChars = Math.max(
+    8000,
+    Number(payload.maxContextChars || 60000),
+  );
+  const selected: NumberedEvidenceSource[] = [];
+  let charCount = 0;
+  for (const source of sorted) {
+    const nextCount = charCount + source.text.length + 40;
+    if (selected.length && nextCount > maxContextChars) break;
+    selected.push(source);
+    charCount = nextCount;
+  }
+  const warnings = [...corpus.warnings];
+  if (!selected.length) {
+    warnings.push(
+      "No evidence sources matched the requested range. Use get_numbered_evidence_pack to inspect valid source ids and page ranges.",
+    );
+  } else if (selected.length < sorted.length) {
+    warnings.push(
+      `Expanded range was truncated from ${sorted.length} to ${selected.length} sources to fit the context budget.`,
+    );
+  }
+
+  return {
+    item: itemMetadata(corpus.item),
+    attachment: corpus.attachment
+      ? {
+          id: corpus.attachment.id,
+          key: corpus.attachment.key,
+          title: corpus.attachment.getDisplayTitle?.() || "",
+          path: corpus.path,
+          cachePath: corpus.cachePath,
+          indexState: corpus.indexState,
+        }
+      : undefined,
+    mode: "full",
+    contextText: numberedContextText(selected),
+    sources: selected,
+    documentMap: buildDocumentMapFromSources(allSources, { corpus }),
+    warnings,
+    citationGuidance: numberedEvidenceGuidance("full"),
   };
 }
 
@@ -1333,26 +2648,43 @@ export async function locateQuote(payload: {
     itemId: payload.itemId,
     attachmentId: payload.attachmentId,
     query: quote,
-    maxParagraphs: Math.max(Number(payload.maxMatches || 5), 5),
+    maxParagraphs: 50,
   });
   if ("error" in pack) return pack;
-  const matches = [...pack.paragraphs, ...pack.annotations]
+  const normalizedQuote = normalizeForMatch(quote);
+  const minimumScore = minimumMatchScore(quote);
+  const scoredMatches = [...pack.paragraphs, ...pack.annotations]
     .map((paragraph) => {
       const result = scoreText(paragraph.text, quote);
-      return { ...paragraph, score: result.score, matchReason: result.reason };
+      const exact = normalizeForMatch(paragraph.text).includes(normalizedQuote);
+      return {
+        ...paragraph,
+        score: result.score,
+        matchReason: exact ? "exact normalized quote match" : result.reason,
+      };
     })
-    .filter((paragraph) => (paragraph.score || 0) > 0)
-    .sort((a, b) => (b.score || 0) - (a.score || 0))
-    .slice(0, Math.max(1, Math.min(Number(payload.maxMatches || 5), 20)));
+    .filter((paragraph) => (paragraph.score || 0) >= minimumScore)
+    .sort((a, b) => (b.score || 0) - (a.score || 0));
+  const exactMatches = scoredMatches.filter(
+    (paragraph) => paragraph.matchReason === "exact normalized quote match",
+  );
+  const matches = (exactMatches.length ? exactMatches : scoredMatches).slice(
+    0,
+    Math.max(1, Math.min(Number(payload.maxMatches || 5), 20)),
+  );
   return {
     quote,
     matches,
-    warnings: matches.length
-      ? pack.warnings
-      : [
-          ...pack.warnings,
-          "No quote match found in available Zotero evidence.",
-        ],
+    warnings: [
+      ...pack.warnings,
+      ...(matches.length
+        ? exactMatches.length
+          ? []
+          : [
+              "No exact normalized quote match found; returned lexical candidates only. Do not present the quote as verified unless the user accepts a paraphrase.",
+            ]
+        : ["No quote match found in available Zotero evidence."]),
+    ],
   };
 }
 
@@ -1446,12 +2778,13 @@ export async function inspectFigureTablePage(payload: {
   maxPages?: number;
   pageImageMaxWidth?: number;
 }): Promise<FigureTablePageInspection | { error: string }> {
+  const searchPlan = figureInspectionSearchPlan(payload);
   const pack = await buildEvidencePack({
     itemId: payload.itemId,
     attachmentId: payload.attachmentId,
     query: payload.query || payload.caption || payload.label || payload.claim,
     maxParagraphs: 12,
-    maxPages: Number(payload.maxPages || 120),
+    maxPages: searchPlan.maxPages,
     includeAnnotations: false,
     includePageImages: true,
     maxPageImages: 4,
@@ -1465,29 +2798,30 @@ export async function inspectFigureTablePage(payload: {
       score: scoreFigureTableCandidate(candidate, payload),
     }))
     .sort((a, b) => b.score - a.score);
-  const candidate = scored[0]?.candidate;
-  const requestedPageIndex =
-    typeof payload.pageIndex === "number"
-      ? payload.pageIndex
-      : typeof payload.pageNumber === "number"
-        ? payload.pageNumber - 1
-        : undefined;
-  const pageImage =
-    candidate?.pageImage ||
-    (typeof requestedPageIndex === "number"
-      ? {
-          pageIndex: requestedPageIndex,
-          pageNumber: requestedPageIndex + 1,
-          source: "open-pdf-uri" as const,
-          openUri: pack.attachment?.key
-            ? `zotero://open-pdf/library/items/${pack.attachment.key}?page=${
-                requestedPageIndex + 1
-              }`
-            : undefined,
-          warning:
-            "No figure/table candidate was found on the requested page; use the openUri to inspect the page.",
-        }
-      : undefined);
+  const requestedPageIndex = searchPlan.requestedPageIndex;
+  const candidate = selectFigurePageCandidate(
+    scored.map((entry) => entry.candidate),
+    requestedPageIndex,
+  );
+  let pageImage = candidate?.pageImage;
+  if (
+    typeof requestedPageIndex === "number" &&
+    (pageImage?.pageIndex !== requestedPageIndex || !pageImage.dataUrl)
+  ) {
+    const attachmentId = pack.attachment?.id || payload.attachmentId;
+    const attachment = attachmentId
+      ? Zotero.Items.get(Number(attachmentId))
+      : undefined;
+    pageImage = await capturePdfJsPageImage({
+      attachment,
+      pageIndex: requestedPageIndex,
+      includeDataUrl: true,
+      maxWidth: Math.max(
+        640,
+        Math.min(Number(payload.pageImageMaxWidth || 1200), 1800),
+      ),
+    });
+  }
   const imageInput = dataUrlToImageInput(pageImage?.dataUrl);
   const warnings = [
     ...pack.warnings,
@@ -1499,8 +2833,28 @@ export async function inspectFigureTablePage(payload: {
         ]),
     ...(candidate ? [] : ["No matching figure/table caption candidate found."]),
   ];
+  const searchComplete = !warnings.some((warning) =>
+    /extraction limited to/i.test(warning),
+  );
+  const terminalNotFound =
+    !candidate && typeof requestedPageIndex !== "number" && searchComplete;
+  const status = candidate
+    ? ("candidate_found" as const)
+    : terminalNotFound
+      ? ("not_found" as const)
+      : ("page_needs_inspection" as const);
+  const recommendedAction = terminalNotFound
+    ? "Tell the user that the requested figure/table was not found in this PDF. Do not call locate_quote, shell/Python, or unrelated evidence tools. If the user expects a visual, ask for a page number or screenshot."
+    : candidate
+      ? "Inspect the returned rendered page and answer only the current figure/table request."
+      : "Inspect the explicitly requested page. If no visual is visible, report that it could not be confirmed.";
 
   return {
+    status,
+    found: !!candidate,
+    searchComplete,
+    terminal: terminalNotFound,
+    recommendedAction,
     target: {
       itemId: payload.itemId,
       attachmentId: payload.attachmentId,
@@ -1516,13 +2870,15 @@ export async function inspectFigureTablePage(payload: {
     candidate,
     pageImage,
     imageInput,
-    inspectionPrompt: visualInspectionPrompt({
-      candidate,
-      pageImage,
-      claim: payload.claim,
-      query: payload.query,
-      warnings,
-    }),
+    inspectionPrompt: terminalNotFound
+      ? `No matching figure/table was found. ${recommendedAction}`
+      : visualInspectionPrompt({
+          candidate,
+          pageImage,
+          claim: payload.claim,
+          query: payload.query,
+          warnings,
+        }),
     expectedOutput: {
       format: "json",
       fields: [
@@ -1719,12 +3075,25 @@ export async function verifyCitationClaims(payload: {
       .sort((a, b) => (b.score || 0) - (a.score || 0));
     const evidence = candidates[0];
     const confidence = evidence?.score || 0;
-    const status: CitationVerification["status"] =
-      confidence >= (quote ? 0.75 : 0.32)
-        ? "verified"
-        : confidence >= (quote ? 0.25 : 0.16)
-          ? "weak"
-          : "unverified";
+    const exactClaimMatch =
+      !!evidence?.text &&
+      normalizeForMatch(evidence.text).includes(normalizeForMatch(query));
+    const contradictory = evidence?.matchReason?.startsWith(
+      "possible contradiction:",
+    );
+    const status: CitationVerification["status"] = contradictory
+      ? "unverified"
+      : quote
+        ? confidence >= 0.75
+          ? "verified"
+          : confidence >= 0.25
+            ? "weak"
+            : "unverified"
+        : exactClaimMatch && confidence >= 0.9
+          ? "verified"
+          : confidence >= 0.16
+            ? "weak"
+            : "unverified";
     verifications.push({
       claim,
       quote: quote || undefined,
@@ -1738,7 +3107,11 @@ export async function verifyCitationClaims(payload: {
           : [
               ...(status === "verified"
                 ? []
-                : ["Available evidence does not strongly support this claim."]),
+                : [
+                    contradictory
+                      ? "The closest evidence may contradict this claim."
+                      : "Available lexical evidence does not establish that this claim is supported.",
+                  ]),
               ...(visualInspection
                 ? [
                     "Figure/table claim requires visual inspection before final acceptance.",
@@ -1761,11 +3134,17 @@ function markdownCell(value: unknown): string {
 }
 
 function verificationLocation(verification: CitationVerification): string {
-  const locator = verification.evidence?.locator;
+  const evidence = verification.evidence;
+  const locator = evidence?.locator;
   if (!locator) return "";
+  const locationLink = evidenceMarkdownLink(
+    locator,
+    evidence?.id || "evidence",
+  );
   return [
     locator.pageNumber ? `p. ${locator.pageNumber}` : "",
-    locator.openUri || locator.evidenceUri || "",
+    locationLink,
+    !locator.evidenceUri ? locator.openUri : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -2028,7 +3407,7 @@ function academicTraceMarkdown(
     "",
     "## Evidence",
     "",
-    "| Claim | Status | Evidence | Location |",
+    "| Claim | Status | Support | Location |",
     "| --- | --- | --- | --- |",
   ];
 
@@ -2037,14 +3416,18 @@ function academicTraceMarkdown(
       [
         markdownCell(record.claim),
         markdownCell(record.status),
-        markdownCell(record.evidenceId || record.excerpt || ""),
+        record.locator ? "Source paragraph" : "No source located",
         markdownCell(
           record.locator
             ? [
                 record.locator.pageNumber
                   ? `p. ${record.locator.pageNumber}`
                   : "",
-                record.locator.openUri || record.locator.evidenceUri || "",
+                evidenceMarkdownLink(
+                  record.locator,
+                  record.evidenceId || "evidence",
+                ),
+                !record.locator.evidenceUri ? record.locator.openUri || "" : "",
               ]
                 .filter(Boolean)
                 .join(" ")

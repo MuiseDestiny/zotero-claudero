@@ -68,4 +68,15 @@ describe("provider session state", function () {
     assert.equal(target.providerState?.codex?.threadId, "thread-1");
     assert.equal(target.currentProviderTurnId, "turn-1");
   });
+
+  it("records DeepSeek Harness session metadata", function () {
+    const next = mergeProviderSessionState(
+      {},
+      {
+        provider: "deepseek",
+        sessionId: "dsh-session-1",
+      },
+    );
+    assert.deepEqual(next, { deepseek: { sessionId: "dsh-session-1" } });
+  });
 });

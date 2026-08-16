@@ -3,6 +3,20 @@ import { ToolInputStreamState } from "../src/helper/stream/toolInputStreamState"
 import { transformClaudeMessage } from "../src/helper/stream/transformClaudeMessage";
 
 describe("Claude stream normalization", function () {
+  it("emits a resumable Claude session id from the init event", function () {
+    const state = new ToolInputStreamState();
+    const events = transformClaudeMessage(
+      { type: "system", subtype: "init", session_id: "session-123" },
+      state,
+    );
+    assert.deepEqual(events, [
+      {
+        type: "session",
+        session: { provider: "claude", sessionId: "session-123" },
+      },
+    ]);
+  });
+
   it("streams previews and reconciles them with the complete assistant message", function () {
     const state = new ToolInputStreamState();
     state.resetTurn();

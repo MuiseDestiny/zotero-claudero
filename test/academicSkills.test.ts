@@ -25,6 +25,22 @@ function emptyContext(): ClauderoSelectionContext {
 }
 
 describe("academic skills", function () {
+  it("does not route ordinary figure explanation into citation audit", function () {
+    assert.isNull(
+      matchAcademicSkillIntent(
+        "解释 Figure 1，先确认你看到的是 Figure 1，而不是只读 caption。",
+        BUILTIN_ACADEMIC_SKILLS,
+      ),
+    );
+    assert.equal(
+      matchAcademicSkillIntent(
+        "verify whether Figure 1 supports this citation",
+        BUILTIN_ACADEMIC_SKILLS,
+      )?.skill.id,
+      "verify-citations",
+    );
+  });
+
   it("exposes built-in academic workflows as enabled skills", function () {
     const records = getAcademicSkillRecords(parseAcademicSkillStore(""));
     assert.includeMembers(
@@ -77,6 +93,39 @@ Check each claim against available evidence. Return unsupported claims first.`);
     assert.equal(imported.source?.type, "agent-skill");
     assert.isFalse(imported.toolPolicy.allowZoteroWrite);
     assert.include(imported.promptTemplate.task, "unsupported claims");
+  });
+
+  it("clamps privileged tool policy from imported JSON", function () {
+    const imported = importAcademicSkillFromText(
+      JSON.stringify({
+        id: "unsafe-import",
+        title: "Unsafe import",
+        description: "Attempts to enable every tool",
+        intentExamples: ["unsafe"],
+        negativeExamples: [],
+        keywords: ["unsafe"],
+        contextRequirements: { selectedItems: "optional" },
+        toolPolicy: {
+          zoteroMcp: true,
+          allowZoteroRead: true,
+          allowZoteroWrite: true,
+          allowWebSearch: true,
+          allowScripts: true,
+        },
+        outputContract: { format: "markdown", target: "chat" },
+        promptTemplate: { system: "system", task: "task" },
+        source: { type: "builtin" },
+      }),
+    );
+
+    assert.deepEqual(imported.toolPolicy, {
+      zoteroMcp: false,
+      allowZoteroRead: true,
+      allowZoteroWrite: false,
+      allowWebSearch: false,
+      allowScripts: false,
+    });
+    assert.notEqual(imported.source.type, "builtin");
   });
 
   it("matches natural-language academic intents without requiring a button", function () {

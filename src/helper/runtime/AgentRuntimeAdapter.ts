@@ -14,17 +14,27 @@ import {
   CodexPersistentQueryManager,
   type CodexConfig,
 } from "./CodexPersistentQueryManager";
+import {
+  DeepSeekPersistentQueryManager,
+  type DeepSeekConfig,
+} from "./DeepSeekPersistentQueryManager";
 import { ToolInputStreamState } from "../stream/toolInputStreamState";
 import { transformClaudeMessage } from "../stream/transformClaudeMessage";
 import type { ClauderoStreamEvent } from "../stream/types";
+import type { ProviderModelDescriptor } from "../../shared/providerModels";
+import type { AcademicToolPolicy } from "../../shared/academicToolPolicy";
 
-export type AgentRuntimeProvider = "claude" | "codex";
+export type AgentRuntimeProvider = "claude" | "codex" | "deepseek";
 
-export type AgentRuntimeConfig = PersistentQueryConfig | CodexConfig;
+export type AgentRuntimeConfig =
+  | PersistentQueryConfig
+  | CodexConfig
+  | DeepSeekConfig;
 
 export type AgentRuntimeRestartConfig =
   | ClaudeRestartConfig
-  | Omit<Partial<CodexConfig>, "workspacePath">;
+  | Omit<Partial<CodexConfig>, "workspacePath">
+  | Omit<Partial<DeepSeekConfig>, "workspacePath">;
 
 export interface AgentRuntimeDiagnostics {
   active: boolean;
@@ -32,16 +42,23 @@ export interface AgentRuntimeDiagnostics {
   session?: unknown;
   mcpServers?: string[];
   zoteroMcp?: boolean;
+  debugEvents?: unknown[];
+  pendingRequests?: unknown[];
+  launch?: unknown;
+  process?: unknown;
+  mcpStatus?: unknown;
 }
 
 export interface AgentRuntimeAdapter {
   provider: AgentRuntimeProvider;
   isActive: boolean;
+  isBusy: boolean;
   workspacePath: string | null;
   initialize(config: AgentRuntimeConfig): Promise<void>;
   requiresRestart(config: AgentRuntimeRestartConfig): boolean;
   updateConfig(config: AgentRuntimeRestartConfig): void;
   setPermissionMode(mode: string | undefined): Promise<void>;
+  setToolPolicy(policy: AcademicToolPolicy | undefined): void;
   sendMessageEvents(
     prompt: string,
     images?: ImageInput[],
@@ -63,6 +80,7 @@ export interface AgentRuntimeAdapter {
   reloadSkills(): Promise<
     Array<{ name: string; description: string; argumentHint?: string }>
   >;
+  listModels(): Promise<ProviderModelDescriptor[]>;
   diagnostics(): AgentRuntimeDiagnostics;
   close(): void;
 }
@@ -77,6 +95,10 @@ export class ClaudeRuntimeAdapter implements AgentRuntimeAdapter {
 
   get isActive(): boolean {
     return this.manager.isActive;
+  }
+
+  get isBusy(): boolean {
+    return this.manager.isBusy;
   }
 
   get workspacePath(): string | null {
@@ -97,6 +119,10 @@ export class ClaudeRuntimeAdapter implements AgentRuntimeAdapter {
 
   setPermissionMode(mode: string | undefined): Promise<void> {
     return this.manager.setPermissionMode(normalizePermissionMode(mode));
+  }
+
+  setToolPolicy(policy: AcademicToolPolicy | undefined): void {
+    this.manager.setToolPolicy(policy);
   }
 
   async *sendMessageEvents(
@@ -141,8 +167,7 @@ export class ClaudeRuntimeAdapter implements AgentRuntimeAdapter {
   }
 
   cancelActiveTurn(): void {
-    this.cancelPendingQuestion();
-    this.cancelPendingExitPlan();
+    this.manager.cancelActiveTurn();
   }
 
   supportedCommands(): Promise<
@@ -155,6 +180,10 @@ export class ClaudeRuntimeAdapter implements AgentRuntimeAdapter {
     Array<{ name: string; description: string; argumentHint?: string }>
   > {
     return this.manager.reloadSkills();
+  }
+
+  async listModels(): Promise<ProviderModelDescriptor[]> {
+    return [];
   }
 
   diagnostics(): AgentRuntimeDiagnostics {
@@ -185,6 +214,10 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     return this.manager.isActive;
   }
 
+  get isBusy(): boolean {
+    return this.manager.isBusy;
+  }
+
   get workspacePath(): string | null {
     return this.manager.workspacePath;
   }
@@ -207,6 +240,10 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
 
   setPermissionMode(mode: string | undefined): Promise<void> {
     return this.manager.setPermissionMode(mode);
+  }
+
+  setToolPolicy(policy: AcademicToolPolicy | undefined): void {
+    this.manager.setToolPolicy(policy);
   }
 
   sendMessageEvents(
@@ -259,6 +296,131 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     return this.manager.reloadSkills();
   }
 
+  listModels(): Promise<ProviderModelDescriptor[]> {
+    return this.manager.listModels();
+  }
+
+  diagnostics(): AgentRuntimeDiagnostics {
+    const mcpServers = this.manager.getMcpServerNames();
+    const diagnostics = this.manager.getDiagnostics();
+    return {
+      active: this.isActive,
+      workspacePath: this.workspacePath,
+      session: this.manager.getSessionState(),
+      mcpServers,
+      zoteroMcp: mcpServers.includes("zotero"),
+      debugEvents: diagnostics.events,
+      pendingRequests: diagnostics.pendingRequests,
+      launch: diagnostics.launch,
+      process: diagnostics.process,
+      mcpStatus: diagnostics.mcpStatus,
+    };
+  }
+
+  close(): void {
+    this.manager.close();
+  }
+}
+
+export class DeepSeekRuntimeAdapter implements AgentRuntimeAdapter {
+  readonly provider = "deepseek" as const;
+  private readonly manager: DeepSeekPersistentQueryManager;
+
+  constructor(permissionManager: PermissionManager) {
+    this.manager = new DeepSeekPersistentQueryManager(permissionManager);
+  }
+
+  get isActive(): boolean {
+    return this.manager.isActive;
+  }
+
+  get isBusy(): boolean {
+    return this.manager.isBusy;
+  }
+
+  get workspacePath(): string | null {
+    return this.manager.workspacePath;
+  }
+
+  initialize(config: AgentRuntimeConfig): Promise<void> {
+    return this.manager.initialize(config as DeepSeekConfig);
+  }
+
+  requiresRestart(config: AgentRuntimeRestartConfig): boolean {
+    return this.manager.requiresRestart(
+      config as Omit<Partial<DeepSeekConfig>, "workspacePath">,
+    );
+  }
+
+  updateConfig(config: AgentRuntimeRestartConfig): void {
+    this.manager.updateConfig(
+      config as Omit<Partial<DeepSeekConfig>, "workspacePath">,
+    );
+  }
+
+  setPermissionMode(mode: string | undefined): Promise<void> {
+    return this.manager.setPermissionMode(mode);
+  }
+
+  setToolPolicy(policy: AcademicToolPolicy | undefined): void {
+    this.manager.setToolPolicy(policy);
+  }
+
+  sendMessageEvents(
+    prompt: string,
+    images?: ImageInput[],
+  ): AsyncIterable<ClauderoStreamEvent> {
+    return this.manager.sendMessageEvents(prompt, images);
+  }
+
+  getPendingQuestion(): PendingQuestion | null {
+    return this.manager.getPendingQuestion();
+  }
+
+  getPendingExitPlan(): PendingExitPlan | null {
+    return this.manager.getPendingExitPlan();
+  }
+
+  answerQuestion(
+    toolUseId: string,
+    answers: Record<string, string | string[]>,
+    response?: string,
+  ): boolean {
+    return this.manager.answerQuestion(toolUseId, answers, response);
+  }
+
+  answerExitPlan(toolUseId: string, decision: ExitPlanDecision): boolean {
+    return this.manager.answerExitPlan(toolUseId, decision);
+  }
+
+  cancelPendingQuestion(): boolean {
+    return this.manager.cancelPendingQuestion();
+  }
+
+  cancelPendingExitPlan(): boolean {
+    return this.manager.cancelPendingExitPlan();
+  }
+
+  cancelActiveTurn(): void {
+    this.manager.cancelActiveTurn();
+  }
+
+  supportedCommands(): Promise<
+    Array<{ name: string; description: string; argumentHint?: string }>
+  > {
+    return this.manager.supportedCommands();
+  }
+
+  reloadSkills(): Promise<
+    Array<{ name: string; description: string; argumentHint?: string }>
+  > {
+    return this.manager.reloadSkills();
+  }
+
+  listModels(): Promise<ProviderModelDescriptor[]> {
+    return this.manager.listModels();
+  }
+
   diagnostics(): AgentRuntimeDiagnostics {
     const mcpServers = this.manager.getMcpServerNames();
     return {
@@ -266,7 +428,8 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
       workspacePath: this.workspacePath,
       session: this.manager.getSessionState(),
       mcpServers,
-      zoteroMcp: mcpServers.includes("zotero"),
+      zoteroMcp: false,
+      launch: this.manager.diagnostics(),
     };
   }
 

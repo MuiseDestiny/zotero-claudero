@@ -125,7 +125,6 @@ function normalizeCodexMcpServerConfig(
   if (command) next.command = command;
   if (url) next.url = url;
   if (!next.command && !next.url) return null;
-
   if (Array.isArray(raw.args)) {
     next.args = raw.args.map((arg) => mapMcpPath(arg, mapper));
   }
@@ -149,7 +148,9 @@ function normalizeCodexMcpServerConfig(
   if (raw.required === true) next.required = true;
   if (Array.isArray(raw.enabled_tools)) next.enabled_tools = raw.enabled_tools;
   const disabledTools = [
-    ...(Array.isArray(raw.disabled_tools) ? raw.disabled_tools.map(String) : []),
+    ...(Array.isArray(raw.disabled_tools)
+      ? raw.disabled_tools.map(String)
+      : []),
     ...disabledToolsForServer(serverName, config.mcpDisabledTools),
   ];
   if (disabledTools.length > 0) {
@@ -166,8 +167,30 @@ export function buildCodexMcpConfigOverrides(
   config: CodexMcpConfig,
   mapper: CodexMcpPathMapper,
 ): string[] {
-  const servers = config.mcpServers || {};
+  const threadConfig = buildCodexMcpThreadConfig(config, mapper);
   const args: string[] = [];
+  const appendOverride = (keyPath: string, value: unknown): void => {
+    if (value === undefined) return;
+    if (isPlainRecord(value)) {
+      for (const [key, entry] of Object.entries(value)) {
+        appendOverride(`${keyPath}.${tomlKeySegment(key)}`, entry);
+      }
+      return;
+    }
+    args.push("--config", `${keyPath}=${tomlInlineValue(value)}`);
+  };
+  for (const [key, value] of Object.entries(threadConfig)) {
+    appendOverride(tomlKeySegment(key), value);
+  }
+  return args;
+}
+
+export function buildCodexMcpThreadConfig(
+  config: CodexMcpConfig,
+  mapper: CodexMcpPathMapper,
+): JsonRecord {
+  const servers = config.mcpServers || {};
+  const mcpServers: JsonRecord = {};
   for (const [name, rawServer] of Object.entries(servers)) {
     const serverName = name.trim();
     if (!serverName) continue;
@@ -178,12 +201,9 @@ export function buildCodexMcpConfigOverrides(
       mapper,
     );
     if (!server) continue;
-    args.push(
-      "--config",
-      `mcp_servers.${tomlKeySegment(serverName)}=${tomlInlineValue(server)}`,
-    );
+    mcpServers[serverName] = server;
   }
-  return args;
+  return Object.keys(mcpServers).length ? { mcp_servers: mcpServers } : {};
 }
 
 export function buildZoteroBridgeMcpServer(
@@ -207,6 +227,8 @@ export function buildZoteroBridgeMcpServer(
     ],
     startup_timeout_sec: 20,
     tool_timeout_sec: 120,
-    default_tools_approval_mode: "prompt",
+    // Match Claude SDK mode: Zotero read tools run directly, while write tools
+    // are still protected inside ZoteroMcpBridge by Claudero's permission dialog.
+    default_tools_approval_mode: "approve",
   };
 }

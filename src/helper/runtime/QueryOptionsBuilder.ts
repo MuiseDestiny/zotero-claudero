@@ -20,10 +20,12 @@ export interface QueryOptionsConfig {
   additionalDirectories?: string[];
   permissionMode?: ClauderoPermissionMode;
   zoteroEndpointUrl?: string;
+  zoteroEndpointToken?: string;
   enableZoteroMcp?: boolean;
   mcpServers?: Record<string, unknown>;
   mcpDisabledTools?: string[];
   permissionManager?: PermissionManager;
+  resume?: string;
 }
 
 export function normalizeModel(model: string | undefined): string | undefined {
@@ -86,6 +88,7 @@ export function buildQueryOptions(config: QueryOptionsConfig): Options {
       pm as import("@anthropic-ai/claude-agent-sdk").PermissionMode,
     allowDangerouslySkipPermissions: true,
   };
+  if (config.resume) options.resume = config.resume;
 
   const model = normalizeModel(config.model);
   const effort = normalizeEffort(config.effort);
@@ -114,10 +117,14 @@ export function buildQueryOptions(config: QueryOptionsConfig): Options {
     config.zoteroEndpointUrl &&
     config.permissionManager
   ) {
+    if (!config.zoteroEndpointToken) {
+      throw new Error("Missing Zotero endpoint capability token");
+    }
     options.mcpServers = {
       ...(options.mcpServers || {}),
       zotero: createZoteroMcpServer(
         config.zoteroEndpointUrl,
+        config.zoteroEndpointToken,
         config.permissionManager,
       ),
     };

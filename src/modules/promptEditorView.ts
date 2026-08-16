@@ -1,5 +1,6 @@
 import type { CustomPrompt, PromptIcon } from "./conversationStore";
 import { showIconPicker, renderPromptIcon } from "./iconPickerView";
+import { getString } from "../utils/locale";
 
 export interface PromptEditorOptions {
   prompt?: CustomPrompt;
@@ -10,7 +11,9 @@ export interface PromptEditorOptions {
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
 function createEl<K extends keyof HTMLElementTagNameMap>(
-  doc: Document, tag: K, className?: string,
+  doc: Document,
+  tag: K,
+  className?: string,
 ): HTMLElementTagNameMap[K] {
   const el = doc.createElementNS(XHTML_NS, tag) as HTMLElementTagNameMap[K];
   if (className) el.className = className;
@@ -26,7 +29,11 @@ function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function renderIconPreview(doc: Document, icon: PromptIcon | undefined, container: HTMLElement): void {
+function renderIconPreview(
+  doc: Document,
+  icon: PromptIcon | undefined,
+  container: HTMLElement,
+): void {
   while (container.firstChild) container.firstChild.remove();
   if (!icon) {
     container.textContent = "+";
@@ -62,10 +69,12 @@ export function showPromptEditor(
   // ── Header ──
   const header = createEl(doc, "div", "claudero-prompt-editor-header");
   const title = createEl(doc, "h3", "claudero-prompt-editor-title");
-  title.textContent = options.prompt ? "Edit Prompt" : "Create New Prompt";
+  title.textContent = options.prompt
+    ? getString("prompt-edit")
+    : getString("prompt-create");
   const closeBtn = createEl(doc, "button", "claudero-prompt-editor-close");
   closeBtn.type = "button";
-  closeBtn.setAttribute("aria-label", "Close");
+  closeBtn.setAttribute("aria-label", getString("ui-close"));
   closeBtn.textContent = "×";
   closeBtn.addEventListener("click", () => close("cancel"));
   header.append(title, closeBtn);
@@ -78,10 +87,17 @@ export function showPromptEditor(
   const iconRow = createEl(doc, "div", "claudero-prompt-editor-icon-row");
   const iconBtn = createEl(doc, "button", "claudero-prompt-editor-icon-btn");
   iconBtn.type = "button";
-  iconBtn.setAttribute("aria-label", "Choose prompt icon");
+  iconBtn.setAttribute("aria-label", getString("prompt-choose-icon"));
   // Force square dimensions — CSS alone may be overridden by the UA stylesheet
   const forceSquare = (el: HTMLElement, px: string) => {
-    for (const prop of ["width", "height", "min-width", "max-width", "min-height", "max-height"] as const)
+    for (const prop of [
+      "width",
+      "height",
+      "min-width",
+      "max-width",
+      "min-height",
+      "max-height",
+    ] as const)
       el.style.setProperty(prop, px, "important");
     el.style.setProperty("aspect-ratio", "1 / 1", "important");
     el.style.setProperty("flex-shrink", "0", "important");
@@ -101,9 +117,9 @@ export function showPromptEditor(
 
   const iconTextWrap = createEl(doc, "div", "claudero-prompt-editor-icon-copy");
   const iconLabel = createEl(doc, "div", "claudero-prompt-editor-icon-label");
-  iconLabel.textContent = "Icon";
+  iconLabel.textContent = getString("ui-icon");
   const iconHint = createEl(doc, "div", "claudero-prompt-editor-icon-hint");
-  iconHint.textContent = "Optional";
+  iconHint.textContent = getString("ui-optional");
   iconTextWrap.append(iconLabel, iconHint);
   iconRow.append(iconBtn, iconTextWrap);
 
@@ -119,7 +135,10 @@ export function showPromptEditor(
         activePicker?.remove();
         activePicker = null;
       },
-      onClose: () => { activePicker?.remove(); activePicker = null; },
+      onClose: () => {
+        activePicker?.remove();
+        activePicker = null;
+      },
     });
     activePicker.classList.add("claudero-prompt-editor-floating-picker");
     const rect = iconBtn.getBoundingClientRect();
@@ -128,8 +147,12 @@ export function showPromptEditor(
     const pickerWidth = Math.min(280, vw - 16);
     activePicker.style.width = `${pickerWidth}px`;
     const scrollTop = doc.documentElement.scrollTop || doc.body?.scrollTop || 0;
-    const scrollLeft = doc.documentElement.scrollLeft || doc.body?.scrollLeft || 0;
-    const left = Math.min(Math.max(8, rect.left + scrollLeft), vw - pickerWidth - 8 + scrollLeft);
+    const scrollLeft =
+      doc.documentElement.scrollLeft || doc.body?.scrollLeft || 0;
+    const left = Math.min(
+      Math.max(8, rect.left + scrollLeft),
+      vw - pickerWidth - 8 + scrollLeft,
+    );
     activePicker.style.left = `${left}px`;
     activePicker.style.transform = "";
     const spaceBelow = vh - rect.bottom - 8;
@@ -142,7 +165,11 @@ export function showPromptEditor(
     doc.documentElement.appendChild(activePicker);
     const onOutside = (ev: MouseEvent) => {
       const t = ev.target as Node;
-      if (!activePicker?.contains(t) && t !== iconBtn && !(t as HTMLElement)?.closest?.(".claudero-color-picker-active")) {
+      if (
+        !activePicker?.contains(t) &&
+        t !== iconBtn &&
+        !(t as HTMLElement)?.closest?.(".claudero-color-picker-active")
+      ) {
         activePicker?.remove();
         activePicker = null;
         doc.removeEventListener("mousedown", onOutside, true);
@@ -158,12 +185,16 @@ export function showPromptEditor(
 
   const nameRow = createEl(doc, "div", "claudero-prompt-editor-row");
   const nameLabel = createEl(doc, "label", "claudero-prompt-editor-label");
-  nameLabel.textContent = "Name";
+  nameLabel.textContent = getString("ui-name");
   nameLabel.setAttribute("for", nameId);
-  const nameInput = createEl(doc, "input", "claudero-prompt-editor-input") as HTMLInputElement;
+  const nameInput = createEl(
+    doc,
+    "input",
+    "claudero-prompt-editor-input",
+  ) as HTMLInputElement;
   nameInput.id = nameId;
   nameInput.type = "text";
-  nameInput.placeholder = "Prompt name...";
+  nameInput.placeholder = getString("prompt-name-placeholder");
   nameInput.value = options.prompt?.label ?? "";
   nameInput.setAttribute("autocomplete", "off");
   nameInput.addEventListener("input", () => setFieldError(nameInput, false));
@@ -172,15 +203,23 @@ export function showPromptEditor(
   // Description field
   const descRow = createEl(doc, "div", "claudero-prompt-editor-row");
   const descLabel = createEl(doc, "label", "claudero-prompt-editor-label");
-  descLabel.textContent = "Description";
+  descLabel.textContent = getString("ui-description");
   descLabel.setAttribute("for", descId);
-  const descOptional = createEl(doc, "span", "claudero-prompt-editor-label-muted");
-  descOptional.textContent = "Optional";
+  const descOptional = createEl(
+    doc,
+    "span",
+    "claudero-prompt-editor-label-muted",
+  );
+  descOptional.textContent = getString("ui-optional");
   descLabel.appendChild(descOptional);
-  const descInput = createEl(doc, "input", "claudero-prompt-editor-input") as HTMLInputElement;
+  const descInput = createEl(
+    doc,
+    "input",
+    "claudero-prompt-editor-input",
+  ) as HTMLInputElement;
   descInput.id = descId;
   descInput.type = "text";
-  descInput.placeholder = "Short description...";
+  descInput.placeholder = getString("prompt-description-placeholder");
   descInput.value = options.prompt?.description ?? "";
   descInput.setAttribute("autocomplete", "off");
   descRow.append(descLabel, descInput);
@@ -188,18 +227,26 @@ export function showPromptEditor(
   // Prompt content field
   const contentRow = createEl(doc, "div", "claudero-prompt-editor-row");
   const contentLabel = createEl(doc, "label", "claudero-prompt-editor-label");
-  contentLabel.textContent = "Prompt";
+  contentLabel.textContent = getString("ui-prompt");
   contentLabel.setAttribute("for", contentId);
-  const contentTextarea = createEl(doc, "textarea", "claudero-prompt-editor-textarea") as HTMLTextAreaElement;
+  const contentTextarea = createEl(
+    doc,
+    "textarea",
+    "claudero-prompt-editor-textarea",
+  ) as HTMLTextAreaElement;
   contentTextarea.id = contentId;
-  contentTextarea.placeholder = "Enter your prompt instructions...";
+  contentTextarea.placeholder = getString("prompt-content-placeholder");
   contentTextarea.rows = 8;
   contentTextarea.value = options.prompt?.text ?? "";
   contentTextarea.addEventListener("input", () => {
     setFieldError(contentTextarea, false);
     if (!descInput.value.trim()) {
-      const firstLine = contentTextarea.value.split("\n")[0]?.trim().slice(0, 60);
-      descInput.placeholder = firstLine || "Short description...";
+      const firstLine = contentTextarea.value
+        .split("\n")[0]
+        ?.trim()
+        .slice(0, 60);
+      descInput.placeholder =
+        firstLine || getString("prompt-description-placeholder");
     }
   });
   contentRow.append(contentLabel, contentTextarea);
@@ -210,14 +257,22 @@ export function showPromptEditor(
   // ── Footer ──
   const footer = createEl(doc, "div", "claudero-prompt-editor-footer");
 
-  const cancelBtn = createEl(doc, "button", "claudero-button claudero-prompt-editor-btn-secondary");
+  const cancelBtn = createEl(
+    doc,
+    "button",
+    "claudero-button claudero-prompt-editor-btn-secondary",
+  );
   cancelBtn.type = "button";
-  cancelBtn.textContent = "Cancel";
+  cancelBtn.textContent = getString("ui-cancel");
   cancelBtn.addEventListener("click", () => close("cancel"));
 
-  const saveBtn = createEl(doc, "button", "claudero-button claudero-button-primary claudero-prompt-editor-btn-primary");
+  const saveBtn = createEl(
+    doc,
+    "button",
+    "claudero-button claudero-button-primary claudero-prompt-editor-btn-primary",
+  );
   saveBtn.type = "button";
-  saveBtn.textContent = "Save";
+  saveBtn.textContent = getString("ui-save");
 
   const save = () => {
     const label = nameInput.value.trim();
@@ -228,13 +283,35 @@ export function showPromptEditor(
     setFieldError(nameInput, nameInvalid);
     setFieldError(contentTextarea, textInvalid);
 
-    if (nameInvalid) { nameInput.focus(); return; }
-    if (textInvalid) { contentTextarea.focus(); return; }
+    if (nameInvalid) {
+      nameInput.focus();
+      return;
+    }
+    if (textInvalid) {
+      contentTextarea.focus();
+      return;
+    }
 
-    const description = descInput.value.trim() || text.split("\n")[0]?.trim().slice(0, 100) || "";
+    const description =
+      descInput.value.trim() || text.split("\n")[0]?.trim().slice(0, 100) || "";
     const prompt: CustomPrompt = options.prompt
-      ? { ...options.prompt, icon: selectedIcon, label, description, text, updatedAt: Date.now() }
-      : { id: `cp-${Date.now()}`, icon: selectedIcon, label, description, text, createdAt: Date.now(), updatedAt: Date.now() };
+      ? {
+          ...options.prompt,
+          icon: selectedIcon,
+          label,
+          description,
+          text,
+          updatedAt: Date.now(),
+        }
+      : {
+          id: `cp-${Date.now()}`,
+          icon: selectedIcon,
+          label,
+          description,
+          text,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
 
     closed = true;
     activePicker?.remove();
@@ -250,10 +327,17 @@ export function showPromptEditor(
 
   // ── Keyboard ──
   const onKeyDown = (event: KeyboardEvent) => {
-    if (!modal.isConnected) { doc.removeEventListener("keydown", onKeyDown, true); return; }
+    if (!modal.isConnected) {
+      doc.removeEventListener("keydown", onKeyDown, true);
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
-      if (activePicker) { activePicker.remove(); activePicker = null; return; }
+      if (activePicker) {
+        activePicker.remove();
+        activePicker = null;
+        return;
+      }
       doc.removeEventListener("keydown", onKeyDown, true);
       close("cancel");
       return;
@@ -265,7 +349,13 @@ export function showPromptEditor(
   };
   doc.addEventListener("keydown", onKeyDown, true);
 
-  setTimeout(() => { try { nameInput.focus(); } catch { /* */ } }, 50);
+  setTimeout(() => {
+    try {
+      nameInput.focus();
+    } catch {
+      /* */
+    }
+  }, 50);
 
   return modal;
 }

@@ -1,4 +1,5 @@
 import { getPref, setPref } from "../utils/prefs";
+import type { AcademicToolPolicy } from "../shared/academicToolPolicy";
 import type { ClauderoSelectionContext } from "./zoteroContext";
 
 export type AcademicSkillCategory =
@@ -21,13 +22,7 @@ export interface AcademicSkillContextRequirements {
   notes?: AcademicContextNeed;
 }
 
-export interface AcademicSkillToolPolicy {
-  zoteroMcp: boolean;
-  allowZoteroRead: boolean;
-  allowZoteroWrite: boolean;
-  allowWebSearch: boolean;
-  allowScripts: boolean;
-}
+export type AcademicSkillToolPolicy = AcademicToolPolicy;
 
 export interface AcademicSkillOutputContract {
   format: "markdown" | "markdown-table" | "json" | "zotero-note";
@@ -161,8 +156,8 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
     },
     promptTemplate: {
       system:
-        "You are running Claudero's summarize-paper academic workflow. Ground the answer in Zotero metadata, PDF text, selected text, annotations, and get_evidence_pack results when available. Do not invent details that are not present in the context.",
-      task: "Summarize the paper using the output sections exactly. Include evidence locations for key findings and limitations. If evidence is missing, say what is missing instead of guessing.",
+        "You are running Claudero's summarize-paper academic workflow. Ground the answer in Zotero metadata, PDF text, selected text, annotations, and get_numbered_evidence_pack/expand_evidence_range results when available. Do not invent details that are not present in the context.",
+      task: "Summarize the paper using the output sections exactly. Copy tool-provided citationMarkdown markers before sentence-ending punctuation without adding URLs. Do not create a separate Evidence, Source, References, or 证据 section unless the user explicitly asks for an audit.",
     },
     source: { type: "builtin" },
   },
@@ -213,13 +208,12 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
         "Procedure",
         "Analysis strategy",
         "Methodological limitations",
-        "Evidence locations",
       ],
     },
     promptTemplate: {
       system:
-        "You are running Claudero's extract-methods academic workflow. Extract methods from the provided Zotero/PDF context and get_evidence_pack results, and keep claims tied to evidence.",
-      task: "Return the method extraction using the output sections exactly. Include page, quote, annotation, paragraph id, or metadata clues when available. Use locate_quote before direct quotes.",
+        "You are running Claudero's extract-methods academic workflow. Extract methods from the provided Zotero/PDF context and get_numbered_evidence_pack/expand_evidence_range results, and keep claims tied to source material.",
+      task: "Return the method extraction using the output sections exactly. Copy tool-provided citationMarkdown markers before sentence-ending punctuation without adding URLs. Use locate_quote before direct quotes.",
     },
     source: { type: "builtin" },
   },
@@ -275,8 +269,8 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
     },
     promptTemplate: {
       system:
-        "You are running Claudero's literature-matrix academic workflow. Compare selected Zotero items using only available context and get_evidence_pack results, clearly marking missing evidence.",
-      task: "Create a Markdown table using the output columns exactly, followed by a concise synthesis of patterns, disagreements, and gaps. Add compact evidence locations for high-value claims, and use verify_citations when claims are citation-heavy.",
+        "You are running Claudero's literature-matrix academic workflow. Compare selected Zotero items using only available context and get_numbered_evidence_pack, expand_evidence_range, or get_evidence_pack results, clearly marking missing source support.",
+      task: "Create a Markdown table using the output columns exactly, followed by a concise synthesis of patterns, disagreements, and gaps. Add quiet inline source markers before sentence-ending punctuation for high-value claims, and use verify_citations when claims are citation-heavy.",
     },
     source: { type: "builtin" },
   },
@@ -288,15 +282,28 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
     routingGuidance:
       "Use when the user asks to verify citations, check quotes, validate page references, audit evidence, map claims to sources, or inspect figure/table references.",
     category: "verification",
-    builtinVersion: 1,
+    builtinVersion: 2,
     intentExamples: [
       "verify these citations",
       "检查这些引用是否可靠",
       "核查这段综述的来源",
       "map claims to sources",
       "check this quote and page number",
+      "这句话在本文吗",
+      "这句话在论文中吗",
+      "这段话是否出现在原文",
+      "这句引文是否出现在文中",
+      "does this sentence appear in the paper",
+      "is this quote in the article",
     ],
-    negativeExamples: ["summarize this paper", "compare these papers"],
+    negativeExamples: [
+      "summarize this paper",
+      "compare these papers",
+      "explain figure 1",
+      "what does figure 1 show",
+      "图1讲了什么",
+      "解释图1",
+    ],
     keywords: [
       "verify",
       "verification",
@@ -306,17 +313,18 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
       "provenance",
       "claim",
       "source",
-      "page",
-      "figure",
-      "table",
       "核查",
       "验证",
       "引用",
       "引文",
       "来源",
       "证据",
-      "页码",
-      "图表",
+      "是否出现在",
+      "出现在本文",
+      "出现在论文",
+      "在本文吗",
+      "在论文吗",
+      "在原文吗",
     ],
     contextRequirements: {
       selectedItems: "optional",
@@ -329,12 +337,12 @@ export const BUILTIN_ACADEMIC_SKILLS: AcademicSkill[] = [
       format: "markdown-table",
       target: "chat",
       language: "auto",
-      columns: ["Claim", "Status", "Evidence", "Location", "Issue", "Fix"],
+      columns: ["Claim", "Status", "Support", "Location", "Issue", "Fix"],
     },
     promptTemplate: {
       system:
-        "You are running Claudero's verify-citations academic workflow. Use get_evidence_pack, locate_quote, inspect_figure_table_page, verify_citations, build_trust_report, and build_academic_trace to audit claims against Zotero evidence. Never invent page numbers, quotes, or sources.",
-      task: "Return a verification table plus the Evidence Trust Report summary and, for claim-heavy answers, an Academic Trace summary with replayable next steps. Mark each claim as verified, weak, or unverified. Include evidence id, page/openUri when available, quote provenance for direct quotes, and a concrete fix for weak or unsupported claims. For figure/table claims, call inspect_figure_table_page when possible and treat its rendered page image as the visual source of truth.",
+        "You are running Claudero's verify-citations academic workflow. This workflow is tool-grounded: selected text and lightweight context are search hints, not proof. For explicit quote/existence/page verification, call locate_quote (or mcp__zotero__locate_quote) before answering, even if the selected text looks exact. Use get_numbered_evidence_pack, expand_evidence_range, get_evidence_pack, verify_citations, build_trust_report, inspect_figure_table_page, and build_academic_trace as needed to audit claims against Zotero source material. Never invent page numbers, quotes, or sources.",
+      task: "Return a verification table plus the Evidence Trust Report summary and, for claim-heavy answers, an Academic Trace summary with replayable next steps. Mark each claim as verified, weak, or unverified. Include source id and page, copying the tool-provided citationMarkdown marker without adding a URL; include quote provenance for direct quotes and a concrete fix for weak or unsupported claims. For direct quote checks, use the locate_quote result as the source of truth; do not treat selected text alone as verification. For figure/table claims, call inspect_figure_table_page when possible and treat its rendered page image as the visual source of truth.",
     },
     source: { type: "builtin" },
   },
@@ -724,9 +732,14 @@ export function importAcademicSkillFromText(
           description?: string;
           messages?: unknown[];
         };
-    if ("skill" in parsed && parsed.skill) return parsed.skill;
+    if ("skill" in parsed && parsed.skill) {
+      return sanitizeImportedAcademicSkill(parsed.skill, options.sourceType);
+    }
     if ("id" in parsed && typeof parsed.id === "string") {
-      return parsed as AcademicSkill;
+      return sanitizeImportedAcademicSkill(
+        parsed as AcademicSkill,
+        options.sourceType,
+      );
     }
     if ("name" in parsed && typeof parsed.name === "string") {
       const promptMessages = Array.isArray(parsed.messages)
@@ -762,6 +775,47 @@ export function importAcademicSkillFromText(
     body,
     sourceType: options.sourceType || "agent-skill",
   });
+}
+
+function sanitizeImportedAcademicSkill(
+  input: AcademicSkill,
+  sourceType: AcademicSkillSource["type"] = "markdown",
+): AcademicSkill {
+  const fallback = createImportedSkill({
+    id: input.id || input.title || "imported-skill",
+    title: input.title || input.id || "Imported skill",
+    description: input.description || "Imported academic skill",
+    body: input.promptTemplate?.task || input.description || "",
+    sourceType,
+  });
+  return {
+    ...fallback,
+    ...input,
+    id: normalizeId(input.id || fallback.id),
+    title: String(input.title || fallback.title).trim(),
+    description: String(input.description || fallback.description).trim(),
+    intentExamples: Array.isArray(input.intentExamples)
+      ? input.intentExamples.map(String)
+      : fallback.intentExamples,
+    negativeExamples: Array.isArray(input.negativeExamples)
+      ? input.negativeExamples.map(String)
+      : [],
+    keywords: Array.isArray(input.keywords)
+      ? input.keywords.map(String)
+      : fallback.keywords,
+    toolPolicy: {
+      zoteroMcp: false,
+      allowZoteroRead: true,
+      allowZoteroWrite: false,
+      allowWebSearch: false,
+      allowScripts: false,
+    },
+    source: {
+      type: sourceType,
+      importedAt: Date.now(),
+      sourceHash: hashText(stableStringify(input)),
+    },
+  };
 }
 
 function createImportedSkill(options: {

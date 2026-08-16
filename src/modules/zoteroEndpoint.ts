@@ -2,11 +2,20 @@ import {
   buildAcademicTrace,
   buildEvidencePack,
   buildEvidenceTrustReport,
+  buildNumberedEvidencePack,
+  expandEvidenceRange,
   inspectFigureTablePage,
   locateQuote,
   verifyCitationClaims,
 } from "./evidence";
 import { getSelectedZoteroContext } from "./zoteroContext";
+import {
+  evidencePackForAgent,
+  locatedQuoteForAgent,
+  numberedEvidencePackForAgent,
+} from "../shared/evidenceTransport";
+import { hasValidZoteroEndpointToken } from "../shared/zoteroEndpointAuth";
+import { getOrCreateHelperToken } from "./helperToken";
 
 // Zotero HTTP endpoint — exposes Zotero API operations to Claude Code via curl/bash.
 // Registered at POST http://127.0.0.1:<Zotero HTTP server port>/claudero
@@ -208,7 +217,7 @@ async function opGetAttachmentPath(payload: any) {
 }
 
 async function opGetEvidencePack(payload: any) {
-  return buildEvidencePack({
+  const result = await buildEvidencePack({
     itemId: Number(payload.itemId || 0) || undefined,
     attachmentId: Number(payload.attachmentId || 0) || undefined,
     query: typeof payload.query === "string" ? payload.query : undefined,
@@ -219,15 +228,47 @@ async function opGetEvidencePack(payload: any) {
     maxPageImages: Number(payload.maxPageImages || 0) || undefined,
     pageImageMaxWidth: Number(payload.pageImageMaxWidth || 0) || undefined,
   });
+  return evidencePackForAgent(result);
+}
+
+async function opGetNumberedEvidencePack(payload: any) {
+  const result = await buildNumberedEvidencePack({
+    itemId: Number(payload.itemId || 0) || undefined,
+    attachmentId: Number(payload.attachmentId || 0) || undefined,
+    maxPages: Number(payload.maxPages || 0) || undefined,
+    includeAnnotations: payload.includeAnnotations !== false,
+    maxContextChars: Number(payload.maxContextChars || 0) || undefined,
+    forceFull: payload.forceFull === true,
+  });
+  return numberedEvidencePackForAgent(result);
+}
+
+async function opExpandEvidenceRange(payload: any) {
+  const result = await expandEvidenceRange({
+    itemId: Number(payload.itemId || 0) || undefined,
+    attachmentId: Number(payload.attachmentId || 0) || undefined,
+    pageStart: Number(payload.pageStart || 0) || undefined,
+    pageEnd: Number(payload.pageEnd || 0) || undefined,
+    sourceStart:
+      typeof payload.sourceStart === "string" ? payload.sourceStart : undefined,
+    sourceEnd:
+      typeof payload.sourceEnd === "string" ? payload.sourceEnd : undefined,
+    sourceIds: Array.isArray(payload.sourceIds) ? payload.sourceIds : undefined,
+    maxPages: Number(payload.maxPages || 0) || undefined,
+    includeAnnotations: payload.includeAnnotations !== false,
+    maxContextChars: Number(payload.maxContextChars || 0) || undefined,
+  });
+  return numberedEvidencePackForAgent(result);
 }
 
 async function opLocateQuote(payload: any) {
-  return locateQuote({
+  const result = await locateQuote({
     quote: String(payload.quote || ""),
     itemId: Number(payload.itemId || 0) || undefined,
     attachmentId: Number(payload.attachmentId || 0) || undefined,
     maxMatches: Number(payload.maxMatches || 0) || undefined,
   });
+  return locatedQuoteForAgent(result);
 }
 
 async function opVerifyCitations(payload: any) {
@@ -536,7 +577,13 @@ async function opUndoLast(payload: any) {
   if (targetId) {
     const idx = undoStack.findIndex((e) => e.id === targetId);
     if (idx === -1) return { error: `No operation with id "${targetId}"` };
-    entry = undoStack.splice(idx, 1)[0];
+    if (idx !== undoStack.length - 1) {
+      return {
+        error:
+          "Only the most recent Zotero write can be undone. Undo newer operations first to avoid overwriting later edits.",
+      };
+    }
+    entry = undoStack.pop();
   } else {
     entry = undoStack.pop();
   }
@@ -547,6 +594,7 @@ async function opUndoLast(payload: any) {
     await entry.undo();
     return { undone: entry.description, operationId: entry.id };
   } catch (e: any) {
+    undoStack.push(entry);
     return { error: `Undo failed: ${e?.message || e}` };
   }
 }
@@ -563,6 +611,7 @@ function opListHistory() {
 // ── Endpoint registration ─────────────────────────────────────────────────────
 
 let _detectedPort = 23119;
+let _endpointTokenPromise: Promise<string> | null = null;
 
 function detectZoteroServerPort(): number {
   try {
@@ -583,6 +632,7 @@ export function registerZoteroEndpoint(): void {
   }
 
   _detectedPort = detectZoteroServerPort();
+  _endpointTokenPromise = getOrCreateHelperToken();
 
   const ENDPOINT = "/claudero";
   (Zotero as any).Server.Endpoints[ENDPOINT] = function () {
@@ -600,15 +650,27 @@ export function registerZoteroEndpoint(): void {
         body: string,
       ) => void,
     ) {
-      const respond = (data: unknown) =>
-        sendResponseCallback(200, "application/json", JSON.stringify(data));
+      const respond = (data: unknown, status = 200) =>
+        sendResponseCallback(status, "application/json", JSON.stringify(data));
 
-      const payload: any = postData;
+      const payload: any =
+        postData && typeof postData === "object" ? postData : {};
 
-      ztoolkit.log(payload);
       const action: string = String(payload.action || "");
       const run = async () => {
         try {
+          const expectedToken = await (_endpointTokenPromise ||
+            getOrCreateHelperToken());
+          if (!hasValidZoteroEndpointToken(payload, expectedToken)) {
+            ztoolkit.log(
+              "[Claudero] Rejected unauthorized Zotero endpoint request",
+            );
+            respond({ success: false, error: "unauthorized" }, 401);
+            return;
+          }
+          ztoolkit.log(
+            `[Claudero] Zotero endpoint action=${action || "unknown"}`,
+          );
           let result: unknown;
           switch (action) {
             case "get_current_context":
@@ -628,6 +690,12 @@ export function registerZoteroEndpoint(): void {
               break;
             case "get_evidence_pack":
               result = await opGetEvidencePack(payload);
+              break;
+            case "get_numbered_evidence_pack":
+              result = await opGetNumberedEvidencePack(payload);
+              break;
+            case "expand_evidence_range":
+              result = await opExpandEvidenceRange(payload);
               break;
             case "locate_quote":
               result = await opLocateQuote(payload);
@@ -669,6 +737,8 @@ export function registerZoteroEndpoint(): void {
                   "get_annotations",
                   "get_attachment_path",
                   "get_evidence_pack",
+                  "get_numbered_evidence_pack",
+                  "expand_evidence_range",
                   "locate_quote",
                   "verify_citations",
                   "build_trust_report",
@@ -682,7 +752,13 @@ export function registerZoteroEndpoint(): void {
                 ],
               };
           }
-          ztoolkit.log(result);
+          ztoolkit.log(
+            `[Claudero] Zotero endpoint completed action=${action} status=${
+              result && typeof result === "object" && "error" in result
+                ? "error"
+                : "ok"
+            }`,
+          );
           if (
             result &&
             typeof result === "object" &&
@@ -707,6 +783,7 @@ export function registerZoteroEndpoint(): void {
 }
 
 export function unregisterZoteroEndpoint(): void {
+  _endpointTokenPromise = null;
   try {
     delete (Zotero as any).Server.Endpoints["/claudero"];
   } catch {
@@ -729,18 +806,20 @@ export function getZoteroApiSystemPrompt(): string {
   }
   const dataDirLines = dataDir
     ? `
-You also have DIRECT READ-ONLY access to Zotero's local data when you need bulk evidence or PDF-level extraction:
+You also have DIRECT READ-ONLY access to Zotero's local data only when you need bulk evidence, PDF-level extraction, or Zotero MCP is unavailable/failed:
 - Data directory: ${dataDir}
 - Database: ${dataDir}/zotero.sqlite — open it READ-ONLY only. Python: sqlite3.connect("file:${dataDir}/zotero.sqlite?mode=ro&immutable=1", uri=True).
 - Attachment files live under ${dataDir}/storage/<attachmentKey>/. For full text, tables, formulas, or layout, get the attachment path and read the PDF directly with Python (PyMuPDF/pdfplumber/etc.).
-- Zotero annotations are database records, not guaranteed to be embedded in the PDF. Use get_annotations or read SQLite read-only when you need them.
+- Zotero annotations are database records, not guaranteed to be embedded in the PDF. When Zotero MCP is available, use get_annotations / mcp__zotero__get_annotations instead of reading SQLite directly.
 - NEVER write to zotero.sqlite or modify Zotero files directly; ALL writes must go through MCP write tools.`
     : "";
   return `
 A lightweight current Zotero context is already included with each user request. Use it as the default target.
-If you need fresh or deeper Zotero data, use MCP tools: get_current_context, get_item, search_items, get_annotations, get_attachment_path, get_evidence_pack, locate_quote, verify_citations, build_trust_report, build_academic_trace, inspect_figure_table_page, write_tags, create_note, set_field, undo_last, list_history.
+If you need fresh or deeper Zotero data, use Zotero MCP tools first: get_current_context, get_item, search_items, get_annotations, get_attachment_path, get_numbered_evidence_pack, expand_evidence_range, get_evidence_pack, locate_quote, verify_citations, build_trust_report, build_academic_trace, inspect_figure_table_page, write_tags, create_note, set_field, undo_last, list_history. In Codex these may appear as mcp__zotero__<tool>; prefer them over shell/database access for Zotero state, annotations, item metadata, and safe writes.
+For quote-existence or page-specific quote checks, call locate_quote before using shell, Python, or direct PDF text extraction. Direct PDF reads are a fallback only after Zotero MCP is unavailable, failed, or insufficient.
 ${dataDirLines}
 Keep MCP usage minimal: use Zotero tools for semantic library state and safe writes; use local file/Python reads for heavy PDF understanding.
+If a Zotero tool returns terminal=true, treat that result as conclusive for the requested check and stop fallback tool calls. Never switch back to a previous user request after a failed lookup.
 Follow the default Agent Evidence Policy included in the prompt when deciding whether to gather evidence, locate quotes, verify claims, build trust reports, or inspect page images.
 Before ANY write operation, confirm with the user or explain what will change.
 Write operations are protected by Claudero's approval dialog and may be denied by the user.

@@ -2,7 +2,7 @@
   "name": "claudero",
   "type": "module",
   "version": "0.1.0",
-  "description": "Claude Code assistant embedded in Zotero",
+  "description": "AI research assistant embedded in Zotero",
   "config": {
     "addonName": "Claudero",
     "addonID": "claudero@muisedestiny.com",
@@ -12,21 +12,28 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/muisedestiny/claudero.git"
+    "url": "git+https://github.com/MuiseDestiny/zotero-claudero.git"
   },
   "author": "muisedestiny",
   "bugs": {
-    "url": "https://github.com/muisedestiny/claudero/issues"
+    "url": "https://github.com/MuiseDestiny/zotero-claudero/issues"
   },
-  "homepage": "https://github.com/muisedestiny/claudero#readme",
+  "homepage": "https://github.com/MuiseDestiny/zotero-claudero#readme",
   "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "zotero-plugin serve",
     "restart": "zotero-plugin serve",
     "build": "zotero-plugin build && tsc --noEmit",
     "test:helper": "npm run build && node scripts/smoke-helper-communication.mjs --full",
     "test:helper:quick": "npm run build && node scripts/smoke-helper-communication.mjs",
+    "test:helper:mock": "npm run build && node scripts/smoke-helper-mock.mjs",
+    "test:runtime": "node scripts/run-node-tests.mjs test/deepseekRuntime.node.ts test/codexMcpConfig.test.ts test/windowsExecutablePaths.test.ts",
+    "diagnose:codex-latency": "npm run build && node scripts/diagnose-codex-latency.mjs",
     "test:evidence": "npm run build && node scripts/smoke-evidence-contract.mjs && node scripts/smoke-evidence-golden.mjs && node scripts/smoke-pdf-visual-audit.mjs",
+    "test:evidence:ci": "node scripts/smoke-evidence-contract.mjs && node scripts/smoke-evidence-golden.mjs && node scripts/smoke-pdf-visual-audit.mjs",
     "eval:pdf:golden": "node scripts/eval-real-pdf-golden.mjs",
     "eval:pdf:review": "node scripts/build-pdf-review-site.mjs",
     "eval:pdf:visual": "node scripts/build-pdf-visual-audit-pack.mjs",

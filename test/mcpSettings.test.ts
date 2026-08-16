@@ -10,23 +10,26 @@ import {
 describe("MCP settings", function () {
   it("filters disabled servers and strips UI-only fields for runtime config", function () {
     const raw = JSON.stringify({
-        mcpServers: {
-          filesystem: {
-            enabled: true,
-            command: "npx",
-            args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-            description: "Local files",
-            contextSaving: true,
-            disabledTools: ["write_file"],
-          },
-          off: {
-            enabled: false,
-            command: "node",
-            args: ["server.js"],
-          },
+      mcpServers: {
+        filesystem: {
+          enabled: true,
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+          description: "Local files",
+          contextSaving: true,
+          disabledTools: ["write_file"],
         },
-      });
-    const mentions = extractMcpMentions("use @filesystem", parseManagedMcpServers(raw));
+        off: {
+          enabled: false,
+          command: "node",
+          args: ["server.js"],
+        },
+      },
+    });
+    const mentions = extractMcpMentions(
+      "use @filesystem",
+      parseManagedMcpServers(raw),
+    );
     const runtime = parseCustomMcpServers(raw, mentions);
 
     assert.deepEqual(runtime, {

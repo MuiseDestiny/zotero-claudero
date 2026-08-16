@@ -1,12 +1,16 @@
 import {
+  fetchProviderModels,
   fetchSlashCommands,
   isClaudeAuthError,
   isClaudeLimitError,
+  isDeepSeekCliMissingError,
+  installDeepSeekHarness,
   queryClaudeHelper,
   reloadSlashCommands,
   runAuxClaudeQuery,
   runProviderAuthLogin,
 } from "./claudeHelperClient";
+import type { ProviderModelDescriptor } from "../shared/providerModels";
 import {
   getZoteroApiSystemPrompt,
   getZoteroEndpointBaseUrl,
@@ -28,6 +32,7 @@ import {
   resolveAcademicSkillContextStatus,
 } from "./academicSkills";
 import { getPref, setPref } from "../utils/prefs";
+import { getString } from "../utils/locale";
 import {
   newConversationId,
   type ConversationProviderState,
@@ -42,6 +47,8 @@ import {
   getConversationTitle,
   renameConversation,
   deleteConversation,
+  deleteAllConversations,
+  exportConversationToFile,
 } from "./conversationStore";
 import {
   appendToolCard,
@@ -58,6 +65,16 @@ import {
 } from "./conversationController";
 import { applyProviderSessionEvent } from "./providerSessionState";
 import { renderMarkdown } from "./messageRenderer";
+import {
+  buildPromptWithConversationHistory,
+  shouldReplayConversationHistory,
+} from "../shared/promptHistory";
+import { thinkingPresentation } from "../shared/thinkingPresentation";
+import {
+  evidenceReferencesFromToolResultContent,
+  evidenceReferencesForText,
+  restoreEvidenceReferences,
+} from "../shared/evidenceLinkCodec";
 import { renderPromptIcon } from "./iconPickerView";
 import { showConversationHistoryPopup } from "./conversationHistoryView";
 import { showPromptPopup } from "./promptPopupView";
@@ -102,8 +119,15 @@ interface SlashCommand {
 
 // Client-side built-in slash commands (not sent to the SDK)
 const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
-  { name: "clear", description: "开始新对话", isBuiltin: true },
+  { name: "clear", description: "", isBuiltin: true },
 ];
+
+function builtinSlashCommands(): SlashCommand[] {
+  return BUILTIN_SLASH_COMMANDS.map((command) => ({
+    ...command,
+    description: getString("slash-clear"),
+  }));
+}
 
 // Cache of SDK slash commands fetched from the helper
 let _sdkCommandsCache: SlashCommand[] | null = null;
@@ -111,7 +135,6 @@ let _sdkCommandsFetching = false;
 
 interface PendingImage extends ConversationImage {
   data: string; // base64 (no data: prefix)
-  dataUrl: string; // full data URL for preview
 }
 
 interface InputHistoryEntry {
@@ -144,6 +167,7 @@ type ActivityMode =
   | "requesting"
   | "responding"
   | "thinking"
+  | "compacting"
   | "tool"
   | "waiting";
 
@@ -153,41 +177,47 @@ function permissionModeDescription(mode: PermissionMode): string {
   const agent = providerLabel(provider);
   switch (mode) {
     case "auto":
-      return `${agent} will use the default approval flow.`;
+      return getString("permission-mode-auto-description", { args: { agent } });
     case "default":
-      return `You'll be prompted for permission when ${agent} asks to use a tool.`;
+      return getString("permission-mode-default-description", {
+        args: { agent },
+      });
     case "acceptEdits":
-      return "File edits are accepted automatically; other permission prompts still ask.";
+      return getString("permission-mode-edits-description");
     case "plan":
       return capabilities.supportsInteractivePlanApproval
-        ? `${agent} will plan first and ask before executing the plan.`
-        : `${agent} will plan first, show plan updates, and ask for tool approvals when needed.`;
+        ? getString("permission-mode-plan-description", { args: { agent } })
+        : getString("permission-mode-plan-updates-description", {
+            args: { agent },
+          });
     case "dontAsk":
-      return "Permission prompts are denied instead of shown.";
+      return getString("permission-mode-dont-ask-description");
     case "bypassPermissions":
-      return `${agent} skips permission checks for this session.`;
+      return getString("permission-mode-bypass-description", {
+        args: { agent },
+      });
   }
 }
 
 function permissionOptionsForProvider(provider: AiProvider) {
   const capabilities = getProviderCapabilities(provider);
   const planLabel = capabilities.supportsInteractivePlanApproval
-    ? "Plan approval"
-    : "Plan first";
+    ? getString("permission-mode-plan-approval")
+    : getString("permission-mode-plan-first");
   return [
     {
       value: "auto",
-      label: "Auto mode",
+      label: getString("permission-mode-auto"),
       description: permissionModeDescription("auto"),
     },
     {
       value: "default",
-      label: "Ask permissions",
+      label: getString("permission-mode-default"),
       description: permissionModeDescription("default"),
     },
     {
       value: "acceptEdits",
-      label: "Accept edits",
+      label: getString("permission-mode-edits"),
       description: permissionModeDescription("acceptEdits"),
     },
     ...(capabilities.supportsPlanMode
@@ -201,12 +231,12 @@ function permissionOptionsForProvider(provider: AiProvider) {
       : []),
     {
       value: "dontAsk",
-      label: "Don't ask",
+      label: getString("permission-mode-dont-ask"),
       description: permissionModeDescription("dontAsk"),
     },
     {
       value: "bypassPermissions",
-      label: "Bypass permissions",
+      label: getString("permission-mode-bypass"),
       description: permissionModeDescription("bypassPermissions"),
       danger: true,
     },
@@ -221,6 +251,7 @@ interface PaneState {
   providerSelect: DivSelect;
   modelSelect: DivSelect;
   effortSelect: DivSelect;
+  codexModels: ProviderModelDescriptor[];
   contextChips: HTMLElement;
   itemChip: HTMLElement;
   readerChip: HTMLElement;
@@ -301,6 +332,7 @@ interface PaneState {
   _inputHistorySavedImages: PendingImage[];
   _suppressText: number; // >0 while a Skill tool is running — suppresses skill output text
   _activeSkillToolId: string | null;
+  providerPrefObserverID: symbol | null;
 }
 
 // SVG icon constants - defined as template strings to avoid XML errors
@@ -354,13 +386,105 @@ const LIBRARY_ANCHOR_ID = "zotero-items-splitter";
 const READER_ANCHOR_ID = "zotero-context-splitter";
 const paneStates = new WeakMap<HTMLElement, PaneState>();
 const mountedWindows = new WeakSet<Window>();
+const windowCleanupCallbacks = new WeakMap<Window, () => void>();
 const CLAUDE_EFFORT_OPTIONS = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "X-High" },
-  { value: "max", label: "Max" },
+  { value: "low" },
+  { value: "medium" },
+  { value: "high" },
+  { value: "xhigh" },
+  { value: "max" },
 ];
+const DEEPSEEK_EFFORT_OPTIONS = [{ value: "none" }];
+
+function localizedEffortOptions(
+  values: Array<{ value: string }>,
+): Array<{ value: string; label: string }> {
+  return values.map((option) => ({
+    value: option.value,
+    label:
+      option.value === "none"
+        ? getString("effort-default")
+        : effortLabel(option.value),
+  }));
+}
+
+function effortOptionsForProvider(provider: AiProvider) {
+  return localizedEffortOptions(
+    provider === "deepseek" ? DEEPSEEK_EFFORT_OPTIONS : CLAUDE_EFFORT_OPTIONS,
+  );
+}
+
+function effortLabel(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "xhigh") return getString("effort-xhigh");
+  return normalized
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function applyModelEfforts(state: PaneState, modelValue: string): void {
+  const provider = normalizeProvider(state.providerSelect.value);
+  if (provider === "deepseek") {
+    state.effortSelect.setItems?.(
+      localizedEffortOptions(DEEPSEEK_EFFORT_OPTIONS),
+      "none",
+    );
+    setPref("deepseekEffort", "none");
+    setPref("effort", "none");
+    return;
+  }
+  if (provider !== "codex") return;
+  const model = state.codexModels.find((entry) => entry.value === modelValue);
+  const supported = model?.supportedEfforts?.filter(Boolean) || [];
+  const options =
+    supported.length > 0
+      ? supported.map((value) => ({ value, label: effortLabel(value) }))
+      : localizedEffortOptions(CLAUDE_EFFORT_OPTIONS);
+  const saved = String(getPref("codexEffort") || state.effortSelect.value);
+  const preferred = options.some((option) => option.value === saved)
+    ? saved
+    : model?.defaultEffort || options[0]?.value || "medium";
+  state.effortSelect.setItems?.(options, preferred);
+  setPref("codexEffort", state.effortSelect.value);
+  setPref("effort", state.effortSelect.value);
+}
+
+async function refreshProviderModels(
+  state: PaneState,
+  provider: AiProvider,
+): Promise<void> {
+  if (provider === "claude") return;
+  try {
+    const models = await fetchProviderModels(provider);
+    if (
+      models.length === 0 ||
+      normalizeProvider(state.providerSelect.value) !== provider
+    ) {
+      return;
+    }
+    state.codexModels = models;
+    const modelPref = provider === "deepseek" ? "deepseekModel" : "codexModel";
+    const saved = String(getPref(modelPref) || state.modelSelect.value);
+    const preferred = models.some((model) => model.value === saved)
+      ? saved
+      : models.find((model) => model.isDefault)?.value || models[0].value;
+    state.modelSelect.setItems?.(
+      models.map((model) => ({
+        value: model.value,
+        label: model.label,
+        description: model.description,
+      })),
+      preferred,
+    );
+    setPref(modelPref, state.modelSelect.value);
+    setPref("model", state.modelSelect.value);
+    applyModelEfforts(state, state.modelSelect.value);
+  } catch (error) {
+    ztoolkit.log("[Claudero] Failed to refresh Codex models:", error);
+  }
+}
 // ── Font zoom (Cmd/Ctrl + - / = / 0) ───────────────────────────────────────
 // Browser-like content zoom for the pane. The percentage is persisted in the
 // `fontScale` pref and applied as a CSS multiplier on the pane root.
@@ -414,8 +538,23 @@ function adjustFontScale(state: PaneState, delta: number): void {
 
 // ── Conversation persistence ───────────────────────────────────────────────
 
-async function saveConversation(state: PaneState): Promise<void> {
-  await saveCurrentConversation(state);
+const conversationSaveErrors = new WeakMap<PaneState, string>();
+
+async function saveConversation(state: PaneState): Promise<boolean> {
+  try {
+    await saveCurrentConversation(state);
+    conversationSaveErrors.delete(state);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ztoolkit.log(`[History] conversation save failed: ${message}`);
+    if (conversationSaveErrors.get(state) !== message) {
+      conversationSaveErrors.set(state, message);
+      appendNoticeCard(state, "warning", getString("pane-not-saved"), message);
+    }
+    setStatusDot(state, "error");
+    return false;
+  }
 }
 
 // Re-render a restored conversation's turns into the transcript.
@@ -457,12 +596,22 @@ function renderRestoredThinkingBlock(
   header.setAttribute("tabindex", "-1");
   const labelSpan = createEl(doc, "span", "claudero-thinking-label");
   const sec = Math.max(0, Math.round((block.durationMs || 0) / 1000));
-  labelSpan.textContent = `Thought for ${sec}s`;
+  const presentation = thinkingPresentation(block.text);
+  labelSpan.textContent =
+    presentation.title ||
+    getString("activity-thought-for", { args: { seconds: sec } });
+  const durationSpan = createEl(doc, "span", "claudero-thinking-duration");
+  durationSpan.textContent = presentation.title ? `(${sec}s)` : "";
   const chevron = createThinkingChevron(doc);
-  header.append(labelSpan, chevron);
+  header.append(labelSpan, durationSpan, chevron);
   const body = createEl(doc, "div", "claudero-thinking-body");
-  body.textContent = block.text.trim();
-  header.addEventListener("click", () => el.classList.toggle("collapsed"));
+  body.textContent = presentation.body;
+  el.classList.toggle("summary-only", !presentation.body);
+  header.addEventListener("click", () => {
+    if (!el.classList.contains("summary-only")) {
+      el.classList.toggle("collapsed");
+    }
+  });
   el.append(header, body);
   state.transcript.appendChild(el);
 }
@@ -472,7 +621,14 @@ function renderAssistantTurn(
   turn: ConversationTurn,
   index: number,
 ): void {
+  restoreEvidenceReferences(turn.evidenceReferences);
   const blocks = Array.isArray(turn.blocks) ? turn.blocks : [];
+  for (const block of blocks) {
+    if (block.type !== "tool_result") continue;
+    restoreEvidenceReferences(
+      evidenceReferencesFromToolResultContent(block.content),
+    );
+  }
   const hasStructuredText = blocks.some(
     (block) => block.type === "text" && block.text.trim(),
   );
@@ -552,15 +708,31 @@ function finalizeAssistantThinkingBlock(
 }
 
 function restoreConversation(state: PaneState, conv: SavedConversation): void {
-  void saveConversation(state);
-  applyConversation(state, conv);
-  renderConversationTurns(state);
-  setStatusDot(state, "ready");
+  void (async () => {
+    if (
+      state.conversationTurns.length > 0 &&
+      !(await saveConversation(state))
+    ) {
+      return;
+    }
+    applyConversation(state, conv);
+    renderConversationTurns(state);
+    setStatusDot(state, "ready");
+  })();
 }
 
 async function restoreLatestConversation(state: PaneState): Promise<void> {
+  const initialConversationId = state.conversationId;
   const latest = await loadLatestConversation();
-  if (latest) restoreConversation(state, latest);
+  if (
+    latest &&
+    state.root.isConnected &&
+    !state.running &&
+    state.conversationId === initialConversationId &&
+    state.conversationTurns.length === 0
+  ) {
+    restoreConversation(state, latest);
+  }
 }
 
 // ── DOM helpers ────────────────────────────────────────────────────────────
@@ -699,11 +871,13 @@ function getMountAnchor(doc: Document, win: Window): HTMLElement | null {
   return doc.getElementById(anchorID) as HTMLElement | null;
 }
 
-function getCurrentRegularItems(): Zotero.Item[] {
+function getCurrentRegularItems(win: Window): Zotero.Item[] {
   try {
-    if (getSelectedTabType(Zotero.getMainWindow()) !== "library") return [];
-    const selected =
-      Zotero.getActiveZoteroPane().getSelectedItems() as Zotero.Item[];
+    if (getSelectedTabType(win) !== "library") return [];
+    const selected = ((
+      win as Window & { ZoteroPane?: { getSelectedItems?: () => unknown } }
+    ).ZoteroPane?.getSelectedItems?.() ||
+      Zotero.getActiveZoteroPane().getSelectedItems()) as Zotero.Item[];
     const items: Zotero.Item[] = [];
     for (const item of selected) {
       if (item.isRegularItem()) {
@@ -727,7 +901,7 @@ function getCurrentRegularItems(): Zotero.Item[] {
 }
 
 function getItemTitle(item: Zotero.Item | null): string {
-  if (!item) return "No Zotero item selected";
+  if (!item) return getString("pane-no-item");
   return (item.getField("title") as string) || item.getDisplayTitle();
 }
 
@@ -774,7 +948,9 @@ function rebuildItemChip(state: PaneState): void {
     const titles = items.map((i) => getItemTitle(i)).join("\n");
     populateContextToken(chip, doc, {
       icon: iconsWrap,
-      label: `${items.length} selected items`,
+      label: getString("pane-selected-items", {
+        args: { count: items.length },
+      }),
       tooltip: midTruncate(titles, 140),
     });
   }
@@ -839,10 +1015,16 @@ function setStatusDot(
     `claudero-status-dot ${mode === "ready" ? "" : mode}`.trim();
   const label =
     mode === "ready"
-      ? "Ready"
+      ? getString("pane-status-ready")
       : mode === "streaming"
-        ? `${providerLabel(normalizeProvider(getPref("provider")))} is responding`
-        : "Last request failed";
+        ? getString("pane-status-responding", {
+            args: {
+              agent: providerLabel(
+                normalizeProvider(state.providerSelect.value),
+              ),
+            },
+          })
+        : getString("pane-status-failed");
   state.statusDot.setAttribute("title", label);
   state.statusDot.setAttribute("aria-label", label);
 }
@@ -856,6 +1038,7 @@ function setRunning(state: PaneState, running: boolean): void {
   state.providerSelect.disabled = running;
   state.modelSelect.disabled = running;
   state.effortSelect.disabled = running;
+  state.permissionSelect.disabled = running;
   setStatusDot(state, running ? "streaming" : "ready");
   updateSendButton(state, running);
 
@@ -865,6 +1048,12 @@ function setRunning(state: PaneState, running: boolean): void {
     state.permissionCheckTimer = null;
     hidePermissionDialog(state);
     hideQuestionDialog(state);
+  }
+  if (!running) {
+    const preferredProvider = normalizeProvider(getPref("provider"));
+    if (preferredProvider !== normalizeProvider(state.providerSelect.value)) {
+      setPaneProvider(state, preferredProvider);
+    }
   }
 }
 
@@ -887,13 +1076,14 @@ function makeChipRemoveBtn(doc: Document, onClick: () => void): HTMLElement {
 
 function updateContext(state: PaneState): void {
   const doc = state.root.ownerDocument!;
-  const selectedType = getSelectedTabType(Zotero.getMainWindow());
-  const autoItems = getCurrentRegularItems();
+  const win = doc.defaultView as Window;
+  const selectedType = getSelectedTabType(win);
+  const autoItems = getCurrentRegularItems(win);
   const autoReaderPath =
-    selectedType === "reader" ? getCurrentReaderFilePath() : "";
-  const autoText = selectedType === "reader" ? getSelectedReaderText() : "";
+    selectedType === "reader" ? getCurrentReaderFilePath(win) : "";
+  const autoText = selectedType === "reader" ? getSelectedReaderText(win) : "";
   const autoAnnotations =
-    selectedType === "reader" ? getSelectedReaderAnnotations() : [];
+    selectedType === "reader" ? getSelectedReaderAnnotations(win) : [];
 
   // When auto context changes to a new item/reader, reset dismissed flags
   if (autoReaderPath && autoReaderPath !== state.readerFilePath)
@@ -945,7 +1135,7 @@ function updateContext(state: PaneState): void {
   state.lastContextSignature = signature;
 
   // Context is optional now; the composer is always usable.
-  state.input.placeholder = "Ask anything about this paper...";
+  state.input.placeholder = getString("composer-ask-placeholder");
   state.input.disabled = false;
   state.sendButton.disabled = false;
   state.contextChips.style.display = hasContext ? "flex" : "none";
@@ -957,7 +1147,7 @@ function updateContext(state: PaneState): void {
 
   // Rebuild reader chip
   if (hasReader) {
-    const readerItem = getCurrentReaderItem();
+    const readerItem = getCurrentReaderItem(win);
     const readerTooltip = [
       readerItem ? getItemTitle(readerItem) : "",
       state.readerFilePath,
@@ -966,7 +1156,7 @@ function updateContext(state: PaneState): void {
       .join("\n");
     populateContextToken(state.readerChip, doc, {
       icon: readerItem ? mkItemIconEl(doc, readerItem) : undefined,
-      label: "当前PDF",
+      label: getString("context-current-pdf"),
       tooltip: readerTooltip ? midTruncate(readerTooltip, 140) : undefined,
     });
     state.readerChip.appendChild(
@@ -989,7 +1179,7 @@ function updateContext(state: PaneState): void {
   if (hasText) {
     populateContextToken(state.textChip, doc, {
       icon: createEl(doc, "div", "claudero-text-icon"),
-      label: "已选中一段文字",
+      label: getString("context-selected-text"),
       tooltip: midTruncate(state.selectedText, 140),
     });
     state.textChip.appendChild(
@@ -1026,7 +1216,7 @@ function updateContext(state: PaneState): void {
       .join("\n\n");
     populateContextToken(state.annotationChip, doc, {
       icon: annoIcon as unknown as HTMLElement,
-      label: count === 1 ? "已选中 1 条标注" : `已选中 ${count} 条标注`,
+      label: getString("pane-selected-annotations", { args: { count } }),
       tooltip: annoRaw ? midTruncate(annoRaw, 140) : undefined,
     });
     state.annotationChip.appendChild(
@@ -1160,12 +1350,16 @@ function describeWriteResult(result: Record<string, unknown>): string | null {
     const added = typeof result.added === "number" ? result.added : 0;
     const removed = typeof result.removed === "number" ? result.removed : 0;
     const parts: string[] = [];
-    if (added) parts.push(`+${added} 标签`);
-    if (removed) parts.push(`−${removed} 标签`);
-    return parts.length ? parts.join("  ") : "标签已更新";
+    if (added)
+      parts.push(getString("write-tags-added", { args: { count: added } }));
+    if (removed)
+      parts.push(getString("write-tags-removed", { args: { count: removed } }));
+    return parts.length ? parts.join("  ") : getString("write-tags-updated");
   }
-  if (result.noteId != null) return "已创建笔记";
-  if (typeof result.field === "string") return `已设置字段 “${result.field}”`;
+  if (result.noteId != null) return getString("write-note-created");
+  if (typeof result.field === "string") {
+    return getString("write-field-set", { args: { field: result.field } });
+  }
   return null;
 }
 
@@ -1241,7 +1435,7 @@ function appendUndoCard(
       "button",
       "claudero-undo-btn claudero-undo-btn-icon",
     ) as HTMLButtonElement;
-    viewBtn.title = "查看条目";
+    viewBtn.title = getString("pane-undo-view");
     const viewWrapper = doc.createElement("div");
     viewWrapper.innerHTML = VIEW_ICON_SVG.trim();
     const viewSvg = viewWrapper.firstElementChild as SVGSVGElement;
@@ -1266,7 +1460,7 @@ function appendUndoCard(
     "button",
     "claudero-undo-btn claudero-undo-btn-icon",
   ) as HTMLButtonElement;
-  undoBtn.title = "撤销";
+  undoBtn.title = getString("pane-undo");
   const undoWrapper = doc.createElement("div");
   undoWrapper.innerHTML = UNDO_ICON_SVG.trim();
   const undoSvg = undoWrapper.firstElementChild as SVGSVGElement;
@@ -1282,7 +1476,9 @@ function appendUndoCard(
           logDiagnostic("write.undo.success", { operationId, label, itemId });
           card.classList.add("undone");
           icon.textContent = "↩";
-          text.textContent = `已撤销 · ${label}`;
+          text.textContent = getString("pane-undo-success", {
+            args: { label },
+          });
           viewBtn?.remove();
           undoBtn.remove();
         } else {
@@ -1295,8 +1491,8 @@ function appendUndoCard(
           appendNoticeCard(
             state,
             "warning",
-            "撤销失败",
-            res?.error || "无法撤销该操作",
+            getString("pane-undo-failed"),
+            res?.error || getString("pane-undo-unavailable"),
           );
         }
       })
@@ -1307,7 +1503,12 @@ function appendUndoCard(
           "error",
         );
         undoBtn.disabled = false;
-        appendNoticeCard(state, "warning", "撤销失败", String(e));
+        appendNoticeCard(
+          state,
+          "warning",
+          getString("pane-undo-failed"),
+          String(e),
+        );
       });
   });
   btnGroup.appendChild(undoBtn);
@@ -1335,9 +1536,42 @@ async function addPastedImageFiles(
   files: Blob[],
 ): Promise<void> {
   const win = state.root.ownerDocument!.defaultView as Window;
+  const supportedTypes = new Set([
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+  ]);
+  const maxImages = 8;
+  const maxImageBytes = 10 * 1024 * 1024;
+  const maxTotalBytes = 24 * 1024 * 1024;
+  let totalBytes = state.pendingImages.reduce(
+    (sum, image) => sum + Math.ceil((image.data.length * 3) / 4),
+    0,
+  );
   for (const file of files) {
     const type = (file as { type?: string }).type || "image/png";
-    if (!type.startsWith("image/")) continue;
+    if (!supportedTypes.has(type)) continue;
+    if (state.pendingImages.length >= maxImages) {
+      appendNoticeCard(
+        state,
+        "warning",
+        getString("pane-image-limit-title"),
+        getString("pane-image-limit-description", {
+          args: { count: maxImages },
+        }),
+      );
+      break;
+    }
+    if (file.size > maxImageBytes || totalBytes + file.size > maxTotalBytes) {
+      appendNoticeCard(
+        state,
+        "warning",
+        getString("pane-image-size-title"),
+        getString("pane-image-size-description"),
+      );
+      continue;
+    }
     try {
       const dataUrl = await readFileAsDataURL(win, file);
       const comma = dataUrl.indexOf(",");
@@ -1347,13 +1581,17 @@ async function addPastedImageFiles(
         id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         mediaType: type,
         data,
-        dataUrl,
       });
+      totalBytes += file.size;
     } catch {
       /* ignore unreadable image */
     }
   }
   renderPendingImages(state);
+}
+
+function imageDataUrl(image: ConversationImage): string {
+  return image.dataUrl || `data:${image.mediaType};base64,${image.data}`;
 }
 
 // Remove any orphaned hover previews. Needed because removing a thumbnail mid-
@@ -1440,9 +1678,10 @@ function renderPendingImages(state: PaneState): void {
   for (const img of state.pendingImages) {
     const thumb = createEl(doc, "div", "claudero-img-thumb");
     const imgEl = doc.createElement("img") as HTMLImageElement;
-    imgEl.src = img.dataUrl;
+    const dataUrl = imageDataUrl(img);
+    imgEl.src = dataUrl;
     thumb.appendChild(imgEl);
-    attachImagePreview(state, thumb, img.dataUrl);
+    attachImagePreview(state, thumb, dataUrl);
     thumb.appendChild(
       makeChipRemoveBtn(doc, () => {
         state.pendingImages = state.pendingImages.filter(
@@ -1689,7 +1928,9 @@ function buildSummaryPrimary(
     case "annotations":
       return {
         icon: makeAnnotationIcon(doc),
-        label: `${context.selectedAnnotations?.length || 0} 条标注`,
+        label: getString("context-annotations-section", {
+          args: { count: context.selectedAnnotations?.length || 0 },
+        }),
       };
     case "items": {
       const items = context.items;
@@ -1702,14 +1943,19 @@ function buildSummaryPrimary(
       }
       return {
         icon: makeStackedItemIcons(doc, items),
-        label: `${items.length} items`,
+        label: getString("context-item-many", {
+          args: { count: items.length },
+        }),
       };
     }
     case "reader": {
       const reader = context.reader!;
       return {
         icon: makeStoredItemIconEl(doc, resolveReaderIconType(reader)),
-        label: compactText(reader.title || "当前 PDF", 22),
+        label: compactText(
+          reader.title || getString("context-current-pdf-label"),
+          22,
+        ),
       };
     }
     case "collection": {
@@ -1740,8 +1986,8 @@ function buildMessageContextSummaryChip(
   const chip = createEl(doc, "button", "claudero-message-context-summary");
   chip.type = "button";
   chip.setAttribute("tabindex", "-1");
-  chip.setAttribute("title", "查看上下文");
-  chip.setAttribute("aria-label", "查看上下文");
+  chip.setAttribute("title", getString("context-view"));
+  chip.setAttribute("aria-label", getString("context-view"));
 
   const { icon, label } = buildSummaryPrimary(doc, context, categories[0]);
   chip.appendChild(icon);
@@ -1890,7 +2136,7 @@ function buildContextSection(
       const { section, body } = makeCtxSection(
         doc,
         createEl(doc, "div", "claudero-text-icon"),
-        "选中文本",
+        getString("context-selected-text-label"),
       );
       const text = createEl(doc, "div", "claudero-ctx-text");
       text.textContent = context.selectedText.trim();
@@ -1903,7 +2149,9 @@ function buildContextSection(
       const { section, body } = makeCtxSection(
         doc,
         makeAnnotationIcon(doc),
-        `标注 · ${annotations.length}`,
+        getString("context-annotations-section", {
+          args: { count: annotations.length },
+        }),
       );
       for (const anno of annotations) {
         const row = createEl(doc, "div", "claudero-ctx-row claudero-ctx-anno");
@@ -1912,7 +2160,8 @@ function buildContextSection(
         if (anno.color) row.style.borderLeftColor = anno.color;
         const main = createEl(doc, "div", "claudero-ctx-row-main");
         const textEl = createEl(doc, "div", "claudero-ctx-anno-text");
-        textEl.textContent = anno.text || "（无文本标注）";
+        textEl.textContent =
+          anno.text || getString("context-no-annotation-text");
         main.appendChild(textEl);
         if (anno.comment) {
           const comment = createEl(doc, "div", "claudero-ctx-anno-comment");
@@ -1940,7 +2189,9 @@ function buildContextSection(
       const { section, body } = makeCtxSection(
         doc,
         headIcon,
-        items.length === 1 ? "1 item" : `${items.length} items`,
+        items.length === 1
+          ? getString("context-item-one")
+          : getString("context-item-many", { args: { count: items.length } }),
       );
       for (const item of items) {
         const subParts = [item.creators?.[0], (item.date || "").slice(0, 4)]
@@ -1961,20 +2212,29 @@ function buildContextSection(
       const reader = context.reader!;
       const rowIcon = makeStoredItemIconEl(doc, resolveReaderIconType(reader));
       const headIcon = makeStoredItemIconEl(doc, resolveReaderIconType(reader));
-      const { section, body } = makeCtxSection(doc, headIcon, "1 item");
+      const { section, body } = makeCtxSection(
+        doc,
+        headIcon,
+        getString("context-item-one"),
+      );
       const page =
         reader.pageLabel ||
         (reader.pageNumber ? String(reader.pageNumber) : "");
       const subs: string[] = [];
       if (page)
         subs.push(
-          `第 ${page} 页${reader.pagesCount ? ` / ${reader.pagesCount}` : ""}`,
+          getString("context-page", {
+            args: {
+              page,
+              total: reader.pagesCount ? ` / ${reader.pagesCount}` : "",
+            },
+          }),
         );
       if (reader.path) subs.push(midTruncate(reader.path, 60));
       body.appendChild(
         makeClickableRow(doc, {
           icon: rowIcon,
-          title: reader.title || "当前 PDF",
+          title: reader.title || getString("context-current-pdf-label"),
           subs,
           // Select the PDF attachment itself, not its parent item.
           onClick: () => selectZoteroItemsFromHistory([reader.id]),
@@ -1988,7 +2248,7 @@ function buildContextSection(
       const { section, body } = makeCtxSection(
         doc,
         makeNativeLibraryIcon(doc),
-        "所在分类",
+        getString("context-collection"),
       );
       const tree = createEl(doc, "div", "claudero-ctx-coll-tree");
       const levels: {
@@ -1997,7 +2257,7 @@ function buildContextSection(
         current: boolean;
       }[] = [
         {
-          label: collection.libraryName || "我的文库",
+          label: collection.libraryName || getString("context-library"),
           kind: "library",
           current: false,
         },
@@ -2376,7 +2636,7 @@ async function forkConversationAtTurn(
   const activeProvider = normalizeProvider(state.providerSelect.value);
   const codexThreadId = state.providerState?.codex?.threadId;
   const resumeAt = findLastAssistantProviderTurnId(turns);
-  await saveConversation(state);
+  if (!(await saveConversation(state))) return;
   state.conversationId = newConversationId();
   state.conversationTurns = turns.map((turn) => ({ ...turn }));
   state.providerState =
@@ -2400,8 +2660,8 @@ async function forkConversationAtTurn(
   appendNoticeCard(
     state,
     "success",
-    "Forked conversation",
-    "Started a new conversation branch from this point.",
+    getString("pane-fork-title"),
+    getString("pane-fork-description"),
   );
   setStatusDot(state, "ready");
 }
@@ -2463,9 +2723,10 @@ function appendUserMessage(
     for (const img of images) {
       const thumb = createEl(doc, "div", "claudero-img-thumb");
       const imgEl = doc.createElement("img") as HTMLImageElement;
-      imgEl.src = img.dataUrl;
+      const dataUrl = imageDataUrl(img);
+      imgEl.src = dataUrl;
       thumb.appendChild(imgEl);
-      attachImagePreview(state, thumb, img.dataUrl);
+      attachImagePreview(state, thumb, dataUrl);
       row.appendChild(thumb);
     }
     msgEl.appendChild(row);
@@ -2511,7 +2772,12 @@ async function checkPendingInteractions(state: PaneState): Promise<void> {
     const port = Number(getPref("helperPort") || 38660);
     const token = await (async () => {
       const profilePath = Zotero.Profile.dir;
-      const tokenPath = [profilePath, "claudero", "helper", ".token"].join("/");
+      const tokenPath = PathUtils.join(
+        profilePath,
+        "claudero",
+        "helper",
+        ".token",
+      );
       try {
         return (await (IOUtils as any).readUTF8(tokenPath)).trim();
       } catch {
@@ -2646,9 +2912,8 @@ function appendWelcomeCard(state: PaneState): void {
   const title = createEl(doc, "strong");
   const text = createEl(doc, "p");
   const suggestions = createEl(doc, "div", "claudero-suggestions redesigned");
-  title.textContent = "What should we do with this paper?";
-  text.textContent =
-    "Choose a starter or ask directly. Claudero will use your selected Zotero item, open PDF, or highlighted text as context.";
+  title.textContent = getString("composer-paper-question");
+  text.textContent = getString("composer-paper-description");
   header.append(title, text);
   card.append(header, suggestions);
   state.transcript.appendChild(card);
@@ -2676,7 +2941,7 @@ function appendWelcomeCard(state: PaneState): void {
       const name = createEl(doc, "span", "claudero-prompt-title");
       const sub = createEl(doc, "span", "claudero-prompt-desc");
       name.textContent = p.label;
-      sub.textContent = p.description || "Custom prompt";
+      sub.textContent = p.description || getString("prompt-custom");
       body.append(name, sub);
       button.append(icon, body);
       button.addEventListener("click", () => void sendPrompt(state, p.text));
@@ -2693,24 +2958,8 @@ function appendWelcomeCard(state: PaneState): void {
 }
 const STREAMING_RENDER_INTERVAL = 150;
 
-const THINKING_WORDS = [
-  "Analyzing",
-  "Thinking",
-  "Reading",
-  "Processing",
-  "Reviewing",
-  "Computing",
-  "Examining",
-  "Evaluating",
-  "Proofing",
-  "Simmering",
-  "Connecting dots",
-  "Percolating",
-  "Pondering",
-];
-
 function pickThinkingVerb(): string {
-  return THINKING_WORDS[Math.floor(Math.random() * THINKING_WORDS.length)]!;
+  return getString("activity-thinking");
 }
 
 function formatActivityTokens(tokens: number): string {
@@ -2726,10 +2975,12 @@ function compactActivityLabel(text: string, max = 46): string {
 
 function activityMessageForState(state: PaneState): string {
   if (state.activityMessage) return compactActivityLabel(state.activityMessage);
-  if (state.activityMode === "thinking") return "Thinking";
-  if (state.activityMode === "tool") return "Working";
-  if (state.activityMode === "waiting") return "Waiting";
-  if (state.activityMode === "requesting") return "Sending";
+  if (state.activityMode === "thinking") return getString("activity-thinking");
+  if (state.activityMode === "compacting")
+    return getString("activity-compacting");
+  if (state.activityMode === "tool") return getString("activity-working");
+  if (state.activityMode === "waiting") return getString("activity-waiting");
+  if (state.activityMode === "requesting") return getString("activity-sending");
   if (!state.thinkingVerb) state.thinkingVerb = pickThinkingVerb();
   return state.thinkingVerb;
 }
@@ -2769,19 +3020,38 @@ function updateThinkingAnimation(state: PaneState): void {
     state.turnOutputTokens + state.thinkingTokenEstimate,
   );
   const parts = [formatDuration(elapsed)];
-  if (tokens > 0) parts.push(`↓ ${formatActivityTokens(tokens)} tokens`);
+  if (tokens > 0) {
+    parts.push(
+      getString("activity-tokens", {
+        args: { tokens: formatActivityTokens(tokens) },
+      }),
+    );
+  }
   if (state.activityMode === "thinking") {
-    parts.push(`thinking with ${getSelectedEffort(state)} effort`);
+    parts.push(
+      getString("activity-thinking-effort", {
+        args: { effort: getSelectedEffort(state) },
+      }),
+    );
+  } else if (state.activityMode === "compacting") {
+    parts.push(getString("activity-context"));
   } else if (state.activityMode === "tool") {
-    parts.push("tool use");
+    parts.push(getString("activity-tool"));
   } else if (state.activityMode === "waiting") {
-    parts.push("waiting for input");
+    parts.push(getString("activity-input"));
   } else if (
     state.recentThoughtDurationMs > 0 &&
     Date.now() < state.recentThoughtUntil
   ) {
     parts.push(
-      `thought for ${Math.max(1, Math.round(state.recentThoughtDurationMs / 1000))}s`,
+      getString("activity-thought-for", {
+        args: {
+          seconds: Math.max(
+            1,
+            Math.round(state.recentThoughtDurationMs / 1000),
+          ),
+        },
+      }),
     );
   }
   state.thinkingMetaEl.textContent = `(${parts.join(" · ")})`;
@@ -2797,7 +3067,7 @@ function startThinkingAnimation(state: PaneState): void {
   const doc = state.root.ownerDocument!;
   const win = doc.defaultView as Window;
   const indicator = createEl(doc, "div", "claudero-thinking-indicator");
-  indicator.setAttribute("title", "Press Esc to interrupt");
+  indicator.setAttribute("title", getString("composer-interrupt"));
   const word = createEl(doc, "span", "claudero-thinking-word");
   const meta = createEl(doc, "span", "claudero-thinking-time");
   word.textContent = activityMessageForState(state);
@@ -2844,7 +3114,9 @@ function updateToolProgress(
 ): void {
   const card = state.toolCards.get(toolUseId);
   if (!card) return;
-  const label = `Running · ${formatDuration(Math.max(0, Math.floor(elapsedSeconds)))}`;
+  const label = getString("tool-running", {
+    args: { duration: formatDuration(Math.max(0, Math.floor(elapsedSeconds))) },
+  });
   card.status.setAttribute("title", label);
   card.status.setAttribute("aria-label", label);
 }
@@ -2872,11 +3144,21 @@ function createThinkingChevron(doc: Document): HTMLElement {
   return span;
 }
 
+function updateThinkingCardPresentation(
+  card: NonNullable<PaneState["thinkingCard"]>,
+  fallbackLabel: string,
+): void {
+  const presentation = thinkingPresentation(card.text);
+  card.labelSpan.textContent = presentation.title || fallbackLabel;
+  card.body.textContent = presentation.body;
+  card.el.classList.toggle("summary-only", !presentation.body);
+}
+
 // Claude's extended-thinking stream. Renders a collapsible "Thought for Ns"
 // card (like Claudian) accumulating the reasoning text.
 function appendThinkingDelta(state: PaneState, text: string): void {
   if (!text) return;
-  setActivity(state, "thinking", "Thinking");
+  setActivity(state, "thinking", getString("activity-thinking"));
   state.turnResponseChars += text.length;
   startThinkingAnimation(state);
   let card = state.thinkingCard;
@@ -2886,13 +3168,17 @@ function appendThinkingDelta(state: PaneState, text: string): void {
     const header = createEl(doc, "button", "claudero-thinking-header");
     header.setAttribute("tabindex", "-1");
     const labelSpan = createEl(doc, "span", "claudero-thinking-label");
-    labelSpan.textContent = "Thinking…";
+    labelSpan.textContent = getString("composer-thinking");
     const durationSpan = createEl(doc, "span", "claudero-thinking-duration");
     durationSpan.textContent = "(0s)";
     const chevron = createThinkingChevron(doc);
     header.append(labelSpan, durationSpan, chevron);
     const body = createEl(doc, "div", "claudero-thinking-body");
-    header.addEventListener("click", () => el.classList.toggle("collapsed"));
+    header.addEventListener("click", () => {
+      if (!el.classList.contains("summary-only")) {
+        el.classList.toggle("collapsed");
+      }
+    });
     el.append(header, body);
     // Insert before the current (still-empty) assistant bubble so the reasoning
     // renders ABOVE the answer, matching Claudian's layout.
@@ -2926,7 +3212,7 @@ function appendThinkingDelta(state: PaneState, text: string): void {
     state.thinkingCard = card;
   }
   card.text += text;
-  card.body.textContent = card.text.trim();
+  updateThinkingCardPresentation(card, getString("composer-thinking"));
   scrollTranscript(state);
 }
 
@@ -2940,10 +3226,13 @@ function reconcileThinkingSnapshot(state: PaneState, text: string): void {
     0,
     state.turnResponseChars - state.thinkingCard.text.length + text.length,
   );
-  setActivity(state, "thinking", "Thinking");
+  setActivity(state, "thinking", getString("activity-thinking"));
   startThinkingAnimation(state);
   state.thinkingCard.text = text;
-  state.thinkingCard.body.textContent = text.trim();
+  updateThinkingCardPresentation(
+    state.thinkingCard,
+    getString("composer-thinking"),
+  );
   const last = state.currentAssistantBlocks.at(-1);
   if (last?.type === "thinking") last.text = text;
   else pushAssistantBlock(state, { type: "thinking", text, durationMs: 0 });
@@ -2959,8 +3248,13 @@ function finalizeThinkingCard(state: PaneState): void {
   state.recentThoughtUntil = Date.now() + 2000;
   updateThinkingAnimation(state);
   (state.root.ownerDocument!.defaultView as Window).clearInterval(card.timer);
-  card.labelSpan.textContent = `Thought for ${sec}s`;
-  card.durationSpan.textContent = "";
+  updateThinkingCardPresentation(
+    card,
+    getString("activity-thought-for", { args: { seconds: sec } }),
+  );
+  card.durationSpan.textContent = thinkingPresentation(card.text).title
+    ? `(${sec}s)`
+    : "";
   // Auto-collapse once formal content follows
   card.el.classList.add("done", "collapsed");
   state.thinkingCard = null;
@@ -3112,40 +3406,99 @@ async function animateAssistantText(
   }
 }
 
-function appendAuthPrompt(state: PaneState, message: string): void {
+function appendDeepSeekCliInstallPrompt(
+  state: PaneState,
+  message: string,
+): void {
   setStatusDot(state, "error");
-  const label = providerLabel(normalizeProvider(state.providerSelect.value));
   appendNoticeCard(
     state,
-    "auth",
-    `${label} authentication required`,
-    `${message}\n\n${label} is not authenticated or the request was rejected. You can log in, or set provider environment variables / HTTPS_PROXY in Claudero preferences.`,
+    "warning",
+    getString("composer-deepseek-cli-missing"),
+    `${message}\n\n${getString("pane-deepseek-install-description")}`,
     {
-      label: `Login ${label}`,
+      label: getString("composer-install-deepseek"),
       onClick: (button) => {
         button.disabled = true;
-        runProviderAuthLogin()
-          .then(() => {
+        button.textContent = getString("composer-installing-deepseek");
+        installDeepSeekHarness()
+          .then((result) => {
             appendNoticeCard(
               state,
-              "info",
-              `${label} login opened`,
-              "Complete the authentication flow in the Terminal window, then send your message again.",
+              "success",
+              getString("composer-deepseek-installed"),
+              getString("pane-deepseek-installed-description", {
+                args: {
+                  path: result.cliPath,
+                  version: result.version ? ` (version ${result.version})` : "",
+                },
+              }),
             );
+            setStatusDot(state, "ready");
           })
           .catch((error: unknown) => {
             appendNoticeCard(
               state,
               "warning",
-              `${label} login failed`,
+              getString("composer-deepseek-install-failed"),
               error instanceof Error ? error.message : String(error),
             );
           })
           .finally(() => {
             button.disabled = false;
+            button.textContent = getString("composer-install-deepseek");
           });
       },
     },
+  );
+}
+
+function appendAuthPrompt(state: PaneState, message: string): void {
+  setStatusDot(state, "error");
+  const provider = normalizeProvider(state.providerSelect.value);
+  const label = providerLabel(provider);
+  appendNoticeCard(
+    state,
+    "auth",
+    getString("pane-auth-required", { args: { agent: label } }),
+    `${message}\n\n${getString("pane-auth-description", {
+      args: {
+        agent: label,
+        instructions: getString(
+          provider === "deepseek"
+            ? "pane-auth-deepseek-instructions"
+            : "pane-auth-provider-instructions",
+        ),
+      },
+    })}`,
+    provider === "deepseek"
+      ? undefined
+      : {
+          label: getString("pane-login", { args: { agent: label } }),
+          onClick: (button) => {
+            button.disabled = true;
+            runProviderAuthLogin()
+              .then(() => {
+                appendNoticeCard(
+                  state,
+                  "info",
+                  getString("pane-login-opened", { args: { agent: label } }),
+                  getString("pane-login-description"),
+                );
+              })
+              .catch((error: unknown) => {
+                appendNoticeCard(
+                  state,
+                  "warning",
+                  getString("pane-login-failed", { args: { agent: label } }),
+                  error instanceof Error ? error.message : String(error),
+                );
+              })
+              .finally(() => {
+                button.disabled = false;
+              });
+          },
+        },
   );
 }
 
@@ -3154,7 +3507,11 @@ function appendLimitPrompt(state: PaneState, message: string): void {
   appendNoticeCard(
     state,
     "warning",
-    `${providerLabel(normalizeProvider(state.providerSelect.value))} session limit reached`,
+    getString("pane-session-limit", {
+      args: {
+        agent: providerLabel(normalizeProvider(state.providerSelect.value)),
+      },
+    }),
     message,
   );
 }
@@ -3165,11 +3522,13 @@ function startNewConversation(state: PaneState): void {
   if (state.running) return;
   // Persist the current conversation before clearing the view so it stays in
   // history and can be reopened later.
-  void saveConversation(state);
-  clearConversationState(state);
-  renderPendingImages(state);
-  appendWelcomeCard(state);
-  setStatusDot(state, "ready");
+  void saveConversation(state).then((saved) => {
+    if (!saved) return;
+    clearConversationState(state);
+    renderPendingImages(state);
+    appendWelcomeCard(state);
+    setStatusDot(state, "ready");
+  });
 }
 
 // ── Cancel / Stop ──────────────────────────────────────────────────────────
@@ -3178,7 +3537,12 @@ async function cancelPermissionRequest(state: PaneState): Promise<void> {
   try {
     const port = Number(getPref("helperPort") || 38660);
     const profilePath = Zotero.Profile.dir;
-    const tokenPath = [profilePath, "claudero", "helper", ".token"].join("/");
+    const tokenPath = PathUtils.join(
+      profilePath,
+      "claudero",
+      "helper",
+      ".token",
+    );
     let token = "";
     try {
       token = (await (IOUtils as any).readUTF8(tokenPath)).trim();
@@ -3212,39 +3576,6 @@ function cancel(state: PaneState): void {
 
 // ── Core send logic ────────────────────────────────────────────────────────
 
-function buildHistorySection(turns: ConversationTurn[]): string {
-  const trimmedTurns = turns
-    .map((turn) => ({ ...turn, text: turn.text.trim() }))
-    .filter((turn) => turn.text.length > 0)
-    .slice(-16);
-  if (trimmedTurns.length === 0) return "";
-  const lines = trimmedTurns.map((turn) => {
-    const role = turn.role === "user" ? "User" : "Assistant";
-    return `<turn role="${role}">\n${turn.text}\n</turn>`;
-  });
-  return [
-    "<conversation_history>",
-    "The following turns are from this Claudero conversation. Use them as prior context for the current request.",
-    ...lines,
-    "</conversation_history>",
-  ].join("\n");
-}
-
-function buildPromptWithConversationHistory(
-  prompt: string,
-  turns: ConversationTurn[],
-): string {
-  const history = buildHistorySection(turns);
-  if (!history) return prompt;
-  return [
-    history,
-    "",
-    "<current_user_request>",
-    prompt,
-    "</current_user_request>",
-  ].join("\n");
-}
-
 async function sendPrompt(
   state: PaneState,
   overridePrompt?: string,
@@ -3257,6 +3588,9 @@ async function sendPrompt(
     ...img,
   }));
   const provider = normalizeProvider(state.providerSelect.value);
+  const requestModel = getSelectedModel(state);
+  const requestEffort = getSelectedEffort(state);
+  const requestConversationId = state.conversationId;
   const capabilities = getProviderCapabilities(provider);
   if (images.length > 0 && !capabilities.supportsImageAttachments) {
     appendNoticeCard(
@@ -3311,7 +3645,7 @@ async function sendPrompt(
   state.thinkingTokenEstimate = 0;
   state.thinkingVerb = "";
   state.activityMode = "requesting";
-  state.activityMessage = "Sending";
+  state.activityMessage = getString("activity-sending");
   state.activityStartedTs = userTs;
   state.recentThoughtDurationMs = 0;
   state.recentThoughtUntil = 0;
@@ -3328,8 +3662,14 @@ async function sendPrompt(
   }, 800) as unknown as number;
 
   let sawError = false;
+  let failureMessage = "";
+  let turnPersisted = false;
   try {
-    const context = overrideContext || (await getSelectedZoteroContext());
+    const context =
+      overrideContext ||
+      (await getSelectedZoteroContext(
+        state.root.ownerDocument?.defaultView || undefined,
+      ));
     if (!overrideContext) {
       // Apply dismissed flags and merge manually added items
       if (state.dismissedReader) context.reader = undefined;
@@ -3392,8 +3732,8 @@ async function sendPrompt(
     );
     logTurnStart({
       provider,
-      model: getSelectedModel(state),
-      effort: getSelectedEffort(state),
+      model: requestModel,
+      effort: requestEffort,
       permissionMode: state.permissionMode,
       conversationId: state.conversationId,
       promptLength: basePrompt.length,
@@ -3411,10 +3751,15 @@ async function sendPrompt(
           ),
         })
       : basePrompt;
-    const promptWithHistory = buildPromptWithConversationHistory(
-      workflowPrompt,
-      state.conversationTurns,
-    );
+    const promptWithHistory = shouldReplayConversationHistory(
+      provider,
+      state.providerState,
+    )
+      ? buildPromptWithConversationHistory(
+          workflowPrompt,
+          state.conversationTurns,
+        )
+      : workflowPrompt;
     const fullPrompt = buildPromptWithZoteroContext(
       promptWithHistory,
       context,
@@ -3423,13 +3768,14 @@ async function sendPrompt(
     const additionalDirectories = getAttachmentDirectories(context);
     for await (const event of queryClaudeHelper(fullPrompt, {
       provider,
-      model: getSelectedModel(state),
-      effort: getSelectedEffort(state),
+      model: requestModel,
+      effort: requestEffort,
       additionalDirectories,
       permissionMode: state.permissionMode,
       images: images.map((i) => ({ media_type: i.mediaType, data: i.data })),
-      conversationId: state.conversationId,
+      conversationId: requestConversationId,
       providerState: state.providerState,
+      toolPolicy: academicMatch?.skill.toolPolicy,
     })) {
       if (state.cancelRequested) break;
       if (event.type === "session") {
@@ -3442,6 +3788,24 @@ async function sendPrompt(
         applyProviderSessionEvent(state, event.session);
       } else if (event.type === "ready") {
         setActivity(state, "responding");
+      } else if (event.type === "context_compaction") {
+        setActivity(
+          state,
+          event.phase === "started" ? "compacting" : "thinking",
+          event.phase === "started"
+            ? getString("activity-compacting")
+            : getString("activity-thinking"),
+        );
+        startThinkingAnimation(state);
+      } else if (event.type === "connection_status") {
+        setActivity(
+          state,
+          "waiting",
+          getString("activity-reconnecting", {
+            args: { attempt: event.attempt, maxAttempts: event.maxAttempts },
+          }),
+        );
+        startThinkingAnimation(state);
       } else if (event.type === "thinking" && event.text) {
         // Lazily create assistant card so the thinking card has somewhere to
         // insert itself before (but only if one doesn't already exist).
@@ -3590,6 +3954,9 @@ async function sendPrompt(
       } else if (event.type === "tool_result" && event.result) {
         logToolResult(event.result);
         hideQuestionDialog(state);
+        restoreEvidenceReferences(
+          evidenceReferencesFromToolResultContent(event.result.content),
+        );
         appendToolResult(state, event.result);
         pushAssistantBlock(state, {
           type: "tool_result",
@@ -3625,7 +3992,7 @@ async function sendPrompt(
         typeof event.estimatedTokens === "number"
       ) {
         state.thinkingTokenEstimate = Math.max(0, event.estimatedTokens);
-        setActivity(state, "thinking", "Thinking");
+        setActivity(state, "thinking", getString("activity-thinking"));
         if (!state.thinkingCard) startThinkingAnimation(state);
         else updateThinkingAnimation(state);
       } else if (
@@ -3691,7 +4058,7 @@ async function sendPrompt(
           ts: userTs,
           images: cloneImages(images),
           contextSnapshot: state.currentContextSnapshot,
-          provider: normalizeProvider(state.providerSelect.value),
+          provider,
         });
         attachMessageActions(state, userCard, "user", prompt || "(图片)", {
           ts: userTs,
@@ -3711,12 +4078,15 @@ async function sendPrompt(
             text: state.lastAssistantText,
             ts: assistantTs,
             blocks,
-            model: getSelectedModel(state),
-            effort: getSelectedEffort(state),
+            model: requestModel,
+            effort: requestEffort,
             durationMs: assistantTs - userTs,
             contextSnapshot: state.currentContextSnapshot,
             assistantMessageId: state.currentProviderTurnId,
-            provider: normalizeProvider(state.providerSelect.value),
+            provider,
+            evidenceReferences: evidenceReferencesForText(
+              state.lastAssistantText,
+            ),
           });
           if (state.currentAssistantCard) {
             attachMessageActions(
@@ -3734,22 +4104,30 @@ async function sendPrompt(
             text: "",
             ts: assistantTs,
             blocks: state.currentAssistantBlocks.slice(),
-            model: getSelectedModel(state),
-            effort: getSelectedEffort(state),
+            model: requestModel,
+            effort: requestEffort,
             durationMs: assistantTs - userTs,
             contextSnapshot: state.currentContextSnapshot,
             assistantMessageId: state.currentProviderTurnId,
-            provider: normalizeProvider(state.providerSelect.value),
+            provider,
+            evidenceReferences: evidenceReferencesForText(
+              state.lastAssistantText,
+            ),
           });
         }
         const savePromise = saveConversation(state);
+        turnPersisted = true;
         if (userTurnIndex === 0 && state.lastAssistantText) {
-          void savePromise.then(() =>
-            generateConversationTitle(
-              state.conversationId,
-              prompt || "(图片)",
-              state.lastAssistantText,
-            ),
+          const titleConversationId = requestConversationId;
+          const titleAssistantText = state.lastAssistantText;
+          void savePromise.then((saved) =>
+            saved
+              ? generateConversationTitle(
+                  titleConversationId,
+                  prompt || "(图片)",
+                  titleAssistantText,
+                )
+              : null,
           );
         }
         void reloadSlashCommands().then((cmds) => {
@@ -3766,7 +4144,14 @@ async function sendPrompt(
         sawError = true;
         const message =
           event.error ||
-          `${providerLabel(normalizeProvider(state.providerSelect.value))} query failed.`;
+          getString("pane-query-failed", {
+            args: {
+              agent: providerLabel(
+                normalizeProvider(state.providerSelect.value),
+              ),
+            },
+          });
+        failureMessage = message;
         logTurnEnd({
           error: message,
           durationMs: Date.now() - userTs,
@@ -3778,11 +4163,22 @@ async function sendPrompt(
           appendLimitPrompt(state, message);
         } else if (isClaudeAuthError(message)) {
           appendAuthPrompt(state, message);
+        } else if (
+          provider === "deepseek" &&
+          isDeepSeekCliMissingError(message)
+        ) {
+          appendDeepSeekCliInstallPrompt(state, message);
         } else {
           appendNoticeCard(
             state,
             "warning",
-            `${providerLabel(normalizeProvider(state.providerSelect.value))} error`,
+            getString("pane-provider-error", {
+              args: {
+                agent: providerLabel(
+                  normalizeProvider(state.providerSelect.value),
+                ),
+              },
+            }),
             message,
           );
           setStatusDot(state, "error");
@@ -3792,6 +4188,7 @@ async function sendPrompt(
   } catch (error) {
     sawError = true;
     const message = error instanceof Error ? error.message : String(error);
+    failureMessage = message;
     logTurnEnd({
       error: message,
       cancelled: state.cancelRequested,
@@ -3804,11 +4201,67 @@ async function sendPrompt(
       appendLimitPrompt(state, message);
     } else if (isClaudeAuthError(message)) {
       appendAuthPrompt(state, message);
+    } else if (provider === "deepseek" && isDeepSeekCliMissingError(message)) {
+      appendDeepSeekCliInstallPrompt(state, message);
     } else {
-      appendNoticeCard(state, "warning", "Claudero error", message);
+      appendNoticeCard(
+        state,
+        "warning",
+        getString("pane-provider-error", { args: { agent: "Claudero" } }),
+        message,
+      );
       setStatusDot(state, "error");
     }
   } finally {
+    if (!turnPersisted && state.conversationId === requestConversationId) {
+      const userTurnIndex = state.conversationTurns.length;
+      state.conversationTurns.push({
+        role: "user",
+        text: prompt || "(图片)",
+        ts: userTs,
+        images: cloneImages(images),
+        contextSnapshot: state.currentContextSnapshot,
+        provider,
+      });
+      attachMessageActions(state, userCard, "user", prompt || "(图片)", {
+        ts: userTs,
+        turnIndex: userTurnIndex,
+        editable: true,
+        contextSnapshot: state.currentContextSnapshot,
+      });
+      const blocks = state.currentAssistantBlocks.slice();
+      if (state.currentSegmentText) {
+        blocks.push({ type: "text", text: state.currentSegmentText });
+      }
+      if (failureMessage || state.cancelRequested) {
+        blocks.push({
+          type: "notice",
+          kind: state.cancelRequested ? "info" : "warning",
+          title: state.cancelRequested
+            ? getString("pane-cancelled")
+            : getString("pane-request-failed"),
+          text: failureMessage || getString("pane-cancelled-description"),
+        });
+      }
+      if (state.lastAssistantText || blocks.length > 0) {
+        state.conversationTurns.push({
+          role: "assistant",
+          text: state.lastAssistantText,
+          ts: Date.now(),
+          blocks,
+          model: requestModel,
+          effort: requestEffort,
+          durationMs: Date.now() - userTs,
+          contextSnapshot: state.currentContextSnapshot,
+          assistantMessageId: state.currentProviderTurnId,
+          provider,
+          evidenceReferences: evidenceReferencesForText(
+            state.lastAssistantText,
+          ),
+        });
+      }
+      void saveConversation(state);
+    }
     if (state.cancelRequested) {
       logTurnEnd({
         cancelled: true,
@@ -3831,12 +4284,9 @@ async function sendPrompt(
     state.currentContextSnapshot = null;
     state._suppressText = 0;
     state._activeSkillToolId = null;
-    state.running = false;
-    state.modelSelect.disabled = false;
-    state.effortSelect.disabled = false;
+    setRunning(state, false);
     updateContext(state);
-    updateSendButton(state, false);
-    if (!sawError) setStatusDot(state, "ready");
+    setStatusDot(state, sawError ? "error" : "ready");
   }
 }
 
@@ -3849,6 +4299,10 @@ async function sendRawSlashCommand(
 ): Promise<void> {
   if (state.running) return;
 
+  const provider = normalizeProvider(state.providerSelect.value);
+  const requestModel = getSelectedModel(state);
+  const requestEffort = getSelectedEffort(state);
+  const requestConversationId = state.conversationId;
   refreshEditableMessageActions(state);
   const userTs = Date.now();
   const userCard = appendUserMessage(state, command, [], { ts: userTs });
@@ -3866,7 +4320,7 @@ async function sendRawSlashCommand(
   state.thinkingTokenEstimate = 0;
   state.thinkingVerb = "";
   state.activityMode = "requesting";
-  state.activityMessage = "Sending";
+  state.activityMessage = getString("activity-sending");
   state.activityStartedTs = userTs;
   state.recentThoughtDurationMs = 0;
   state.recentThoughtUntil = 0;
@@ -3882,18 +4336,38 @@ async function sendRawSlashCommand(
   }, 800) as unknown as number;
 
   let sawError = false;
+  let failureMessage = "";
+  let turnPersisted = false;
   try {
     for await (const event of queryClaudeHelper(command, {
-      provider: normalizeProvider(state.providerSelect.value),
-      model: getSelectedModel(state),
-      effort: getSelectedEffort(state),
+      provider,
+      model: requestModel,
+      effort: requestEffort,
       permissionMode: state.permissionMode,
-      conversationId: state.conversationId,
+      conversationId: requestConversationId,
       providerState: state.providerState,
     })) {
       if (state.cancelRequested) break;
       if (event.type === "session") {
         applyProviderSessionEvent(state, event.session);
+      } else if (event.type === "context_compaction") {
+        setActivity(
+          state,
+          event.phase === "started" ? "compacting" : "thinking",
+          event.phase === "started"
+            ? getString("activity-compacting")
+            : getString("activity-thinking"),
+        );
+        startThinkingAnimation(state);
+      } else if (event.type === "connection_status") {
+        setActivity(
+          state,
+          "waiting",
+          getString("activity-reconnecting", {
+            args: { attempt: event.attempt, maxAttempts: event.maxAttempts },
+          }),
+        );
+        startThinkingAnimation(state);
       } else if (event.type === "thinking" && event.text) {
         if (!state.currentAssistantBody) {
           state.currentAssistantBody = appendMessageCard(
@@ -4032,6 +4506,9 @@ async function sendRawSlashCommand(
         }
       } else if (event.type === "tool_result" && event.result) {
         hideQuestionDialog(state);
+        restoreEvidenceReferences(
+          evidenceReferencesFromToolResultContent(event.result.content),
+        );
         appendToolResult(state, event.result);
         pushAssistantBlock(state, {
           type: "tool_result",
@@ -4062,7 +4539,7 @@ async function sendRawSlashCommand(
         typeof event.estimatedTokens === "number"
       ) {
         state.thinkingTokenEstimate = Math.max(0, event.estimatedTokens);
-        setActivity(state, "thinking", "Thinking");
+        setActivity(state, "thinking", getString("activity-thinking"));
         if (!state.thinkingCard) startThinkingAnimation(state);
         else updateThinkingAnimation(state);
       } else if (
@@ -4101,7 +4578,7 @@ async function sendRawSlashCommand(
           role: "user",
           text: command,
           ts: userTs,
-          provider: normalizeProvider(state.providerSelect.value),
+          provider,
         });
         attachMessageActions(state, userCard, "user", command, {
           ts: userTs,
@@ -4120,11 +4597,11 @@ async function sendRawSlashCommand(
             text: state.lastAssistantText,
             ts: assistantTs,
             blocks,
-            model: getSelectedModel(state),
-            effort: getSelectedEffort(state),
+            model: requestModel,
+            effort: requestEffort,
             durationMs: assistantTs - userTs,
             assistantMessageId: state.currentProviderTurnId,
-            provider: normalizeProvider(state.providerSelect.value),
+            provider,
           });
           if (state.currentAssistantCard) {
             attachMessageActions(
@@ -4142,24 +4619,28 @@ async function sendRawSlashCommand(
             text: "",
             ts: assistantTs,
             blocks: state.currentAssistantBlocks.slice(),
-            model: getSelectedModel(state),
-            effort: getSelectedEffort(state),
+            model: requestModel,
+            effort: requestEffort,
             durationMs: assistantTs - userTs,
             assistantMessageId: state.currentProviderTurnId,
-            provider: normalizeProvider(state.providerSelect.value),
+            provider,
           });
         }
         if (command.trim() === "/compact") {
           state.compactedAt = Date.now();
         }
         const savePromise = saveConversation(state);
+        turnPersisted = true;
         if (userTurnIndex === 0 && state.lastAssistantText) {
-          void savePromise.then(() =>
-            generateConversationTitle(
-              state.conversationId,
-              command,
-              state.lastAssistantText,
-            ),
+          const titleAssistantText = state.lastAssistantText;
+          void savePromise.then((saved) =>
+            saved
+              ? generateConversationTitle(
+                  requestConversationId,
+                  command,
+                  titleAssistantText,
+                )
+              : null,
           );
         }
         void reloadSlashCommands().then((cmds) => {
@@ -4176,14 +4657,29 @@ async function sendRawSlashCommand(
         sawError = true;
         const message =
           event.error ||
-          `${providerLabel(normalizeProvider(state.providerSelect.value))} query failed.`;
+          getString("pane-query-failed", {
+            args: {
+              agent: providerLabel(
+                normalizeProvider(state.providerSelect.value),
+              ),
+            },
+          });
+        failureMessage = message;
         if (isClaudeLimitError(message)) appendLimitPrompt(state, message);
         else if (isClaudeAuthError(message)) appendAuthPrompt(state, message);
+        else if (provider === "deepseek" && isDeepSeekCliMissingError(message))
+          appendDeepSeekCliInstallPrompt(state, message);
         else {
           appendNoticeCard(
             state,
             "warning",
-            `${providerLabel(normalizeProvider(state.providerSelect.value))} error`,
+            getString("pane-provider-error", {
+              args: {
+                agent: providerLabel(
+                  normalizeProvider(state.providerSelect.value),
+                ),
+              },
+            }),
             message,
           );
           setStatusDot(state, "error");
@@ -4193,13 +4689,63 @@ async function sendRawSlashCommand(
   } catch (error) {
     sawError = true;
     const message = error instanceof Error ? error.message : String(error);
+    failureMessage = message;
     if (isClaudeLimitError(message)) appendLimitPrompt(state, message);
     else if (isClaudeAuthError(message)) appendAuthPrompt(state, message);
+    else if (provider === "deepseek" && isDeepSeekCliMissingError(message))
+      appendDeepSeekCliInstallPrompt(state, message);
     else {
-      appendNoticeCard(state, "warning", "Claudero error", message);
+      appendNoticeCard(
+        state,
+        "warning",
+        getString("pane-provider-error", { args: { agent: "Claudero" } }),
+        message,
+      );
       setStatusDot(state, "error");
     }
   } finally {
+    if (!turnPersisted && state.conversationId === requestConversationId) {
+      const userTurnIndex = state.conversationTurns.length;
+      state.conversationTurns.push({
+        role: "user",
+        text: command,
+        ts: userTs,
+        provider,
+      });
+      attachMessageActions(state, userCard, "user", command, {
+        ts: userTs,
+        turnIndex: userTurnIndex,
+        editable: true,
+      });
+      const blocks = state.currentAssistantBlocks.slice();
+      if (state.currentSegmentText) {
+        blocks.push({ type: "text", text: state.currentSegmentText });
+      }
+      if (failureMessage || state.cancelRequested) {
+        blocks.push({
+          type: "notice",
+          kind: state.cancelRequested ? "info" : "warning",
+          title: state.cancelRequested
+            ? getString("pane-cancelled")
+            : getString("pane-request-failed"),
+          text: failureMessage || getString("pane-cancelled-description"),
+        });
+      }
+      if (state.lastAssistantText || blocks.length > 0) {
+        state.conversationTurns.push({
+          role: "assistant",
+          text: state.lastAssistantText,
+          ts: Date.now(),
+          blocks,
+          model: requestModel,
+          effort: requestEffort,
+          durationMs: Date.now() - userTs,
+          assistantMessageId: state.currentProviderTurnId,
+          provider,
+        });
+      }
+      void saveConversation(state);
+    }
     state.cancelRequested = false;
     stopThinkingAnimation(state);
     finalizeThinkingCard(state);
@@ -4213,12 +4759,9 @@ async function sendRawSlashCommand(
     state.currentContextSnapshot = null;
     state._suppressText = 0;
     state._activeSkillToolId = null;
-    state.running = false;
-    state.modelSelect.disabled = false;
-    state.effortSelect.disabled = false;
+    setRunning(state, false);
     updateContext(state);
-    updateSendButton(state, false);
-    if (!sawError) setStatusDot(state, "ready");
+    setStatusDot(state, sawError ? "error" : "ready");
   }
 }
 
@@ -4230,8 +4773,8 @@ async function insertAssistantNote(state: PaneState): Promise<void> {
     appendNoticeCard(
       state,
       "info",
-      "No Zotero item selected",
-      "Select a Zotero item first.",
+      getString("pane-no-item"),
+      getString("pane-select-item"),
     );
     return;
   }
@@ -4239,8 +4782,8 @@ async function insertAssistantNote(state: PaneState): Promise<void> {
     appendNoticeCard(
       state,
       "info",
-      "No response yet",
-      "Ask Claudero a question before inserting a note.",
+      getString("pane-no-response"),
+      getString("pane-ask-before-note"),
     );
     return;
   }
@@ -4254,8 +4797,8 @@ async function insertAssistantNote(state: PaneState): Promise<void> {
   appendNoticeCard(
     state,
     "success",
-    "Inserted note",
-    "Inserted response as a child note.",
+    getString("pane-inserted-note"),
+    getString("pane-inserted-note-description"),
   );
 }
 
@@ -4269,7 +4812,25 @@ function setToolbarChecked(win: Window, checked: boolean): void {
 
 function hideClauderoPanel(win: Window): void {
   const doc = win.document;
-  doc.getElementById(PANEL_ID)?.remove();
+  const host = doc.getElementById(PANEL_ID) as HTMLElement | null;
+  const state = host ? paneStates.get(host) : undefined;
+  if (state) {
+    if (state.running) cancel(state);
+    if (state.permissionCheckTimer) {
+      win.clearInterval(state.permissionCheckTimer);
+      state.permissionCheckTimer = null;
+    }
+    stopThinkingAnimation(state);
+    hidePermissionDialog(state);
+    hideQuestionDialog(state);
+    if (state.providerPrefObserverID) {
+      Zotero.Prefs.unregisterObserver(state.providerPrefObserverID);
+      state.providerPrefObserverID = null;
+    }
+    void saveConversation(state);
+    paneStates.delete(host!);
+  }
+  host?.remove();
   doc.getElementById(SPLITTER_ID)?.remove();
   setToolbarChecked(win, false);
 }
@@ -4298,8 +4859,8 @@ function createHeader(
     "width:20px;height:20px;max-width:20px;max-height:20px;display:block;",
   );
   title.textContent = "Claudero";
-  statusDot.setAttribute("title", "Ready");
-  statusDot.setAttribute("aria-label", "Ready");
+  statusDot.setAttribute("title", getString("pane-ready"));
+  statusDot.setAttribute("aria-label", getString("pane-ready"));
   const chevron = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
   chevron.setAttribute("viewBox", "0 0 24 24");
   chevron.setAttribute("width", "10");
@@ -4324,7 +4885,10 @@ function createHeader(
   ): HTMLElement =>
     createToolbarLikeButton(doc, "claudero-header-action", tooltip, onCommand);
 
-  const newChatBtn = createToolbarBtn("New conversation", onNewChat);
+  const newChatBtn = createToolbarBtn(
+    getString("toolbar-new-conversation"),
+    onNewChat,
+  );
   const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 1024 1024");
   svg.setAttribute("width", "16");
@@ -4339,7 +4903,7 @@ function createHeader(
   newChatBtn.appendChild(svg);
 
   // History button — reopen a previous conversation
-  const historyBtn = createToolbarBtn("Conversation history", onHistory);
+  const historyBtn = createToolbarBtn(getString("toolbar-history"), onHistory);
   const histSvg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
   histSvg.setAttribute("viewBox", "0 0 24 24");
   histSvg.setAttribute("width", "16");
@@ -4362,7 +4926,7 @@ function createHeader(
   historyBtn.appendChild(histSvg);
 
   // Close button
-  const closeBtn = createToolbarBtn("Hide Claudero", onClose);
+  const closeBtn = createToolbarBtn(getString("toolbar-hide"), onClose);
   const closeSvg = doc.createElementNS(
     "http://www.w3.org/2000/svg",
     "svg",
@@ -4392,10 +4956,50 @@ function createHeader(
   return { element: header, statusDot };
 }
 
+async function chooseConversationExportPath(
+  doc: Document,
+  title: string,
+): Promise<string | null> {
+  const picker = (Components.classes as any)[
+    "@mozilla.org/filepicker;1"
+  ].createInstance(Components.interfaces.nsIFilePicker) as nsIFilePicker;
+  const win = doc.defaultView;
+  if (!win?.browsingContext) return null;
+  picker.init(win.browsingContext, "Export conversation", picker.modeSave!);
+  picker.defaultString = `${
+    title
+      .replace(/[\\/:*?"<>|]+/g, "-")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80) || "claudero-conversation"
+  }.json`;
+  picker.defaultExtension = "json";
+  picker.appendFilter("JSON", "*.json");
+  const result = await new Promise<nsIFilePicker.ResultCode>((resolve) => {
+    picker.open({ done: resolve });
+  });
+  return result === picker.returnCancel ? null : picker.file.path;
+}
+
 function showHistoryPopup(state: PaneState): void {
   showConversationHistoryPopup(state, {
     onRestore: (conv) => restoreConversation(state, conv),
     onDelete: (conv) => deleteConversationFromHistory(state, conv),
+    onExport: async (conv) => {
+      const destinationPath = await chooseConversationExportPath(
+        state.root.ownerDocument!,
+        conv.title,
+      );
+      if (!destinationPath) return;
+      await exportConversationToFile(conv.id, destinationPath);
+    },
+    onDeleteAll: async () => {
+      await deleteAllConversations();
+      clearConversationState(state);
+      renderPendingImages(state);
+      appendWelcomeCard(state);
+      setStatusDot(state, "ready");
+    },
     onAutoRename: async (conv) => {
       const latestTitle = await getConversationTitle(conv.id);
       if (latestTitle && latestTitle !== conv.title) {
@@ -4450,9 +5054,7 @@ async function refinePromptWithClaude(input: {
   const raw = await runAuxClaudeQuery(JSON.stringify(input, null, 2), {
     systemPrompt,
     model: String(
-      normalizeProvider(getPref("provider")) === "codex"
-        ? getPref("codexModel") || "gpt-5.4-mini"
-        : getPref("claudeModel") || getPref("model") || "haiku",
+      defaultModelForProvider(normalizeProvider(getPref("provider"))),
     ),
     effort: "low",
   });
@@ -4517,9 +5119,7 @@ async function generateConversationTitle(
     const raw = await runAuxClaudeQuery(titlePrompt, {
       systemPrompt,
       model: String(
-        normalizeProvider(getPref("provider")) === "codex"
-          ? getPref("codexModel") || "gpt-5.4-mini"
-          : "haiku",
+        defaultModelForProvider(normalizeProvider(getPref("provider"))),
       ),
       effort: "low",
       signal: controller.signal,
@@ -4729,13 +5329,13 @@ function updateSlashPopup(state: PaneState): void {
 
   // Use cached SDK commands if available, otherwise fetch them
   if (_sdkCommandsCache !== null) {
-    const allCmds = [...BUILTIN_SLASH_COMMANDS, ..._sdkCommandsCache];
+    const allCmds = [...builtinSlashCommands(), ..._sdkCommandsCache];
     renderSlashPopup(state, allCmds, query, existing);
     return;
   }
 
   // Show built-ins immediately while SDK commands load
-  renderSlashPopup(state, BUILTIN_SLASH_COMMANDS, query, existing);
+  renderSlashPopup(state, builtinSlashCommands(), query, existing);
 
   if (!_sdkCommandsFetching) {
     _sdkCommandsFetching = true;
@@ -4761,7 +5361,7 @@ function updateSlashPopup(state: PaneState): void {
               __selectedIdx?: number;
             })
           | null;
-        const allCmds = [...BUILTIN_SLASH_COMMANDS, ..._sdkCommandsCache!];
+        const allCmds = [...builtinSlashCommands(), ..._sdkCommandsCache!];
         renderSlashPopup(state, allCmds, currentQuery, currentPopup);
       }
     });
@@ -4783,7 +5383,7 @@ function showItemPickerPopup(state: PaneState): void {
   // Search/From Library row
   const searchRow = createEl(doc, "div", "claudero-at-search-row");
   const searchInput = createEl(doc, "span", "claudero-at-search");
-  searchInput.textContent = "From Library...";
+  searchInput.textContent = getString("pane-from-library");
   searchRow.appendChild(searchInput);
   popup.appendChild(searchRow);
 
@@ -4795,7 +5395,7 @@ function showItemPickerPopup(state: PaneState): void {
 
   // Section header for open PDFs
   const section = createEl(doc, "div", "claudero-at-section");
-  section.textContent = "Open PDFs";
+  section.textContent = getString("pane-open-pdfs");
   popup.appendChild(section);
 
   const scroll = createEl(doc, "div", "claudero-at-scroll");
@@ -4849,7 +5449,9 @@ function showItemPickerPopup(state: PaneState): void {
     const actionBtn = createEl(doc, "button", "claudero-at-action");
     actionBtn.setAttribute("tabindex", "-1");
     actionBtn.innerHTML = isAdded ? REM_SVG : ADD_SVG;
-    actionBtn.title = isAdded ? "Remove from context" : "Add to context";
+    actionBtn.title = isAdded
+      ? getString("pane-remove-context")
+      : getString("pane-add-context");
     actionBtn.addEventListener("mousedown", (e) => e.preventDefault());
     actionBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -4894,7 +5496,7 @@ function showItemPickerPopup(state: PaneState): void {
 
   if (readerTabs.length === 0) {
     const empty = createEl(doc, "div", "claudero-at-empty");
-    empty.textContent = "No open PDFs";
+    empty.textContent = getString("pane-no-open-pdfs");
     scroll.appendChild(empty);
   }
 
@@ -4931,34 +5533,83 @@ function hideItemPicker(state: PaneState): void {
   state.pickerEl = null;
 }
 
+function setPaneProvider(state: PaneState, value: string): void {
+  if (state.running) return;
+  const provider = normalizeProvider(value);
+  state.providerSelect.value = provider;
+  setPref("provider", provider);
+  const model = defaultModelForProvider(provider);
+  const effort = defaultEffortForProvider(provider);
+  state.modelSelect.setItems?.(modelOptionsForProvider(provider), model);
+  state.effortSelect.setItems?.(effortOptionsForProvider(provider), effort);
+  state.permissionSelect.setItems?.(
+    permissionOptionsForProvider(provider),
+    state.permissionMode,
+  );
+  setPref("model", model);
+  setPref("effort", effort);
+  _sdkCommandsCache = null;
+  updatePermissionBadge(state);
+  setStatusDot(state, "ready");
+  void refreshProviderModels(state, provider);
+}
+
+function setPanePermissionMode(
+  state: PaneState,
+  mode: PaneState["permissionMode"],
+): void {
+  if (state.running) return;
+  state.permissionMode = mode;
+  setPref("permissionMode", mode);
+  updatePermissionBadge(state);
+}
+
 function createComposer(doc: Document) {
   const provider = normalizeProvider(getPref("provider"));
-  return createComposerView<PaneState>(doc, {
+  let stateRef: PaneState | null = null;
+  const view = createComposerView<PaneState>(doc, {
     providerOptions: PROVIDER_OPTIONS,
     modelOptions: modelOptionsForProvider(provider),
-    effortOptions: CLAUDE_EFFORT_OPTIONS,
+    effortOptions: effortOptionsForProvider(provider),
     permissionOptions: permissionOptionsForProvider(provider),
     defaultProvider: provider,
     defaultModel: defaultModelForProvider(provider),
     defaultEffort: defaultEffortForProvider(provider),
     defaultPermission: normalizePermissionMode(getPref("permissionMode")),
     onProviderChange: (value) => {
-      // resolved by setProvider closure after state is built
-      (createComposer as any)._onProviderChange?.(value);
+      if (stateRef) setPaneProvider(stateRef, value);
     },
     onModelChange: (value) => {
-      const active = normalizeProvider(getPref("provider"));
-      setPref(active === "codex" ? "codexModel" : "claudeModel", value);
+      if (!stateRef || stateRef.running) return;
+      const active = normalizeProvider(stateRef.providerSelect.value);
+      setPref(
+        active === "codex"
+          ? "codexModel"
+          : active === "deepseek"
+            ? "deepseekModel"
+            : "claudeModel",
+        value,
+      );
       setPref("model", value);
+      applyModelEfforts(stateRef, value);
     },
     onEffortChange: (value) => {
-      const active = normalizeProvider(getPref("provider"));
-      setPref(active === "codex" ? "codexEffort" : "claudeEffort", value);
+      if (!stateRef || stateRef.running) return;
+      const active = normalizeProvider(stateRef.providerSelect.value);
+      setPref(
+        active === "codex"
+          ? "codexEffort"
+          : active === "deepseek"
+            ? "deepseekEffort"
+            : "claudeEffort",
+        value,
+      );
       setPref("effort", value);
     },
     onPermissionChange: (value) => {
-      // resolved by setPermissionMode closure after state is built
-      (createComposer as any)._onPermissionChange?.(value);
+      if (stateRef) {
+        setPanePermissionMode(stateRef, normalizePermissionMode(value));
+      }
     },
     onAtClick: (state) => showItemPickerPopup(state),
     onMagicClick: (state, anchor) => showMagicPopup(state, anchor),
@@ -4968,6 +5619,13 @@ function createComposer(doc: Document) {
     },
     onPasteImages: (state, files) => void addPastedImageFiles(state, files),
   });
+  return {
+    ...view,
+    setStateRef: (state: PaneState) => {
+      stateRef = state;
+      view.setStateRef(state);
+    },
+  };
 }
 
 function buildPanel(doc: Document, win: Window): HTMLElement {
@@ -4999,6 +5657,7 @@ function buildPanel(doc: Document, win: Window): HTMLElement {
     providerSelect: composer.providerSelect,
     modelSelect: composer.modelSelect,
     effortSelect: composer.effortSelect,
+    codexModels: [],
     contextChips: composer.contextChips,
     itemChip: composer.itemChip,
     readerChip: composer.readerChip,
@@ -5066,6 +5725,7 @@ function buildPanel(doc: Document, win: Window): HTMLElement {
     _inputHistorySavedImages: [],
     _suppressText: 0,
     _activeSkillToolId: null,
+    providerPrefObserverID: null,
   };
   paneStates.set(host, state);
   composer.setStateRef(state);
@@ -5076,7 +5736,7 @@ function buildPanel(doc: Document, win: Window): HTMLElement {
     "button",
     "claudero-scroll-to-bottom",
   );
-  scrollToBottomBtn.setAttribute("title", "Scroll to bottom");
+  scrollToBottomBtn.setAttribute("title", getString("composer-scroll-bottom"));
   // Use flipped send arrow icon
   scrollToBottomBtn.appendChild(createSendArrowSvgDown(doc));
   scrollToBottomBtn.style.display = "none";
@@ -5129,35 +5789,16 @@ function buildPanel(doc: Document, win: Window): HTMLElement {
   // the welcome card once loaded; if there is no history, the card stays.
   void restoreLatestConversation(state);
 
-  const setProvider = (value: string) => {
-    const provider = normalizeProvider(value);
-    state.providerSelect.value = provider;
-    setPref("provider", provider);
-    const model = defaultModelForProvider(provider);
-    const effort = defaultEffortForProvider(provider);
-    state.modelSelect.setItems?.(modelOptionsForProvider(provider), model);
-    state.effortSelect.value = effort;
-    state.permissionSelect.setItems?.(
-      permissionOptionsForProvider(provider),
-      state.permissionMode,
-    );
-    setPref("model", model);
-    setPref("effort", effort);
-    _sdkCommandsCache = null;
-    updatePermissionBadge(state);
-    setStatusDot(state, "ready");
-  };
-  (createComposer as any)._onProviderChange = setProvider;
-
-  // Permission mode toggle function
-  const setPermissionMode = (mode: PaneState["permissionMode"]) => {
-    state.permissionMode = mode;
-    setPref("permissionMode", mode);
-    updatePermissionBadge(state);
-  };
-  // Wire the permission menulist in the toolbar to setPermissionMode
-  (createComposer as any)._onPermissionChange = setPermissionMode;
-
+  const providerPrefObserverID = Zotero.Prefs.registerObserver(
+    "extensions.zotero.claudero.provider",
+    () =>
+      setPaneProvider(
+        state,
+        String(getPref("provider") || state.providerSelect.value),
+      ),
+    true,
+  );
+  state.providerPrefObserverID = providerPrefObserverID;
   composer.input.addEventListener("keydown", (event: KeyboardEvent) => {
     // If @ item popup is open, intercept navigation keys
     const atPopup = state.root.querySelector(".claudero-at-popup") as
@@ -5316,7 +5957,13 @@ function buildPanel(doc: Document, win: Window): HTMLElement {
       return;
     }
 
-    if (event.key === "Enter" && !event.shiftKey) {
+    const isEnter = event.key === "Enter" || event.keyCode === 13;
+    if (
+      isEnter &&
+      !event.shiftKey &&
+      !event.isComposing &&
+      event.keyCode !== 229
+    ) {
       event.preventDefault();
       if (!state.running) void sendPrompt(state);
     }
@@ -5398,11 +6045,18 @@ export function showClauderoPanel(win: _ZoteroTypes.MainWindow): void {
   if (!host) {
     new ztoolkit.ProgressWindow(addon.data.config.addonName)
       .createLine({
-        text: "Claudero cannot find a Zotero pane to attach to.",
+        text: getString("pane-attach-failed"),
         type: "fail",
       })
       .show();
     return;
+  }
+  const state = paneStates.get(host);
+  if (state) {
+    void refreshProviderModels(
+      state,
+      normalizeProvider(state.providerSelect.value),
+    );
   }
   setToolbarChecked(win, true);
 }
@@ -5432,7 +6086,7 @@ export function registerClauderoPane(win: _ZoteroTypes.MainWindow): void {
   win.document.addEventListener("mouseup", refreshContext, true);
   win.document.addEventListener("keyup", refreshContext, true);
 
-  win.setInterval(() => {
+  const contextTimer = win.setInterval(() => {
     const host = win.document.getElementById(PANEL_ID) as HTMLElement | null;
     if (!host?.isConnected) return;
     // Re-anchor the panel if it drifted to a different parent (e.g. a tab switch).
@@ -5454,6 +6108,19 @@ export function registerClauderoPane(win: _ZoteroTypes.MainWindow): void {
       if (state) updateContext(state);
     }
   }, 1000);
+  const cleanup = () => {
+    win.document.removeEventListener("mouseup", refreshContext, true);
+    win.document.removeEventListener("keyup", refreshContext, true);
+    win.clearInterval(contextTimer);
+    hideClauderoPanel(win);
+    mountedWindows.delete(win);
+    windowCleanupCallbacks.delete(win);
+  };
+  windowCleanupCallbacks.set(win, cleanup);
+}
+
+export function unregisterClauderoPane(win: Window): void {
+  windowCleanupCallbacks.get(win)?.();
 }
 
 export function registerClauderoToolbarButton(
@@ -5485,7 +6152,7 @@ export function registerClauderoToolbarButton(
   button.id = TOOLBAR_BUTTON_ID;
   button.className = "zotero-tb-button claudero-toolbar-button";
   button.setAttribute("label", "Claudero");
-  button.setAttribute("tooltiptext", "Show or hide Claudero");
+  button.setAttribute("tooltiptext", getString("composer-show-hide"));
   button.setAttribute("type", "checkbox");
   button.setAttribute("tabindex", "-1");
   button.setAttribute(
@@ -5518,16 +6185,16 @@ export function registerClauderoMenu(): void {
   ztoolkit.Menu.register("item", {
     tag: "menuitem",
     id: "zotero-itemmenu-claudero-ask",
-    label: "Ask Claudero",
+    label: getString("pane-ask-claudero"),
     commandListener: () => {
-      const item = getCurrentRegularItems()[0] ?? null;
+      const win = Zotero.getMainWindow();
+      const item = getCurrentRegularItems(win)[0] ?? null;
       if (!item) {
         new ztoolkit.ProgressWindow(addon.data.config.addonName)
-          .createLine({ text: "Select a regular item first.", type: "fail" })
+          .createLine({ text: getString("pane-select-item"), type: "fail" })
           .show();
         return;
       }
-      const win = Zotero.getMainWindow();
       showClauderoPanel(win);
     },
     icon: `chrome://${addon.data.config.addonRef}/content/icons/claudero.svg`,

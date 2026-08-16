@@ -7,7 +7,9 @@ const root = process.cwd();
 const tools = [
   "build_academic_trace",
   "build_trust_report",
+  "expand_evidence_range",
   "get_evidence_pack",
+  "get_numbered_evidence_pack",
   "inspect_figure_table_page",
   "locate_quote",
   "verify_citations",
@@ -63,7 +65,6 @@ const checks = [
     "src/helper/runtime/ZoteroMcpBridge.ts",
     ["AGENT_EVIDENCE_POLICY_MCP_INSTRUCTIONS"],
   ],
-  ["src/helper/runtime/PermissionManager.ts", tools],
   [
     "src/modules/academicSkills.ts",
     ["verify-citations", "Evidence Trust Report", "Academic Trace", ...tools],
@@ -101,8 +102,16 @@ for (const [relativePath, needles] of checks) {
   }
 }
 
-const helper = read("src/helper/claudero-helper.ts");
-const version = Number(helper.match(/const HELPER_VERSION = (\d+);/)?.[1] || 0);
+const permissionManager = read("src/helper/runtime/PermissionManager.ts");
+assert(
+  !permissionManager.includes("isReadOnlyZoteroCall") &&
+    !permissionManager.includes("READ_ONLY_ZOTERO_ACTIONS"),
+  "PermissionManager must not auto-allow compound Bash commands based on embedded Zotero action text",
+);
+const protocol = read("src/shared/helperProtocol.ts");
+const version = Number(
+  protocol.match(/CLAUDERO_HELPER_VERSION\s*=\s*(\d+)/)?.[1] || 0,
+);
 assert(version >= 23, `HELPER_VERSION should be >= 23, got ${version}`);
 
 process.stdout.write("[evidence] PASS contract smoke\n");

@@ -8,6 +8,7 @@ import {
   randomPromptIcon,
 } from "./conversationStore";
 import { renderPromptIcon, showIconPicker } from "./iconPickerView";
+import { getString } from "../utils/locale";
 
 export interface PromptPopupState {
   root: HTMLElement;
@@ -16,7 +17,11 @@ export interface PromptPopupState {
 export interface PromptPopupActions {
   onPrompt: (prompt: string) => void;
   onInsertNote: () => void;
-  onRefinePrompt?: (input: { label: string; description: string; text: string }) => Promise<Partial<Pick<CustomPrompt, "label" | "description" | "text">>>;
+  onRefinePrompt?: (input: {
+    label: string;
+    description: string;
+    text: string;
+  }) => Promise<Partial<Pick<CustomPrompt, "label" | "description" | "text">>>;
 }
 
 type PromptSource = "default" | "custom";
@@ -25,29 +30,49 @@ type PromptEntry = CustomPrompt & { source: PromptSource };
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-function createEl<K extends keyof HTMLElementTagNameMap>(doc: Document, tag: K, className?: string): HTMLElementTagNameMap[K] {
+function createEl<K extends keyof HTMLElementTagNameMap>(
+  doc: Document,
+  tag: K,
+  className?: string,
+): HTMLElementTagNameMap[K] {
   const el = doc.createElementNS(XHTML_NS, tag) as HTMLElementTagNameMap[K];
   if (className) el.className = className;
   return el;
 }
 
-function createTbBtn(doc: Document, className: string, label: string, onClick: () => void): HTMLElement {
-  const xul = (doc as Document & { createXULElement?: (tag: string) => HTMLElement }).createXULElement?.("toolbarbutton");
+function createTbBtn(
+  doc: Document,
+  className: string,
+  label: string,
+  onClick: () => void,
+): HTMLElement {
+  const xul = (
+    doc as Document & { createXULElement?: (tag: string) => HTMLElement }
+  ).createXULElement?.("toolbarbutton");
   const btn = (xul ?? doc.createElement("button")) as HTMLElement;
   btn.className = className;
   btn.setAttribute("label", label);
   // XUL toolbarbutton renders text from the `label` attribute; only set
   // textContent for the HTML <button> fallback to avoid doubling the text.
   if (btn.localName !== "toolbarbutton") btn.textContent = label;
-  btn.addEventListener("command", (e) => { e.stopPropagation(); onClick(); });
+  btn.addEventListener("command", (e) => {
+    e.stopPropagation();
+    onClick();
+  });
   if (btn.localName !== "toolbarbutton") {
     (btn as HTMLButtonElement).type = "button";
-    btn.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onClick();
+    });
   }
   return btn;
 }
 
-function createSvg(doc: Document, name: "plus" | "search" | "edit" | "trash" | "x"): SVGSVGElement {
+function createSvg(
+  doc: Document,
+  name: "plus" | "search" | "edit" | "trash" | "x",
+): SVGSVGElement {
   const svg = doc.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("width", "16");
@@ -60,17 +85,51 @@ function createSvg(doc: Document, name: "plus" | "search" | "edit" | "trash" | "
   svg.setAttribute("aria-hidden", "true");
   const line = (x1: string, y1: string, x2: string, y2: string) => {
     const el = doc.createElementNS(SVG_NS, "line");
-    el.setAttribute("x1", x1); el.setAttribute("y1", y1); el.setAttribute("x2", x2); el.setAttribute("y2", y2);
+    el.setAttribute("x1", x1);
+    el.setAttribute("y1", y1);
+    el.setAttribute("x2", x2);
+    el.setAttribute("y2", y2);
     svg.appendChild(el);
   };
-  const path = (d: string) => { const el = doc.createElementNS(SVG_NS, "path"); el.setAttribute("d", d); svg.appendChild(el); };
-  const circle = (cx: string, cy: string, r: string) => { const el = doc.createElementNS(SVG_NS, "circle"); el.setAttribute("cx", cx); el.setAttribute("cy", cy); el.setAttribute("r", r); svg.appendChild(el); };
-  const polyline = (points: string) => { const el = doc.createElementNS(SVG_NS, "polyline"); el.setAttribute("points", points); svg.appendChild(el); };
-  if (name === "plus") { line("12", "5", "12", "19"); line("5", "12", "19", "12"); }
-  if (name === "x") { line("18", "6", "6", "18"); line("6", "6", "18", "18"); }
-  if (name === "search") { circle("11", "11", "7"); line("16.65", "16.65", "21", "21"); }
-  if (name === "edit") { path("M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"); path("M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"); }
-  if (name === "trash") { polyline("3 6 5 6 21 6"); path("M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"); }
+  const path = (d: string) => {
+    const el = doc.createElementNS(SVG_NS, "path");
+    el.setAttribute("d", d);
+    svg.appendChild(el);
+  };
+  const circle = (cx: string, cy: string, r: string) => {
+    const el = doc.createElementNS(SVG_NS, "circle");
+    el.setAttribute("cx", cx);
+    el.setAttribute("cy", cy);
+    el.setAttribute("r", r);
+    svg.appendChild(el);
+  };
+  const polyline = (points: string) => {
+    const el = doc.createElementNS(SVG_NS, "polyline");
+    el.setAttribute("points", points);
+    svg.appendChild(el);
+  };
+  if (name === "plus") {
+    line("12", "5", "12", "19");
+    line("5", "12", "19", "12");
+  }
+  if (name === "x") {
+    line("18", "6", "6", "18");
+    line("6", "6", "18", "18");
+  }
+  if (name === "search") {
+    circle("11", "11", "7");
+    line("16.65", "16.65", "21", "21");
+  }
+  if (name === "edit") {
+    path("M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7");
+    path("M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z");
+  }
+  if (name === "trash") {
+    polyline("3 6 5 6 21 6");
+    path(
+      "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+    );
+  }
   return svg;
 }
 
@@ -79,16 +138,30 @@ function closePromptSurfaces(root: HTMLElement): void {
 }
 
 async function loadEntries(): Promise<PromptEntry[]> {
-  const defaults = getDefaultPrompts().map((prompt) => ({ ...prompt, source: "default" as const }));
-  const custom = (await loadCustomPrompts()).map((prompt) => ({ ...prompt, source: "custom" as const }));
+  const defaults = getDefaultPrompts().map((prompt) => ({
+    ...prompt,
+    source: "default" as const,
+  }));
+  const custom = (await loadCustomPrompts()).map((prompt) => ({
+    ...prompt,
+    source: "custom" as const,
+  }));
   return [...defaults, ...custom];
 }
 
 function fallbackDescription(prompt: CustomPrompt): string {
-  return prompt.description?.trim() || prompt.text.split("\n")[0]?.trim().slice(0, 88) || "Custom prompt";
+  return (
+    prompt.description?.trim() ||
+    prompt.text.split("\n")[0]?.trim().slice(0, 88) ||
+    "Custom prompt"
+  );
 }
 
-function renderIcon(doc: Document, prompt: CustomPrompt, container: HTMLElement): void {
+function renderIcon(
+  doc: Document,
+  prompt: CustomPrompt,
+  container: HTMLElement,
+): void {
   while (container.firstChild) container.firstChild.remove();
   renderPromptIcon(doc, prompt.icon, container);
   if (!container.firstChild) {
@@ -117,10 +190,14 @@ async function saveEntry(entry: PromptEntry): Promise<void> {
 
 async function deleteEntry(entry: PromptEntry): Promise<void> {
   if (entry.source === "default") {
-    saveDefaultPrompts(getDefaultPrompts().filter((item) => item.id !== entry.id));
+    saveDefaultPrompts(
+      getDefaultPrompts().filter((item) => item.id !== entry.id),
+    );
     return;
   }
-  await saveCustomPrompts((await loadCustomPrompts()).filter((item) => item.id !== entry.id));
+  await saveCustomPrompts(
+    (await loadCustomPrompts()).filter((item) => item.id !== entry.id),
+  );
 }
 
 function getPanel(stack: HTMLElement, className: string): HTMLElement | null {
@@ -139,11 +216,15 @@ function openIconPanel(
   anchorEl?: HTMLElement,
 ): void {
   const doc = stack.ownerDocument!;
-  doc.querySelectorAll(".claudero-icon-picker-popup").forEach((el) => el.remove());
+  doc
+    .querySelectorAll(".claudero-icon-picker-popup")
+    .forEach((el) => el.remove());
   const picker = showIconPicker(doc, {
     compact: true,
     initialIcon: currentIcon,
-    onSelect: (icon) => { onSelect(icon); },
+    onSelect: (icon) => {
+      onSelect(icon);
+    },
     onClose: () => picker.remove(),
   });
   picker.classList.add("claudero-icon-picker-popup");
@@ -154,7 +235,8 @@ function openIconPanel(
     const vh = doc.defaultView?.innerHeight ?? 800;
     const pickerW = 280;
     const scrollTop = doc.documentElement.scrollTop || doc.body?.scrollTop || 0;
-    const scrollLeft = doc.documentElement.scrollLeft || doc.body?.scrollLeft || 0;
+    const scrollLeft =
+      doc.documentElement.scrollLeft || doc.body?.scrollLeft || 0;
     let left = rect.left + scrollLeft;
     if (left + pickerW > vw - 8) left = vw - pickerW - 8 + scrollLeft;
     picker.style.left = `${Math.max(8, left)}px`;
@@ -169,7 +251,11 @@ function openIconPanel(
   doc.documentElement.appendChild(picker);
   const onOutside = (ev: MouseEvent) => {
     const t = ev.target as Node;
-    if (!picker.contains(t) && t !== anchorEl && !(t as HTMLElement)?.closest?.(".claudero-color-picker-active")) {
+    if (
+      !picker.contains(t) &&
+      t !== anchorEl &&
+      !(t as HTMLElement)?.closest?.(".claudero-color-picker-active")
+    ) {
       picker.remove();
       doc.removeEventListener("mousedown", onOutside, true);
     }
@@ -185,7 +271,8 @@ function openEditorPanel(
   const doc = stack.ownerDocument!;
   removeEditorPanels(stack);
   const panel = createEl(doc, "div", "claudero-prompt-editor-panel");
-  let selectedIcon: PromptIcon | undefined = options.prompt?.icon ?? randomPromptIcon();
+  let selectedIcon: PromptIcon | undefined =
+    options.prompt?.icon ?? randomPromptIcon();
 
   const header = createEl(doc, "div", "claudero-side-panel-header");
   const title = createEl(doc, "div", "claudero-side-panel-title");
@@ -198,15 +285,23 @@ function openEditorPanel(
 
   const body = createEl(doc, "div", "claudero-prompt-editor-body");
   const iconRow = createEl(doc, "div", "claudero-prompt-modal-icon-row");
-  const iconButton = createEl(doc, "button", "claudero-prompt-modal-icon-button");
+  const iconButton = createEl(
+    doc,
+    "button",
+    "claudero-prompt-modal-icon-button",
+  );
   iconButton.type = "button";
-  const iconPreview = createEl(doc, "div", "claudero-prompt-modal-icon-preview");
+  const iconPreview = createEl(
+    doc,
+    "div",
+    "claudero-prompt-modal-icon-preview",
+  );
   iconButton.appendChild(iconPreview);
   const iconCopy = createEl(doc, "div", "claudero-prompt-modal-icon-copy");
   const iconLabel = createEl(doc, "div", "claudero-prompt-modal-icon-label");
-  iconLabel.textContent = "Icon";
+  iconLabel.textContent = getString("ui-icon");
   const iconHint = createEl(doc, "div", "claudero-prompt-modal-icon-hint");
-  iconHint.textContent = "Choose an icon and color";
+  iconHint.textContent = getString("prompt-icon-hint");
   iconCopy.append(iconLabel, iconHint);
   iconRow.append(iconButton, iconCopy);
 
@@ -216,7 +311,10 @@ function openEditorPanel(
     if (selectedIcon) {
       renderPromptIcon(doc, selectedIcon, iconPreview);
       // Mirror the final prompt-list icon: tint the wrap with the icon's own color
-      const color = selectedIcon.type === "iconify" ? (selectedIcon.color || "#55534f") : "#55534f";
+      const color =
+        selectedIcon.type === "iconify"
+          ? selectedIcon.color || "#55534f"
+          : "#55534f";
       iconPreview.style.backgroundColor = `color-mix(in srgb, ${color} 12%, transparent)`;
     } else {
       iconPreview.style.backgroundColor = "";
@@ -224,79 +322,143 @@ function openEditorPanel(
     }
   }
   updateIconPreview();
-  iconButton.addEventListener("click", () => openIconPanel(stack, selectedIcon, (icon) => { selectedIcon = icon; updateIconPreview(); }, iconButton));
+  iconButton.addEventListener("click", () =>
+    openIconPanel(
+      stack,
+      selectedIcon,
+      (icon) => {
+        selectedIcon = icon;
+        updateIconPreview();
+      },
+      iconButton,
+    ),
+  );
 
-  const makeField = (labelText: string, input: HTMLInputElement | HTMLTextAreaElement, optional = false) => {
+  const makeField = (
+    labelText: string,
+    input: HTMLInputElement | HTMLTextAreaElement,
+    optional = false,
+  ) => {
     const row = createEl(doc, "label", "claudero-prompt-field");
     const label = createEl(doc, "span", "claudero-prompt-field-label");
     label.textContent = labelText;
     if (optional) {
-      const optionalEl = createEl(doc, "span", "claudero-prompt-field-optional");
-      optionalEl.textContent = "Optional";
+      const optionalEl = createEl(
+        doc,
+        "span",
+        "claudero-prompt-field-optional",
+      );
+      optionalEl.textContent = getString("ui-optional");
       label.appendChild(optionalEl);
     }
     row.append(label, input);
     return row;
   };
 
-  const nameInput = createEl(doc, "input", "claudero-prompt-input") as HTMLInputElement;
+  const nameInput = createEl(
+    doc,
+    "input",
+    "claudero-prompt-input",
+  ) as HTMLInputElement;
   nameInput.type = "text";
-  nameInput.placeholder = "Prompt name...";
+  nameInput.placeholder = getString("prompt-name-placeholder");
   nameInput.value = options.prompt?.label ?? "";
   nameInput.setAttribute("autocomplete", "off");
-  const descInput = createEl(doc, "input", "claudero-prompt-input") as HTMLInputElement;
+  const descInput = createEl(
+    doc,
+    "input",
+    "claudero-prompt-input",
+  ) as HTMLInputElement;
   descInput.type = "text";
-  descInput.placeholder = "Short description...";
+  descInput.placeholder = getString("prompt-description-placeholder");
   descInput.value = options.prompt?.description ?? "";
   descInput.setAttribute("autocomplete", "off");
-  const textInput = createEl(doc, "textarea", "claudero-prompt-textarea") as HTMLTextAreaElement;
-  textInput.placeholder = "Enter your prompt instructions...";
+  const textInput = createEl(
+    doc,
+    "textarea",
+    "claudero-prompt-textarea",
+  ) as HTMLTextAreaElement;
+  textInput.placeholder = getString("prompt-content-placeholder");
   textInput.value = options.prompt?.text ?? "";
   textInput.rows = 8;
-  [nameInput, textInput].forEach((el) => el.addEventListener("input", () => el.classList.remove("error")));
+  [nameInput, textInput].forEach((el) =>
+    el.addEventListener("input", () => el.classList.remove("error")),
+  );
 
-  body.append(iconRow, makeField("Name", nameInput), makeField("Description", descInput, true), makeField("Prompt", textInput));
+  body.append(
+    iconRow,
+    makeField(getString("ui-name"), nameInput),
+    makeField(getString("ui-description"), descInput, true),
+    makeField(getString("ui-prompt"), textInput),
+  );
 
   const footer = createEl(doc, "div", "claudero-prompt-modal-footer");
-  const cancelBtn = createTbBtn(doc, "claudero-prompt-secondary-btn", "Cancel", () => removeEditorPanels(stack));
-  const refineBtn = createTbBtn(doc, "claudero-prompt-secondary-btn", "Optimize", async () => {
-    if (!actions.onRefinePrompt || refineBtn.hasAttribute("disabled")) return;
-    refineBtn.setAttribute("disabled", "true");
-    refineBtn.textContent = "Optimizing...";
-    try {
-      const result = await actions.onRefinePrompt({
-        label: nameInput.value.trim(),
-        description: descInput.value.trim(),
-        text: textInput.value.trim(),
+  const cancelBtn = createTbBtn(
+    doc,
+    "claudero-prompt-secondary-btn",
+    getString("ui-cancel"),
+    () => removeEditorPanels(stack),
+  );
+  const refineBtn = createTbBtn(
+    doc,
+    "claudero-prompt-secondary-btn",
+    getString("prompt-optimize"),
+    async () => {
+      if (!actions.onRefinePrompt || refineBtn.hasAttribute("disabled")) return;
+      refineBtn.setAttribute("disabled", "true");
+      refineBtn.textContent = getString("prompt-refining");
+      try {
+        const result = await actions.onRefinePrompt({
+          label: nameInput.value.trim(),
+          description: descInput.value.trim(),
+          text: textInput.value.trim(),
+        });
+        if (typeof result.label === "string" && result.label.trim())
+          nameInput.value = result.label.trim();
+        if (typeof result.description === "string")
+          descInput.value = result.description.trim();
+        if (typeof result.text === "string" && result.text.trim())
+          textInput.value = result.text.trim();
+        [nameInput, textInput].forEach((el) => el.classList.remove("error"));
+      } finally {
+        refineBtn.removeAttribute("disabled");
+        refineBtn.textContent = getString("prompt-optimize");
+      }
+    },
+  );
+  const saveBtn = createTbBtn(
+    doc,
+    "claudero-prompt-primary-btn",
+    "Save",
+    async () => {
+      const label = nameInput.value.trim();
+      const text = textInput.value.trim();
+      if (!label) {
+        nameInput.classList.add("error");
+        nameInput.focus();
+        return;
+      }
+      if (!text) {
+        textInput.classList.add("error");
+        textInput.focus();
+        return;
+      }
+      const now = Date.now();
+      await saveEntry({
+        id: options.prompt?.id ?? `cp-${now}`,
+        source: options.prompt?.source ?? "custom",
+        icon: selectedIcon,
+        label,
+        description:
+          descInput.value.trim() || text.split("\n")[0]?.trim().slice(0, 100),
+        text,
+        createdAt: options.prompt?.createdAt ?? now,
+        updatedAt: now,
       });
-      if (typeof result.label === "string" && result.label.trim()) nameInput.value = result.label.trim();
-      if (typeof result.description === "string") descInput.value = result.description.trim();
-      if (typeof result.text === "string" && result.text.trim()) textInput.value = result.text.trim();
-      [nameInput, textInput].forEach((el) => el.classList.remove("error"));
-    } finally {
-      refineBtn.removeAttribute("disabled");
-      refineBtn.textContent = "Optimize";
-    }
-  });
-  const saveBtn = createTbBtn(doc, "claudero-prompt-primary-btn", "Save", async () => {
-    const label = nameInput.value.trim();
-    const text = textInput.value.trim();
-    if (!label) { nameInput.classList.add("error"); nameInput.focus(); return; }
-    if (!text) { textInput.classList.add("error"); textInput.focus(); return; }
-    const now = Date.now();
-    await saveEntry({
-      id: options.prompt?.id ?? `cp-${now}`,
-      source: options.prompt?.source ?? "custom",
-      icon: selectedIcon,
-      label,
-      description: descInput.value.trim() || text.split("\n")[0]?.trim().slice(0, 100),
-      text,
-      createdAt: options.prompt?.createdAt ?? now,
-      updatedAt: now,
-    });
-    removeEditorPanels(stack);
-    options.onSaved();
-  });
+      removeEditorPanels(stack);
+      options.onSaved();
+    },
+  );
   footer.append(cancelBtn);
   if (actions.onRefinePrompt) footer.append(refineBtn);
   footer.append(saveBtn);
@@ -308,19 +470,29 @@ function openEditorPanel(
   void actions;
 }
 
-async function renderPromptList(stack: HTMLElement, popup: HTMLElement, actions: PromptPopupActions, query = ""): Promise<void> {
+async function renderPromptList(
+  stack: HTMLElement,
+  popup: HTMLElement,
+  actions: PromptPopupActions,
+  query = "",
+): Promise<void> {
   const doc = popup.ownerDocument!;
-  const list = popup.querySelector(".claudero-magic-list") as HTMLElement | null;
+  const list = popup.querySelector(
+    ".claudero-magic-list",
+  ) as HTMLElement | null;
   if (!list) return;
   while (list.firstChild) list.firstChild.remove();
   const normalized = query.trim().toLowerCase();
   const entries = (await loadEntries()).filter((entry) => {
-    const haystack = `${entry.label} ${entry.description ?? ""} ${entry.text}`.toLowerCase();
+    const haystack =
+      `${entry.label} ${entry.description ?? ""} ${entry.text}`.toLowerCase();
     return !normalized || haystack.includes(normalized);
   });
   if (!entries.length) {
     const empty = createEl(doc, "div", "claudero-magic-empty");
-    empty.textContent = normalized ? "No matching prompts" : "No prompts yet";
+    empty.textContent = normalized
+      ? getString("prompt-no-match")
+      : getString("prompt-empty");
     list.appendChild(empty);
     return;
   }
@@ -336,7 +508,10 @@ async function renderPromptList(stack: HTMLElement, popup: HTMLElement, actions:
     const icon = createEl(doc, "div", "claudero-prompt-icon-wrap");
     renderIcon(doc, entry, icon);
     // Tint icon background with its own color
-    const iconColor = entry.icon?.type === "iconify" ? (entry.icon.color || "#55534f") : "#55534f";
+    const iconColor =
+      entry.icon?.type === "iconify"
+        ? entry.icon.color || "#55534f"
+        : "#55534f";
     icon.style.backgroundColor = `color-mix(in srgb, ${iconColor} 12%, transparent)`;
     const copy = createEl(doc, "div", "claudero-prompt-copy");
     const title = createEl(doc, "div", "claudero-prompt-title");
@@ -360,15 +535,20 @@ async function renderPromptList(stack: HTMLElement, popup: HTMLElement, actions:
       menu.style.zIndex = "2147483647";
       const editItem = createEl(doc, "button", "claudero-ctx-item");
       editItem.appendChild(createSvg(doc, "edit"));
-      const editLabel = createEl(doc, "span", ""); editLabel.textContent = "Edit";
+      const editLabel = createEl(doc, "span", "");
+      editLabel.textContent = getString("ui-edit");
       editItem.append(editLabel);
       editItem.addEventListener("click", () => {
         menu.remove();
-        openEditorPanel(stack, actions, { prompt: entry, onSaved: () => void renderPromptList(stack, popup, actions, query) });
+        openEditorPanel(stack, actions, {
+          prompt: entry,
+          onSaved: () => void renderPromptList(stack, popup, actions, query),
+        });
       });
       const removeItem = createEl(doc, "button", "claudero-ctx-item danger");
       removeItem.appendChild(createSvg(doc, "trash"));
-      const removeLabel = createEl(doc, "span", ""); removeLabel.textContent = "Delete";
+      const removeLabel = createEl(doc, "span", "");
+      removeLabel.textContent = getString("prompt-delete");
       removeItem.append(removeLabel);
       removeItem.addEventListener("click", async () => {
         menu.remove();
@@ -377,18 +557,29 @@ async function renderPromptList(stack: HTMLElement, popup: HTMLElement, actions:
       });
       menu.append(editItem, removeItem);
       doc.documentElement.appendChild(menu);
-      const scrollTop = doc.documentElement.scrollTop || doc.body?.scrollTop || 0;
-      const scrollLeft = doc.documentElement.scrollLeft || doc.body?.scrollLeft || 0;
+      const scrollTop =
+        doc.documentElement.scrollTop || doc.body?.scrollTop || 0;
+      const scrollLeft =
+        doc.documentElement.scrollLeft || doc.body?.scrollLeft || 0;
       const margin = 8;
       const offset = 6;
       const rect = menu.getBoundingClientRect();
       const win = doc.defaultView!;
-      const left = Math.min(e.clientX + offset, win.innerWidth - rect.width - margin);
-      const top = Math.min(e.clientY + offset, win.innerHeight - rect.height - margin);
+      const left = Math.min(
+        e.clientX + offset,
+        win.innerWidth - rect.width - margin,
+      );
+      const top = Math.min(
+        e.clientY + offset,
+        win.innerHeight - rect.height - margin,
+      );
       menu.style.left = `${Math.max(margin, left) + scrollLeft}px`;
       menu.style.top = `${Math.max(margin, top) + scrollTop}px`;
       const dismiss = (ev: MouseEvent) => {
-        if (!menu.contains(ev.target as Node)) { menu.remove(); doc.removeEventListener("mousedown", dismiss, true); }
+        if (!menu.contains(ev.target as Node)) {
+          menu.remove();
+          doc.removeEventListener("mousedown", dismiss, true);
+        }
       };
       setTimeout(() => doc.addEventListener("mousedown", dismiss, true), 0);
     });
@@ -397,38 +588,58 @@ async function renderPromptList(stack: HTMLElement, popup: HTMLElement, actions:
   }
 }
 
-export function showPromptPopup(state: PromptPopupState, anchor: HTMLElement, actions: PromptPopupActions): void {
+export function showPromptPopup(
+  state: PromptPopupState,
+  anchor: HTMLElement,
+  actions: PromptPopupActions,
+): void {
   const doc = state.root.ownerDocument!;
   const existing = doc.querySelector(".claudero-magic-stack");
-  if (existing) { closePromptSurfaces(doc.documentElement as HTMLElement); return; }
+  if (existing) {
+    closePromptSurfaces(doc.documentElement as HTMLElement);
+    return;
+  }
   closePromptSurfaces(doc.documentElement as HTMLElement);
   const stack = createEl(doc, "div", "claudero-magic-stack");
   const popup = createEl(doc, "div", "claudero-magic-popup");
   const header = createEl(doc, "div", "claudero-magic-header");
   const title = createEl(doc, "div", "claudero-magic-title");
-  title.textContent = "Prompt Library";
+  title.textContent = getString("prompt-library");
   const addBtn = createEl(doc, "button", "claudero-magic-add-btn");
   addBtn.type = "button";
-  addBtn.setAttribute("aria-label", "Create new prompt");
+  addBtn.setAttribute("aria-label", getString("prompt-create-new"));
   addBtn.appendChild(createSvg(doc, "plus"));
   header.append(title);
   const searchRow = createEl(doc, "div", "claudero-magic-search-row");
   const search = createEl(doc, "div", "claudero-magic-search");
   search.appendChild(createSvg(doc, "search"));
-  const searchInput = createEl(doc, "input", "claudero-magic-search-input") as HTMLInputElement;
+  const searchInput = createEl(
+    doc,
+    "input",
+    "claudero-magic-search-input",
+  ) as HTMLInputElement;
   searchInput.type = "search";
-  searchInput.placeholder = "Search prompts...";
+  searchInput.placeholder = getString("prompt-search-placeholder");
   searchInput.setAttribute("autocomplete", "off");
   search.append(searchInput);
   searchRow.append(search, addBtn);
   const list = createEl(doc, "div", "claudero-magic-list");
   popup.append(header, searchRow, list);
   stack.appendChild(popup);
-  addBtn.addEventListener("click", () => openEditorPanel(stack, actions, { onSaved: () => void renderPromptList(stack, popup, actions, searchInput.value) }));
-  searchInput.addEventListener("input", () => void renderPromptList(stack, popup, actions, searchInput.value));
+  addBtn.addEventListener("click", () =>
+    openEditorPanel(stack, actions, {
+      onSaved: () =>
+        void renderPromptList(stack, popup, actions, searchInput.value),
+    }),
+  );
+  searchInput.addEventListener(
+    "input",
+    () => void renderPromptList(stack, popup, actions, searchInput.value),
+  );
   doc.documentElement.appendChild(stack);
   const anchorRect = anchor.getBoundingClientRect();
-  const viewportHeight = doc.defaultView?.innerHeight ?? anchorRect.bottom + 260;
+  const viewportHeight =
+    doc.defaultView?.innerHeight ?? anchorRect.bottom + 260;
   const viewportWidth = doc.defaultView?.innerWidth ?? anchorRect.right;
   stack.style.bottom = `${Math.max(18, viewportHeight - anchorRect.top + 10)}px`;
   stack.style.right = `${Math.max(8, viewportWidth - anchorRect.right)}px`;
@@ -436,7 +647,13 @@ export function showPromptPopup(state: PromptPopupState, anchor: HTMLElement, ac
   setTimeout(() => searchInput.focus(), 20);
   const onOutside = (event: Event) => {
     const target = event.target as Node;
-    if (!stack.contains(target) && target !== anchor && !(target as HTMLElement)?.closest?.(".claudero-color-picker-active, .claudero-icon-picker-popup, .claudero-row-ctx-menu")) {
+    if (
+      !stack.contains(target) &&
+      target !== anchor &&
+      !(target as HTMLElement)?.closest?.(
+        ".claudero-color-picker-active, .claudero-icon-picker-popup, .claudero-row-ctx-menu",
+      )
+    ) {
       closePromptSurfaces(doc.documentElement as HTMLElement);
       doc.removeEventListener("mousedown", onOutside, true);
     }

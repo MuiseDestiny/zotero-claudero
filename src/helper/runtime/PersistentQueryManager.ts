@@ -19,6 +19,7 @@ import type {
 } from "./PermissionManager";
 import { ToolInputStreamState } from "../stream/toolInputStreamState";
 import { transformClaudeMessage } from "../stream/transformClaudeMessage";
+import type { AcademicToolPolicy } from "../../shared/academicToolPolicy";
 
 interface PersistentQueryState {
   query: Query;
@@ -28,10 +29,12 @@ interface PersistentQueryState {
   workspacePath: string;
   environment: Record<string, string>;
   zoteroEndpointUrl?: string;
+  zoteroEndpointToken?: string;
   enableZoteroMcp?: boolean;
   mcpServers?: Record<string, unknown>;
   mcpDisabledTools?: string[];
   conversationId?: string;
+  providerState?: { sessionId?: string };
 }
 
 export interface PersistentQueryConfig {
@@ -43,10 +46,12 @@ export interface PersistentQueryConfig {
   additionalDirectories?: string[];
   permissionMode?: ClauderoPermissionMode;
   zoteroEndpointUrl?: string;
+  zoteroEndpointToken?: string;
   enableZoteroMcp?: boolean;
   mcpServers?: Record<string, unknown>;
   mcpDisabledTools?: string[];
   conversationId?: string;
+  providerState?: { sessionId?: string };
 }
 
 export type RestartConfig = Omit<
@@ -112,11 +117,17 @@ export class PersistentQueryManager {
   private answeredExitPlanDecisions = new Map<string, ExitPlanDecision>();
   private answeredQuestionAnswers = new Map<string, AnsweredQuestion>();
   private answeredQuestionToolIds = new Set<string>();
+  private turnActive = false;
+  private toolPolicy: AcademicToolPolicy | undefined;
 
   constructor(private readonly permissionManager: PermissionManager) {}
 
   get isActive(): boolean {
     return this.state !== null;
+  }
+
+  get isBusy(): boolean {
+    return this.turnActive;
   }
 
   get options(): Options | null {
@@ -147,6 +158,7 @@ export class PersistentQueryManager {
     const options = buildQueryOptions({
       ...config,
       permissionManager: this.permissionManager,
+      resume: config.providerState?.sessionId,
     });
 
     const permissionHandler = this.permissionManager.createCanUseToolHandler();
@@ -177,11 +189,18 @@ export class PersistentQueryManager {
       workspacePath: config.workspacePath,
       environment: config.environment,
       zoteroEndpointUrl: config.zoteroEndpointUrl,
+      zoteroEndpointToken: config.zoteroEndpointToken,
       enableZoteroMcp: config.enableZoteroMcp,
       mcpServers: config.mcpServers,
       mcpDisabledTools: config.mcpDisabledTools,
       conversationId: config.conversationId,
+      providerState: config.providerState,
     };
+  }
+
+  setToolPolicy(policy: AcademicToolPolicy | undefined): void {
+    this.toolPolicy = policy;
+    this.permissionManager.setToolPolicy(policy);
   }
 
   getPendingQuestion(): PendingQuestion | null {
@@ -325,28 +344,34 @@ export class PersistentQueryManager {
     if (!this.state) {
       throw new Error("Persistent query not initialized. Call /init first.");
     }
+    if (this.turnActive) {
+      throw new Error("Claude already has a turn in progress.");
+    }
 
-    this.state.messageChannel.send(prompt, images);
-    const streamState = new ToolInputStreamState();
-    streamState.resetTurn();
+    this.turnActive = true;
+    try {
+      this.state.messageChannel.send(prompt, images);
+      const streamState = new ToolInputStreamState();
+      streamState.resetTurn();
 
-    while (true) {
-      const { value, done } = await this.state.iter.next();
-      if (done) break;
-      for (const event of transformClaudeMessage(value, streamState)) {
-        if (event.type === "tool_use" || event.type === "tool_use_delta") {
-          this.detectAskUserQuestionTool(event.tool);
+      while (true) {
+        const { value, done } = await this.state.iter.next();
+        if (done) break;
+        for (const event of transformClaudeMessage(value, streamState)) {
+          if (event.type === "tool_use" || event.type === "tool_use_delta") {
+            this.detectAskUserQuestionTool(event.tool);
+          }
         }
+        this.detectAskUserQuestion(value);
+        yield value;
+        if (this.pendingQuestionAnswered) {
+          const waiter = this.pendingQuestionAnswered;
+          await waiter.promise;
+        }
+        if ((value as { type?: string }).type === "result") break;
       }
-      this.detectAskUserQuestion(value);
-      yield value;
-      if (this.pendingQuestionAnswered) {
-        const waiter = this.pendingQuestionAnswered;
-        await waiter.promise;
-      }
-      if ((value as { type?: string }).type === "result") {
-        break;
-      }
+    } finally {
+      this.turnActive = false;
     }
   }
 
@@ -413,6 +438,15 @@ export class PersistentQueryManager {
       toolOptions: ToolOptions,
     ) => Promise<ToolDecision>,
   ): Promise<ToolDecision> {
+    const policyDenial = this.permissionManager.getToolPolicyDenial(toolName);
+    if (policyDenial) {
+      return Promise.resolve({
+        behavior: "deny",
+        message: policyDenial,
+        interrupt: false,
+        toolUseID: toolOptions.toolUseID,
+      });
+    }
     if (toolName === "ExitPlanMode") {
       return this.handleExitPlanModePermission(toolInput, toolOptions);
     }
@@ -679,6 +713,12 @@ export class PersistentQueryManager {
     this.state.options.permissionMode = normalized as PermissionMode;
   }
 
+  cancelActiveTurn(): void {
+    this.cancelPendingQuestion();
+    this.cancelPendingExitPlan();
+    void this.state?.query.interrupt().catch(() => {});
+  }
+
   close(): void {
     if (!this.state) return;
     if (this.pendingQuestionAnswered) {
@@ -700,6 +740,11 @@ export class PersistentQueryManager {
     this.pendingDialogQuestion?.resolve({ behavior: "cancelled" });
     this.pendingDialogQuestion = null;
     this.answeredQuestionToolIds.clear();
+    this.turnActive = false;
+    this.toolPolicy = undefined;
+    this.permissionManager.setToolPolicy(undefined);
+    void this.state.query.interrupt().catch(() => {});
+    void this.state.iter.return?.().catch(() => {});
     this.state.messageChannel.close();
     this.state = null;
   }
@@ -712,6 +757,7 @@ export class PersistentQueryManager {
     const currentClaudePath = this.state.options.pathToClaudeCodeExecutable;
     const currentDirs = this.state.options.additionalDirectories;
     const currentZoteroEndpointUrl = this.state.zoteroEndpointUrl;
+    const currentZoteroEndpointToken = this.state.zoteroEndpointToken;
     const currentEnableZoteroMcp = this.state.enableZoteroMcp;
     const currentMcpServers = this.state.mcpServers;
     const currentMcpDisabledTools = this.state.mcpDisabledTools;
@@ -729,6 +775,8 @@ export class PersistentQueryManager {
         !sameEnvironment(newConfig.environment, this.state.environment)) ||
       (newConfig.zoteroEndpointUrl !== undefined &&
         newConfig.zoteroEndpointUrl !== currentZoteroEndpointUrl) ||
+      (newConfig.zoteroEndpointToken !== undefined &&
+        newConfig.zoteroEndpointToken !== currentZoteroEndpointToken) ||
       (newConfig.enableZoteroMcp !== undefined &&
         newConfig.enableZoteroMcp !== currentEnableZoteroMcp) ||
       (newConfig.mcpServers !== undefined &&
@@ -738,7 +786,10 @@ export class PersistentQueryManager {
         JSON.stringify([...(newConfig.mcpDisabledTools || [])].sort()) !==
           JSON.stringify([...(currentMcpDisabledTools || [])].sort())) ||
       (newConfig.conversationId !== undefined &&
-        newConfig.conversationId !== currentConversationId)
+        newConfig.conversationId !== currentConversationId) ||
+      (newConfig.providerState?.sessionId !== undefined &&
+        newConfig.providerState.sessionId !==
+          this.state.providerState?.sessionId)
     );
   }
 }

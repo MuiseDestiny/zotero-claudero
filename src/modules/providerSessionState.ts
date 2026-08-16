@@ -1,7 +1,7 @@
 import type { ConversationProviderState } from "./conversationStore";
 
 export interface ProviderSessionEvent {
-  provider: "claude" | "codex";
+  provider: "claude" | "codex" | "deepseek";
   sessionId?: string;
   threadId?: string;
   sessionFilePath?: string;
@@ -31,10 +31,17 @@ export function mergeProviderSessionState(
     return providerState;
   }
   if (session.sessionId) {
-    providerState.claude = {
-      ...(providerState.claude || {}),
-      sessionId: session.sessionId,
-    };
+    if (session.provider === "deepseek") {
+      providerState.deepseek = {
+        ...(providerState.deepseek || {}),
+        sessionId: session.sessionId,
+      };
+    } else {
+      providerState.claude = {
+        ...(providerState.claude || {}),
+        sessionId: session.sessionId,
+      };
+    }
   }
   return providerState;
 }

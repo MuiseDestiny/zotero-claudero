@@ -1,4 +1,6 @@
 .vscode
+.claude
+addon/content/katex
 build
 logs
 node_modules

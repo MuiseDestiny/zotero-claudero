@@ -242,6 +242,13 @@ export function transformClaudeMessage(
     return transformUserMessage(record, state);
   }
 
+  if (record.type === "system" && record.subtype === "init") {
+    const sessionId = stringValue(record.session_id);
+    return sessionId
+      ? [{ type: "session", session: { provider: "claude", sessionId } }]
+      : [];
+  }
+
   if (record.type === "system" && record.subtype === "thinking_tokens") {
     const estimatedTokens = numberValue(record.estimated_tokens);
     return estimatedTokens === null

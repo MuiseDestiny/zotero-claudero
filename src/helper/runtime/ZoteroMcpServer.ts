@@ -1,6 +1,7 @@
 import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { AGENT_EVIDENCE_POLICY_MCP_INSTRUCTIONS } from "../../shared/agentEvidencePolicy";
+import { buildAuthenticatedZoteroPayload } from "../../shared/zoteroEndpointAuth";
 import type { PermissionManager } from "./PermissionManager";
 
 type ToolContent =
@@ -95,19 +96,34 @@ function toolContentFromOutput(output: unknown): ToolContent[] {
 
 export function createZoteroMcpServer(
   zoteroEndpointUrl: string,
+  zoteroEndpointToken: string,
   permissionManager: PermissionManager,
 ) {
   const call = async (action: string, args: Record<string, unknown>) => {
+    const policyDenial = permissionManager.getToolPolicyDenial(
+      `mcp__zotero__${action}`,
+    );
+    if (policyDenial) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ success: false, error: policyDenial }),
+          },
+        ],
+      };
+    }
     if (WRITE_ACTIONS.has(action)) {
       const toolName = "Zotero MCP: " + permissionSummary(action);
-      if (permissionManager.isRemembered(toolName)) {
+      const permissionInput = { action, ...args };
+      if (permissionManager.isRemembered(toolName, permissionInput)) {
         // Previously approved for this helper session.
       } else {
         const requestId = Math.random().toString(36).slice(2, 11);
         const decision = await permissionManager.request({
           id: requestId,
           toolName,
-          input: { action, ...args },
+          input: permissionInput,
         });
         if (!decision.allowed) {
           return {
@@ -122,14 +138,18 @@ export function createZoteroMcpServer(
             ],
           };
         }
-        if (decision.remember) permissionManager.remember(toolName);
+        if (decision.remember) {
+          permissionManager.remember(toolName, permissionInput);
+        }
       }
     }
 
     const response = await fetch(zoteroEndpointUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, ...args }),
+      body: JSON.stringify(
+        buildAuthenticatedZoteroPayload(action, args, zoteroEndpointToken),
+      ),
     });
     const text = await response.text();
     let output: unknown = text;
@@ -206,7 +226,7 @@ export function createZoteroMcpServer(
       {
         name: "get_evidence_pack",
         description:
-          "Build a citation-ready evidence pack for a Zotero item or attachment: ranked paragraphs, annotation provenance, page/open-pdf locators, and figure/table caption candidates with page-level visual evidence. Pass includePageImages=true when the PDF is open in Zotero Reader and a multimodal model needs rendered page screenshots.",
+          "Legacy ranked evidence helper for citation audits and verification workflows. For ordinary PDF Q&A, prefer get_numbered_evidence_pack so the model can choose source paragraph ids itself.",
         inputSchema: {
           itemId: z.number().optional(),
           attachmentId: z.number().optional(),
@@ -221,9 +241,41 @@ export function createZoteroMcpServer(
         handler: (args) => call("get_evidence_pack", args),
       },
       {
+        name: "get_numbered_evidence_pack",
+        description:
+          "Build Zotero-GPT-style numbered source context for a Zotero PDF. Ordinary PDFs return contextText with short citationMarkdown markers such as [Eabc123]; copy markers exactly without adding a URL. Long documents return a documentMap instead; call expand_evidence_range for relevant pages/sections before answering.",
+        inputSchema: {
+          itemId: z.number().optional(),
+          attachmentId: z.number().optional(),
+          maxPages: z.number().optional(),
+          includeAnnotations: z.boolean().optional(),
+          maxContextChars: z.number().optional(),
+          forceFull: z.boolean().optional(),
+        },
+        handler: (args) => call("get_numbered_evidence_pack", args),
+      },
+      {
+        name: "expand_evidence_range",
+        description:
+          "Expand numbered source paragraphs from a long Zotero PDF by page range, source id range, or specific source ids. Use after get_numbered_evidence_pack returns mode='map'.",
+        inputSchema: {
+          itemId: z.number().optional(),
+          attachmentId: z.number().optional(),
+          pageStart: z.number().optional(),
+          pageEnd: z.number().optional(),
+          sourceStart: z.string().optional(),
+          sourceEnd: z.string().optional(),
+          sourceIds: z.array(z.string()).optional(),
+          maxPages: z.number().optional(),
+          includeAnnotations: z.boolean().optional(),
+          maxContextChars: z.number().optional(),
+        },
+        handler: (args) => call("expand_evidence_range", args),
+      },
+      {
         name: "locate_quote",
         description:
-          "Locate a direct quote in Zotero evidence and return provenance: evidence id, page, paragraph/annotation, and zotero://open-pdf URI when available. Use before quoting text verbatim.",
+          "Locate an exact direct quote copied from Zotero evidence and return provenance: evidence id, page, paragraph/annotation, and zotero://open-pdf URI when available. Use before quoting text verbatim; do not pass broad questions or paraphrases as quote.",
         inputSchema: {
           quote: z.string(),
           itemId: z.number().optional(),
@@ -316,7 +368,7 @@ export function createZoteroMcpServer(
       {
         name: "inspect_figure_table_page",
         description:
-          "Prepare a multimodal visual audit for a figure/table evidence page. Returns a strict inspection prompt plus the rendered PDF page as image content when the page is open in Zotero Reader. Use this before trusting figure/table claims or caption candidates.",
+          "Find and prepare a visual audit for a figure/table. Searches the full PDF when a label/query is given without a page. If it returns terminal=true or status='not_found', stop and report that the visual was not found; do not call locate_quote, shell/Python, or unrelated evidence tools. Otherwise inspect the rendered page before describing the visual.",
         inputSchema: {
           itemId: z.number().optional(),
           attachmentId: z.number().optional(),

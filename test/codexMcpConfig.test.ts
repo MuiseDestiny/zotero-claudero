@@ -49,16 +49,14 @@ describe("Codex MCP config overrides", function () {
 
     assert.deepEqual(
       args.filter((arg) => arg === "--config"),
-      ["--config", "--config"],
+      Array(6).fill("--config"),
     );
+    assert.include(args, 'mcp_servers.filesystem.command="npx"');
     assert.include(
       args,
-      'mcp_servers.filesystem={ command = "npx", args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"], env = { FOO = "bar" }, disabled_tools = ["write_file"] }',
+      'mcp_servers.filesystem.disabled_tools=["write_file"]',
     );
-    assert.include(
-      args,
-      'mcp_servers.remote={ url = "https://example.test/mcp", http_headers = { X-Test = "1" } }',
-    );
+    assert.include(args, 'mcp_servers.remote.http_headers.X-Test="1"');
   });
 
   it("maps WSL cwd and absolute path arguments into the Codex target", function () {
@@ -86,8 +84,9 @@ describe("Codex MCP config overrides", function () {
 
     assert.include(
       args,
-      'mcp_servers.files={ command = "node", args = ["/mnt/c/Users/me/repo", "--flag"], cwd = "/mnt/c/Users/me/repo" }',
+      'mcp_servers.files.args=["/mnt/c/Users/me/repo", "--flag"]',
     );
+    assert.include(args, 'mcp_servers.files.cwd="/mnt/c/Users/me/repo"');
   });
 
   it("builds a stdio Zotero bridge server for Codex", function () {
@@ -126,7 +125,7 @@ describe("Codex MCP config overrides", function () {
       ],
       startup_timeout_sec: 20,
       tool_timeout_sec: 120,
-      default_tools_approval_mode: "prompt",
+      default_tools_approval_mode: "approve",
     });
   });
 });

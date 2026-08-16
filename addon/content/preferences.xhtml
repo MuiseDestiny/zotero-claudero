@@ -36,6 +36,13 @@
           ></html:button>
           <html:button
             type="button"
+            id="claudero-pref-tab-deepseek"
+            class="claudero-pref-tab"
+            data-panel="deepseek"
+            data-l10n-id="pref-tab-deepseek"
+          ></html:button>
+          <html:button
+            type="button"
             id="claudero-pref-tab-mcp"
             class="claudero-pref-tab"
             data-panel="mcp"
@@ -91,6 +98,7 @@
               type="text"
               id="zotero-prefpane-__addonRef__-nodePath"
               preference="nodePath"
+              data-l10n-id="pref-node-path-placeholder"
               placeholder="/opt/homebrew/bin/node"
             ></html:input>
           </hbox>
@@ -114,6 +122,7 @@
               <menupopup>
                 <menuitem value="claude" label="Claude Code" />
                 <menuitem value="codex" label="Codex" />
+                <menuitem value="deepseek" label="DeepSeek Harness" />
               </menupopup>
             </menulist>
           </hbox>
@@ -133,6 +142,7 @@
               type="text"
               id="zotero-prefpane-__addonRef__-workspacePath"
               preference="workspacePath"
+              data-l10n-id="pref-workspace-path-placeholder"
               placeholder="Leave empty to use the Zotero profile"
             ></html:input>
           </hbox>
@@ -172,6 +182,7 @@
               type="text"
               id="zotero-prefpane-__addonRef__-proxy"
               preference="proxy"
+              data-l10n-id="pref-proxy-placeholder"
               placeholder="http://127.0.0.1:7890 (leave empty to disable)"
             ></html:input>
           </hbox>
@@ -191,9 +202,28 @@
               id="zotero-prefpane-__addonRef__-environmentVariables"
               preference="environmentVariables"
               rows="5"
+              data-l10n-id="pref-env-placeholder"
               placeholder="PATH=/opt/homebrew/bin:/usr/local/bin:$PATH"
             ></html:textarea>
           </hbox>
+          <html:div class="claudero-pref-setup-panel">
+            <html:div class="claudero-pref-setup-head">
+              <html:strong data-l10n-id="pref-setup-title"></html:strong>
+              <html:button
+                type="button"
+                id="claudero-pref-setup-run"
+                data-l10n-id="pref-setup-run"
+              ></html:button>
+            </html:div>
+            <html:div
+              id="claudero-pref-setup-status"
+              class="claudero-pref-status"
+            ></html:div>
+            <html:div
+              id="claudero-pref-setup-details"
+              class="claudero-pref-setup-details"
+            ></html:div>
+          </html:div>
         </vbox>
         <vbox
           id="claudero-pref-panel-claude"
@@ -230,6 +260,7 @@
               flex="1"
               type="text"
               id="claudero-pref-claude-path"
+              data-l10n-id="pref-claude-path-placeholder"
               placeholder="/Users/you/.claude/local/claude"
             ></html:input>
           </hbox>
@@ -248,6 +279,7 @@
               flex="1"
               id="claudero-pref-claude-env"
               rows="5"
+              data-l10n-id="pref-claude-env-placeholder"
               placeholder="ANTHROPIC_API_KEY=..."
             ></html:textarea>
           </hbox>
@@ -287,6 +319,7 @@
               flex="1"
               type="text"
               id="claudero-pref-codex-path"
+              data-l10n-id="pref-codex-path-placeholder"
               placeholder="/opt/homebrew/bin/codex"
             ></html:input>
           </hbox>
@@ -333,6 +366,7 @@
               flex="1"
               type="text"
               id="claudero-pref-codex-wsl-distro"
+              data-l10n-id="pref-codex-wsl-placeholder"
               placeholder="Ubuntu"
             ></html:input>
           </hbox>
@@ -379,7 +413,67 @@
               flex="1"
               id="claudero-pref-codex-env"
               rows="5"
+              data-l10n-id="pref-codex-env-placeholder"
               placeholder="OPENAI_API_KEY=..."
+            ></html:textarea>
+          </hbox>
+        </vbox>
+        <vbox
+          id="claudero-pref-panel-deepseek"
+          class="claudero-pref-panel"
+          hidden="true"
+        >
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
+            <html:label
+              class="claudero-pref-row-label"
+              data-l10n-id="pref-current-host"
+            ></html:label>
+            <html:code
+              id="claudero-pref-host-key-deepseek"
+              class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
+            ></html:code>
+          </hbox>
+          <hbox
+            class="claudero-pref-row"
+            style="display: flex; align-items: center; width: 100%"
+          >
+            <html:label
+              class="claudero-pref-row-label"
+              for="claudero-pref-deepseek-path"
+              data-l10n-id="pref-deepseek-path"
+            ></html:label>
+            <html:input
+              class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
+              type="text"
+              id="claudero-pref-deepseek-path"
+              data-l10n-id="pref-deepseek-path-placeholder"
+              placeholder="/opt/homebrew/bin/dsh"
+            ></html:input>
+          </hbox>
+          <hbox
+            class="claudero-pref-row claudero-pref-row-tall"
+            style="display: flex; align-items: center; width: 100%"
+          >
+            <html:label
+              class="claudero-pref-row-label"
+              for="claudero-pref-deepseek-env"
+              data-l10n-id="pref-provider-env"
+            ></html:label>
+            <html:textarea
+              class="claudero-pref-control"
+              style="flex: 1"
+              flex="1"
+              id="claudero-pref-deepseek-env"
+              rows="5"
+              data-l10n-id="pref-deepseek-env-placeholder"
+              placeholder="DEEPSEEK_API_KEY=...&#10;DEEPSEEK_BASE_URL=https://api.deepseek.com"
             ></html:textarea>
           </hbox>
         </vbox>
@@ -403,6 +497,7 @@
               flex="1"
               id="claudero-pref-mcp-servers"
               rows="12"
+              data-l10n-id="pref-mcp-servers-placeholder"
               placeholder='{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]}}}'
             ></html:textarea>
           </hbox>
@@ -500,6 +595,11 @@
               type="button"
               id="claudero-pref-diagnostics-export"
               data-l10n-id="pref-diagnostics-export"
+            ></html:button>
+            <html:button
+              type="button"
+              id="claudero-pref-diagnostics-restart"
+              data-l10n-id="pref-diagnostics-restart"
             ></html:button>
           </hbox>
           <html:div

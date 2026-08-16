@@ -16,6 +16,7 @@ declare namespace _ZoteroTypes {
       "mcpServers": string;
       "claudePath": string;
       "codexPath": string;
+      "deepseekPath": string;
       "helperPort": number;
       "workspacePath": string;
       "proxy": string;
@@ -27,9 +28,12 @@ declare namespace _ZoteroTypes {
       "claudeEffort": string;
       "codexModel": string;
       "codexEffort": string;
+      "deepseekModel": string;
+      "deepseekEffort": string;
       "defaultPrompts": string;
       "academicSkills": string;
       "fontScale": number;
+      "setupChecked": boolean;
     };
   }
 }

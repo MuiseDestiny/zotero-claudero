@@ -7,13 +7,14 @@ import {
 } from "../src/modules/providerRegistry";
 
 describe("provider registry", function () {
-  it("exposes stable Claude and Codex registrations", function () {
+  it("exposes stable Claude, Codex, and DeepSeek registrations", function () {
     assert.deepEqual(
       PROVIDER_OPTIONS.map((option) => option.value),
-      ["claude", "codex"],
+      ["claude", "codex", "deepseek"],
     );
     assert.equal(getProviderRegistration("claude").label, "Claude");
     assert.equal(getProviderRegistration("codex").label, "Codex");
+    assert.equal(getProviderRegistration("deepseek").label, "DeepSeek Harness");
   });
 
   it("publishes provider capabilities used by UI/runtime routing", function () {
@@ -28,6 +29,10 @@ describe("provider registry", function () {
     assert.isTrue(
       getProviderCapabilities("codex").supportsInteractivePlanApproval,
     );
+    assert.isFalse(
+      getProviderCapabilities("deepseek").supportsImageAttachments,
+    );
+    assert.isFalse(getProviderCapabilities("deepseek").supportsMcpTools);
   });
 
   it("routes model options through provider registrations", function () {
@@ -39,6 +44,10 @@ describe("provider registry", function () {
       modelOptionsForProvider("codex").map((option) => option.value),
       ["gpt-5.4-mini", "gpt-5.5"],
     );
+    assert.includeMembers(
+      modelOptionsForProvider("deepseek").map((option) => option.value),
+      ["deepseek-v4-flash", "deepseek-v4-pro"],
+    );
   });
 
   it("serves UI defaults from provider registrations", function () {
@@ -46,5 +55,10 @@ describe("provider registry", function () {
     assert.equal(getProviderRegistration("claude").defaultEffort, "high");
     assert.equal(getProviderRegistration("codex").defaultModel, "gpt-5.5");
     assert.equal(getProviderRegistration("codex").defaultEffort, "medium");
+    assert.equal(
+      getProviderRegistration("deepseek").defaultModel,
+      "deepseek-v4-flash",
+    );
+    assert.equal(getProviderRegistration("deepseek").defaultEffort, "none");
   });
 });

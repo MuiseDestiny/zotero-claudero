@@ -4,6 +4,7 @@ import {
   AGENT_EVENT_PROTOCOL_VERSION,
   AgentEventRecorder,
   createAgentEventEnvelope,
+  isAgentEventPayload,
   replayAgentText,
 } from "../src/shared/agentEvents";
 
@@ -62,6 +63,12 @@ describe("agent event protocol", function () {
         { type: "text_delta", text: "!" },
       ]),
       "final!",
+    );
+  });
+
+  it("accepts context compaction as a visible control event", function () {
+    assert.isTrue(
+      isAgentEventPayload({ type: "context_compaction", phase: "started" }),
     );
   });
 });

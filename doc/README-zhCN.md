@@ -1,410 +1,268 @@
-# Zotero Plugin Template
+# Claudero
 
-[![zotero target version](https://img.shields.io/badge/Zotero-7-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
-[![Using Zotero Plugin Template](https://img.shields.io/badge/Using-Zotero%20Plugin%20Template-blue?style=flat-square&logo=github)](https://github.com/windingwind/zotero-plugin-template)
+[English](../README.md) | [简体中文](README-zhCN.md)
 
-这是 [Zotero](https://www.zotero.org/) 的插件模板。
+Claudero 是一个 Zotero 插件，将三种 agent 运行时集成到 Zotero 工作区：
+**Claude Code**、**Codex** 和 **DeepSeek Harness**。它面向需要读取 Zotero
+条目、PDF 阅读器状态、批注、笔记和本地附件的科研对话。
 
-[English](../README.md) | [简体中文](./README-zhCN.md) | [Français](./README-frFR.md)
+插件会启动本地 Node.js helper，并将请求交给 Zotero 首选项中选择的 provider
+CLI：
 
-- 开发指南
-  - [📖 插件开发文档](https://zotero-chinese.com/plugin-dev-guide/) (中文版，尚不完善)
-  - [📖 Zotero 7 插件开发文档](https://www.zotero.org/support/dev/zotero_7_for_developers)
-- 开发工具参考
-  - [🛠️ Zotero 插件工具包](https://github.com/windingwind/zotero-plugin-toolkit) | [API 文档](https://github.com/windingwind/zotero-plugin-toolkit/blob/master/docs/zotero-plugin-toolkit.md)
-  - [🛠️ Zotero 插件开发脚手架](https://github.com/northword/zotero-plugin-scaffold)
-  - [📜 Zotero 源代码](https://github.com/zotero/zotero)
-  - [ℹ️ Zotero 类型定义](https://github.com/windingwind/zotero-types)
-  - [📌 Zotero 插件模板](https://github.com/windingwind/zotero-plugin-template) (即本仓库)
-
-> [!tip]
-> 👁 Watch 本仓库，以及时收到修复或更新的通知。
-
-## 使用此模板构建的插件
-
-[![GitHub Repo stars](https://img.shields.io/github/stars/windingwind/zotero-better-notes?label=zotero-better-notes&style=flat-square)](https://github.com/windingwind/zotero-better-notes)
-[![GitHub Repo stars](https://img.shields.io/github/stars/windingwind/zotero-pdf-preview?label=zotero-pdf-preview&style=flat-square)](https://github.com/windingwind/zotero-pdf-preview)
-[![GitHub Repo stars](https://img.shields.io/github/stars/windingwind/zotero-pdf-translate?label=zotero-pdf-translate&style=flat-square)](https://github.com/windingwind/zotero-pdf-translate)
-[![GitHub Repo stars](https://img.shields.io/github/stars/windingwind/zotero-tag?label=zotero-tag&style=flat-square)](https://github.com/windingwind/zotero-tag)
-[![GitHub Repo stars](https://img.shields.io/github/stars/iShareStuff/ZoteroTheme?label=zotero-theme&style=flat-square)](https://github.com/iShareStuff/ZoteroTheme)
-[![GitHub Repo stars](https://img.shields.io/github/stars/MuiseDestiny/zotero-reference?label=zotero-reference&style=flat-square)](https://github.com/MuiseDestiny/zotero-reference)
-[![GitHub Repo stars](https://img.shields.io/github/stars/MuiseDestiny/zotero-citation?label=zotero-citation&style=flat-square)](https://github.com/MuiseDestiny/zotero-citation)
-[![GitHub Repo stars](https://img.shields.io/github/stars/MuiseDestiny/ZoteroStyle?label=zotero-style&style=flat-square)](https://github.com/MuiseDestiny/ZoteroStyle)
-[![GitHub Repo stars](https://img.shields.io/github/stars/volatile-static/Chartero?label=Chartero&style=flat-square)](https://github.com/volatile-static/Chartero)
-[![GitHub Repo stars](https://img.shields.io/github/stars/l0o0/tara?label=tara&style=flat-square)](https://github.com/l0o0/tara)
-[![GitHub Repo stars](https://img.shields.io/github/stars/redleafnew/delitemwithatt?label=delitemwithatt&style=flat-square)](https://github.com/redleafnew/delitemwithatt)
-[![GitHub Repo stars](https://img.shields.io/github/stars/redleafnew/zotero-updateifsE?label=zotero-updateifsE&style=flat-square)](https://github.com/redleafnew/zotero-updateifsE)
-[![GitHub Repo stars](https://img.shields.io/github/stars/northword/zotero-format-metadata?label=zotero-format-metadata&style=flat-square)](https://github.com/northword/zotero-format-metadata)
-[![GitHub Repo stars](https://img.shields.io/github/stars/inciteful-xyz/inciteful-zotero-plugin?label=inciteful-zotero-plugin&style=flat-square)](https://github.com/inciteful-xyz/inciteful-zotero-plugin)
-[![GitHub Repo stars](https://img.shields.io/github/stars/MuiseDestiny/zotero-gpt?label=zotero-gpt&style=flat-square)](https://github.com/MuiseDestiny/zotero-gpt)
-[![GitHub Repo stars](https://img.shields.io/github/stars/zoushucai/zotero-journalabbr?label=zotero-journalabbr&style=flat-square)](https://github.com/zoushucai/zotero-journalabbr)
-[![GitHub Repo stars](https://img.shields.io/github/stars/MuiseDestiny/zotero-figure?label=zotero-figure&style=flat-square)](https://github.com/MuiseDestiny/zotero-figure)
-[![GitHub Repo stars](https://img.shields.io/github/stars/l0o0/jasminum?label=jasminum&style=flat-square)](https://github.com/l0o0/jasminum)
-[![GitHub Repo stars](https://img.shields.io/github/stars/lifan0127/ai-research-assistant?label=ai-research-assistant&style=flat-square)](https://github.com/lifan0127/ai-research-assistant)
-[![GitHub Repo stars](https://img.shields.io/github/stars/daeh/zotero-markdb-connect?label=zotero-markdb-connect&style=flat-square)](https://github.com/daeh/zotero-markdb-connect)
-
-如果你正在使用此库，我建议你将这个标志 ([![Using Zotero Plugin Template](https://img.shields.io/badge/Using-Zotero%20Plugin%20Template-blue?style=flat-square&logo=github)](https://github.com/windingwind/zotero-plugin-template)) 放在 README 文件中：
-
-```md
-[![Using Zotero Plugin Template](https://img.shields.io/badge/Using-Zotero%20Plugin%20Template-blue?style=flat-square&logo=github)](https://github.com/windingwind/zotero-plugin-template)
+```text
+Zotero 面板 -> 本地 helper -> provider 适配器 -> Claude / Codex / DeepSeek
 ```
 
-## Features 特性
+## 支持的平台
 
-- 事件驱动、函数式编程的可扩展框架；
-- 简单易用，开箱即用；
-- `src/modules/examples.ts` 中有丰富的示例，涵盖了插件中常用的大部分 API (使用 [zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit)；
-- TypeScript 支持：
-  - 为使用 JavaScript 编写的 Zotero 源码提供全面的类型定义支持 (使用 [zotero-types](https://github.com/windingwind/zotero-types))；
-  - 全局变量和环境设置；
-- 插件开发/构建/发布工作流：
-  - ⭐自动热重载！每当修改源码时，都会自动编译并重新加载插件；
-  - 自动生成/更新插件版本、更新配置和设置环境变量 (`development`/`production`)；
-  - 自动发布到 GitHub ;
-- 集成 Prettier 和 ES Lint;
+Claudero 面向 **Zotero 7 及更高版本**（当前 manifest 接受 Zotero 7 到 10），
+支持 Zotero 所支持的桌面操作系统：
 
-## Examples 示例
+| 主机系统 | Claude Code               | Codex           | DeepSeek Harness     |
+| -------- | ------------------------- | --------------- | -------------------- |
+| macOS    | 原生 CLI                  | 原生 CLI        | 原生 `dsh`           |
+| Windows  | 原生 CLI 或可执行文件路径 | 原生 CLI 或 WSL | 原生 `dsh.cmd`/`dsh` |
+| Linux    | 原生 CLI                  | 原生 CLI        | 原生 `dsh`           |
 
-此库提供了 [zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit) 中 API 的示例。
+三个操作系统使用同一个插件构建包。插件会从常见目录自动发现 CLI，也可以在
+首选项中按设备覆盖路径。Windows 上可以让 Codex 运行在 WSL 中；将安装方式
+设置为 **WSL**，并按需填写发行版名称。
 
-在 `src/examples.ts` 中搜索`@example` 查看示例。这些示例在 `src/hooks.ts` 中调用演示。
+### 运行环境要求
 
-### 基本示例 (Basic Examples)
+- Zotero 7 或更高版本。
+- Node.js 20 或更高版本用于本地 helper，推荐使用 Node.js LTS。
+- 可访问 provider 服务的网络和有效凭据。
+- 选定 provider 对应的 CLI；DeepSeek 可以直接从 Claudero 的缺少 CLI 警告中安装。
+- DeepSeek Harness `0.1.0-rc.6` 需要 Node.js 24 API。Claudero 会自动查找兼容
+  的 Node；也可以在 DeepSeek 环境变量中设置 `DSH_NODE_PATH` 覆盖自动选择。
 
-- registerNotifier
-- registerPrefs, unregisterPrefs
+## 安装
 
-### 快捷键示例 (Shortcut Keys Examples)
+### 安装发布包
 
-- registerShortcuts
-- exampleShortcutLargerCallback
-- exampleShortcutSmallerCallback
-- exampleShortcutConflictionCallback
+从项目 Releases 下载适合你的 Zotero 版本的 `.xpi`，然后在 Zotero 中打开
+**工具 -> 插件 -> 齿轮菜单 -> 从文件安装插件**。如 Zotero 提示，请重启 Zotero。
 
-### UI 示例 (UI Examples)
+### 从源码构建
 
-![image](https://user-images.githubusercontent.com/33902321/211739774-cc5c2df8-5fd9-42f0-9cdf-0f2e5946d427.png)
-
-- registerStyleSheet(the official make-it-red example)
-- registerRightClickMenuItem
-- registerRightClickMenuPopup
-- registerWindowMenuWithSeprator
-- registerExtraColumn
-- registerExtraColumnWithCustomCell
-- registerCustomItemBoxRow
-- registerLibraryTabPanel
-- registerReaderTabPanel
-
-### 首选项面板示例 (Preference Pane Examples)
-
-![image](https://user-images.githubusercontent.com/33902321/211737987-cd7c5c87-9177-4159-b975-dc67690d0490.png)
-
-- Preferences bindings
-- UI Events
-- Table
-- Locale
-
-详情参见 [`src/modules/preferenceScript.ts`](./src/modules/preferenceScript.ts)
-
-### 帮助示例 (HelperExamples)
-
-![image](https://user-images.githubusercontent.com/33902321/215119473-e7d0d0ef-6d96-437e-b989-4805ffcde6cf.png)
-
-- dialogExample
-- clipboardExample
-- filePickerExample
-- progressWindowExample
-- vtableExample(See Preference Pane Examples)
-
-### 指令行示例 (PromptExamples)
-
-Obsidian 风格的指令输入模块，它通过接受文本来运行插件，并在弹出窗口中显示可选项。
-
-使用 `Shift+P` 激活。
-
-![image](https://user-images.githubusercontent.com/33902321/215120009-e7c7ed27-33a0-44fe-b021-06c272481a92.png)
-
-- registerAlertPromptExample
-
-## 快速上手
-
-### 0 环境要求
-
-1. 安装 [beta 版 Zotero](https://www.zotero.org/support/beta_builds)
-2. 安装 [Node.js 最新 LTS 版本](https://nodejs.org/zh-cn/download) 和 [Git](https://git-scm.com/)
-
-> [!note]
-> 本指南假定你已经对 Zotero 插件的基本结构和工作原理有初步的了解。如果你还不了解，请先参考[官方文档](https://www.zotero.org/support/dev/zotero_7_for_developers) 和[官方插件样例 Make It Red](https://github.com/zotero/make-it-red)。
-
-### 1 创建你的仓库 (Create Your Repo)
-
-1. 点击 `Use this template`；
-2. 使用 `git clone` 克隆上一步生成的仓库；
-   <details >
-   <summary>💡 从 GitHub Codespace 开始</summary>
-
-   _GitHub CodeSpace_ 使你可以直接开始开发而无需在本地下载代码/IDE/依赖。
-
-   重复下列步骤，仅需三十秒即可开始构建你的第一个插件！
-   - 点击首页 `Use this template` 按钮，随后点击 `Open in codespace`，你需要登录你的 GitHub 账号。
-   - 等待 codespace 加载。
-
-   </details>
-
-3. 进入项目文件夹；
-
-### 2 配置模板和开发环境 (Config Template Settings and Enviroment)
-
-1. 修改 `./package.json` 中的设置，包括：
-
-   ```jsonc
-   {
-     "version": "", // 修改为 0.0.0
-     "description": "",
-     "config": {
-       "addonName": "", // 插件名称
-       "addonID": "", // 插件 ID【重要：防止冲突】
-       "addonRef": "", // 插件命名空间：元素前缀等
-       "addonInstance": "", // 注册在 Zotero 根下的实例名
-       "prefsPrefix": "extensions.zotero.${addonRef}", // 首选项的前缀
-     },
-     "repository": {
-       "type": "git",
-       "url": "git+https://github.com/your-github-name/repo-name.git",
-     },
-     "author": "Your Name",
-     "bugs": {
-       "url": "https://github.com/your-github-name/repo-name/issues",
-     },
-     "homepage": "https://github.com/your-github-name/repo-name#readme",
-   }
-   ```
-
-   > [!warning]
-   > 注意设置 addonID 和 addonRef 以避免冲突。
-
-   如果你需要在 GitHub 以外的地方托管你的 XPI 包，请修改 `zotero-plugin.config.ts` 中的 `updateURL` 和 `xpiDownloadLink`。
-
-2. 复制 Zotero 启动配置，填入 Zotero 可执行文件路径和 profile 路径。
-
-   > (可选项) 创建开发用 profile 目录：
-   >
-   > 此操作仅需执行一次：使用 `/path/to/zotero -p` 启动 Zotero，创建一个新的配置文件并用作开发配置文件。
-
-   ```sh
-   cp .env.example .env
-   vim .env
-   ```
-
-   如果你维护了多个插件，可以将这些内容存入系统环境变量，以避免在每个插件中都需要重复设置。
-
-3. 运行 `npm install` 以安装相关依赖
-
-   > 如果你使用 `pnpm` 作为包管理器，你需要添加 `public-hoist-pattern[]=*@types/bluebird*` 到`.npmrc`, 详情请查看 [zotero-types](https://github.com/windingwind/zotero-types?tab=readme-ov-file#usage) 的文档。
-
-   如果你使用 `npm install` 的过程中遇到了 `npm ERR! ERESOLVE unable to resolve dependency tree` ，这是由于上游依赖 typescript-eslint 导致的错误，请使用 `npm i -f` 命令进行安装。
-
-### 3 开发插件
-
-使用 `npm start` 启动开发服务器，它将：
-
-- 在开发模式下预构建插件
-- 启动 Zotero，并让其从 `build/` 中加载插件
-- 打开开发者工具（devtool）
-- 监听 `src/**` 和 `addon/**`，当文件发生修改时，重新构建插件并且重新加载
-
-#### 自动热重载
-
-厌倦了无休止的重启吗？忘掉它，拥抱热加载！
-
-1. 运行 `npm start`.
-2. 编码。(是的，就这么简单)
-
-当检测到 `src` 或 `addon` 中的文件修改时，插件将自动编译并重新加载。
-
-<details style="text-indent: 2em">
-<summary>💡 将此功能添加到现有插件的步骤</summary>
-
-请参阅：[zotero-plugin-scaffold](https://github.com/northword/zotero-plugin-scaffold)。
-
-</details>
-
-#### 调试代码
-
-你还可以：
-
-- 在 Tools->Developer->Run Javascript 中测试代码片段;
-
-- 使用 `Zotero.debug()` 调试输出。在 Help->Debug Output Logging->View Output 查看输出;
-
-- 调试 UI. Zotero 建立在 Firefox XUL 框架之上。使用 [XUL Explorer](https://udn.realityripple.com/docs/Archive/Mozilla/XUL_Explorer) 等软件调试 XUL UI.
-
-  > XUL 文档：<http://www.devdoc.net/web/developer.mozilla.org/en-US/docs/XUL.html>
-
-### 4 构建插件
-
-运行 `npm run build` 在生产模式下构建插件，构建的结果位于 `.scaffold/build/` 目录中。
-
-构建步骤文档可参阅 [zotero-plugin-scaffold](https://northword.github.io/zotero-plugin-scaffold/build.html)简单来说，可以分为以下几步：
-
-- 创建/清空 `build/`
-- 复制 `addon/**` 到 `.scaffold/build/addon/**`
-- 替换占位符：替换在 `package.json` 中定义的关键字和配置
-- 准备本地化文件以避免冲突，查看 [zotero_7_for_developers](https://www.zotero.org/support/dev/zotero_7_for_developers#avoiding_localization_conflicts) 了解更多
-  - 重命名`**/*.flt` 为 `**/${addonRef}-*.flt`
-  - 在每个消息前加上 `addonRef-`
-  - 为 FTL 消息生成类型声明文件
-- 准备首选项文件，在首选项键前添加前缀 `package.json#prefsPrefix`，并为首选项生成类型声明文件
-- 使用 ESBuild 来将 `.ts` 源码构建为 `.js`，从 `src/index.ts` 构建到`.scaffold/build/addon/content/scripts`
-- (仅在生产模式下工作) 压缩 `.scaffold/build/addon` 目录为 `.scaffold/build/*.xpi`
-- (仅在生产模式下工作) 准备 `update.json` 或 `update-beta.json`
-
-> [!note]
->
-> **Dev & prod 两者有什么区别？**
->
-> - 此环境变量存储在 `Zotero.${addonInstance}.data.env` 中，控制台输出在生产模式下被禁用。
-> - 你可以根据此变量决定用户无法查看/使用的内容。
-> - 在生产模式下，构建脚本将自动打包插件并更新 `update.json`.
-
-### 5 发布
-
-如果要构建和发布插件，运行如下指令：
-
-```shell
-# version increase, git add, commit and push
-# then on ci, npm run build, and release to GitHub
-npm run release
+```bash
+git clone https://github.com/MuiseDestiny/zotero-claudero.git
+cd zotero-claudero
+npm install
+npm run build
 ```
 
-> [!note]
-> 在此模板中，发布流程被配置为在本地更新版本号、提交并推送标签，随后 GitHub Action 将重新构建插件并将 XPI 发布到 GitHub Release。
+生产构建包位于 `.scaffold/build/claudero.xpi`，可使用上面的 Zotero 插件安装器
+安装。
 
-#### 关于预发布
+开发时，`npm start` 会启动脚手架服务器，并用开发构建启动 Zotero。先复制
+`.env.example` 为 `.env`，按需设置 `ZOTERO_PLUGIN_ZOTERO_BIN_PATH` 和
+`ZOTERO_PLUGIN_PROFILE_PATH`。
 
-该模板将 `prerelease` 定义为插件的测试版，当你在版本选择中选择 `prerelease` 版本 (版本号中带有 `-` )，构建脚本将创建一个 `update-beta.json` 给预发布版本使用，这将确保常规版本的用户不会自动更新到测试版，只有手动下载并安装了测试版的用户才能自动更新到下一个测试版。当下一个正式版本更新时，脚本将同步更新 `update.json` 和 `update-beta.json`，这将使正式版和测试版用户都可以更新到最新的正式版。
+## 选择 Provider
 
-> [!warning]
-> 严格来说，区分 Zotero 6 和 Zotero 7 兼容的插件版本应该通过 `update.json` 的 `addons.__addonID__.updates[]` 中分别配置 `applications.zotero.strict_min_version`，这样 Zotero 才能正确识别，详情请参阅 [Zotero 7 开发文档](https://www.zotero.org/support/dev/zotero_7_for_developers#updaterdf_updatesjson)。
+打开 **Zotero 首选项 -> Claudero**，选择默认 provider。每个 provider 都有独立的
+CLI 路径和环境变量面板。路径留空时使用自动发现，也可以填写绝对路径。
 
-## Details 更多细节
+### Claude Code
 
-### 关于 Hooks(About Hooks)
+按照 Claude Code CLI 的官方流程安装并认证，或者在 Claude provider 环境中设置：
 
-> 可以在 [`src/hooks.ts`](https://github.com/windingwind/zotero-plugin-template/blob/main/src/hooks.ts) 中查看更多。
-
-1. 当在 Zotero 中触发安装/启用/启动时，`bootstrap.js` > `startup` 被调用
-   - 等待 Zotero 就绪
-   - 加载 `index.js` (插件代码的主入口，从 `index.ts` 中构建)
-   - 如果是 Zotero 7 以上的版本则注册资源
-2. 主入口 `index.js` 中，插件对象被注入到 `Zotero` ，并且 `hooks.ts` > `onStartup` 被调用。
-   - 初始化插件需要的资源，包括通知监听器、首选项面板和 UI 元素。
-3. 当在 Zotero 中触发卸载/禁用时，`bootstrap.js` > `shutdown` 被调用。
-   - `events.ts` > `onShutdown` 被调用。移除 UI 元素、首选项面板或插件创建的任何内容。
-   - 移除脚本并释放资源。
-
-### 关于全局变量 (About Global Variables)
-
-> 可以在 [`src/index.ts`](https://github.com/windingwind/zotero-plugin-template/blob/main/src/index.ts)中查看更多
-
-bootstrap 插件在沙盒中运行，但沙盒中没有默认的全局变量，例如 `Zotero` 或 `window` 等我们曾在 overlay 插件环境中使用的变量。
-
-此模板将以下变量注册到全局范围：
-
-```plain
-Zotero, ZoteroPane, Zotero_Tabs, window, document, rootURI, ztoolkit, addon;
+```dotenv
+ANTHROPIC_API_KEY=...
+# 可选：
+# ANTHROPIC_BASE_URL=https://your-compatible-endpoint.example
 ```
 
-### 创建元素 API(Create Elements API)
+Claude 集成支持流式响应、provider 原生会话、图片附件、Zotero MCP 工具、计划
+模式、provider 命令、compact、分叉、回滚、权限询问，以及 Claude 模型和 effort
+控制。
 
-插件模板为 bootstrap 插件提供了一些新的 API. 我们有两个原因使用这些 API，而不是使用 `createElement/createElementNS`：
+### Codex
 
-- 在 bootstrap 模式下，插件必须在推出（禁用或卸载）时清理所有 UI 元素，这非常麻烦。使用 `createElement`，插件模板将维护这些元素。仅仅在退出时 `unregisterAll` .
-- Zotero 7 需要 createElement()/createElementNS() → createXULElement() 来表示其他的 XUL 元素，而 Zotero 6 并不支持 `createXULElement`. 类似于 React.createElement 的 API `createElement` 检测 namespace(xul/html/svg) 并且自动创建元素，返回元素为对应的 TypeScript 元素类型。
+按照 Codex CLI 的官方流程安装并认证，或者配置 API 兼容环境：
 
-```ts
-createElement(document, "div"); // returns HTMLDivElement
-createElement(document, "hbox"); // returns XUL.Box
-createElement(document, "button", { namespace: "xul" }); // manually set namespace. returns XUL.Button
+```dotenv
+OPENAI_API_KEY=...
+# 可选：
+# OPENAI_BASE_URL=https://your-compatible-endpoint.example
+# OPENAI_MODEL=...
 ```
 
-### 关于 Zotero API(About Zotero API)
+Windows 用户可在 Codex 首选项中选择 **Native** 或 **WSL**。Codex 集成支持流式
+响应、原生 thread、图片附件、Zotero MCP 工具、计划模式、分叉、回滚、compact、
+权限询问和按模型提供的 reasoning effort。安全模式可选 **Workspace write** 或
+**Read only**。
 
-Zotero 文档已过时且不完整，克隆 <https://github.com/zotero/zotero> 并全局搜索关键字。
+### DeepSeek Harness
 
-> ⭐[zotero-types](https://github.com/windingwind/zotero-types) 提供了最常用的 Zotero API，在默认情况下它被包含在此模板中。你的 IDE 将为大多数的 API 提供提醒。
+DeepSeek 通过官方 headless 命令 `dsh --profile headless` 接入。目前属于开发者
+预览集成，不提供交互式登录命令。
 
-猜你需要：查找所需 API 的技巧
+在 DeepSeek provider 环境中设置：
 
-在 `.xhtml`/`.flt` 文件中搜索 UI 标签，然后在 locale 文件中找到对应的键。，然后在 `.js`/`.jsx` 文件中搜索此键。
-
-### 目录结构 (Directory Structure)
-
-本部分展示了模板的目录结构。
-
-- 所有的 `.js/.ts` 代码都在 `./src`;
-- 插件配置文件：`./addon/manifest.json`;
-- UI 文件：`./addon/content/*.xhtml`.
-- 区域设置文件：`./addon/locale/**/*.flt`;
-- 首选项文件：`./addon/prefs.js`;
-
-```shell
-.
-|-- .github/                  # github conf
-|-- .vscode/                  # vscode conf
-|-- addon                     # static files
-|   |-- bootstrap.js
-|   |-- content
-|   |   |-- icons
-|   |   |   |-- favicon.png
-|   |   |   `-- favicon@0.5x.png
-|   |   |-- preferences.xhtml
-|   |   `-- zoteroPane.css
-|   |-- locale
-|   |   |-- en-US
-|   |   |   |-- addon.ftl
-|   |   |   |-- mainWindow.ftl
-|   |   |   `-- preferences.ftl
-|   |   `-- zh-CN
-|   |       |-- addon.ftl
-|   |       |-- mainWindow.ftl
-|   |       `-- preferences.ftl
-|   |-- manifest.json
-|   `-- prefs.js
-|-- build                         # build dir
-|-- node_modules
-|-- src                           # source code of scripts
-|   |-- addon.ts                  # base class
-|   |-- hooks.ts                  # lifecycle hooks
-|   |-- index.ts                  # main entry
-|   |-- modules                   # sub modules
-|   |   |-- examples.ts
-|   |   `-- preferenceScript.ts
-|   `-- utils                 # utilities
-|       |-- locale.ts
-|       |-- prefs.ts
-|       |-- wait.ts
-|       |-- window.ts
-|       `-- ztoolkit.ts
-|-- typings                   # ts typings
-|   `-- global.d.ts
-
-|-- .env                      # enviroment config (do not check into repo)
-|-- .env.example              # template of enviroment config, https://github.com/northword/zotero-plugin-scaffold
-|-- .gitignore                # git conf
-|-- .gitattributes            # git conf
-|-- .prettierrc               # prettier conf, https://prettier.io/
-|-- eslint.config.mjs         # eslint conf, https://eslint.org/
-|-- LICENSE
-|-- package-lock.json
-|-- package.json
-|-- tsconfig.json             # typescript conf, https://code.visualstudio.com/docs/languages/jsconfig
-|-- README.md
-`-- zotero-plugin.config.ts   # scaffold conf, https://github.com/northword/zotero-plugin-scaffold
+```dotenv
+DEEPSEEK_API_KEY=...
+# 可选：
+# DEEPSEEK_BASE_URL=https://api.deepseek.com
+# DSH_MODEL=deepseek-v4-flash
+# DSH_HOME=/path/to/.dsh
+# DSH_NODE_PATH=/path/to/node24
 ```
 
-## Disclaimer 免责声明
+也可以手动安装：
 
-在 AGPL 下使用此代码。不提供任何保证。遵守你所在地区的法律！
+```bash
+npm install -g @deepseek-ai/dsh@latest
+```
 
-如果你想更改许可，请通过 <wyzlshx@foxmail.com> 与我联系。
+或者直接在 Claudero 中选择 DeepSeek 并发送请求。若找不到 `dsh`，Claudero 会
+显示 **Install DeepSeek Harness** 按钮。该按钮会在 macOS、Windows 和 Linux
+上将托管副本安装到 `~/.claudero/deepseek`，然后保存发现的 CLI 路径。安装需要
+用户点击确认，Claudero 不会静默安装软件包。`dsh web` 只会打开浏览器界面，不能
+代替 Claudero 所需的 CLI。
+
+DeepSeek 支持文本对话以及 `deepseek-v4-flash`、`deepseek-v4-pro` 模型。目前不
+支持图片附件、Zotero MCP、provider slash command、计划审批、分叉、回滚、compact
+或 provider 原生会话恢复。每轮 headless 请求都是独立进程，因此由 Claudero
+自行重放可见对话历史。每次重放最近 16 条非空消息，Zotero 重启后重新打开保存的
+会话也会重放历史。
+
+## 功能
+
+### Zotero 感知的科研对话
+
+对话输入框可以使用：
+
+- 当前选中的文库条目和集合。
+- 条目元数据、作者、摘要、标签、子笔记和附件路径。
+- 当前 PDF 附件和阅读器选区。
+- 选中的文本和 Zotero 批注（包括页码信息）。
+- 可用的本地 PDF 文件和 Zotero 全文缓存。
+
+当前上下文会自动附加。Claude 和 Codex 可以在上下文缺失或过期时通过 Zotero
+工具获取更完整的数据。DeepSeek 会收到序列化后的上下文和重放文本，但当前集成
+没有 Zotero MCP 工具桥。
+
+### 证据和引用
+
+Claude 和 Codex 可以使用内置 Zotero MCP 证据工具：
+
+- 搜索论文并返回编号证据。
+- 定位并验证精确引文。
+- 将文档地图展开为相关页码范围。
+- 使用渲染后的 PDF 页面检查图和表。
+- 验证主张并发现相互矛盾的证据。
+
+回答中的证据标记会变成低干扰的可点击链接，打开对应的 Zotero PDF 页面、批注
+或条目。DeepSeek 仍可以根据 prompt 和重放文本回答，但在当前集成中没有 MCP
+证据桥。
+
+### 学术工作流和 Skills
+
+普通自然语言请求在合适时会路由到内置工作流：
+
+- 总结论文。
+- 提取研究方法。
+- 构建文献矩阵。
+- 验证引用。
+
+Skill 可以声明所需的 Zotero 上下文、输出格式和工具策略。导入的 `SKILL.md`、
+MCP prompt、Markdown 和 JSON skill 默认禁用，审核后才会启用。学术 skill 默认
+只读 Zotero，不允许联网搜索或执行脚本，除非用户明确修改策略。
+
+### 对话和交互
+
+- 流式回答、思考块、工具卡片和用量活动信息。
+- 持久化对话历史，重启 Zotero 后自动重新打开。
+- provider 无法原生恢复会话时，自动重放跨 provider 历史。
+- 编辑用户消息、重试、复制、搜索、重命名和删除对话。
+- provider 专属模型和 reasoning effort 控制。
+- 交互式工具操作的权限对话框。
+- 用户可选择将最终回答插入 Zotero 笔记。
+- Helper 健康状态、运行时状态、诊断信息和事件 trace 导出。
+
+## 首选项
+
+General 面板包含跨 provider 的设置：
+
+- **Default provider**：Claude、Codex 或 DeepSeek Harness。
+- **Node.js path**：留空自动发现，或填写绝对路径。
+- **Workspace path**：provider 进程的工作目录。留空使用
+  `<Zotero profile>/claudero/workspace`。
+- **Helper port**：本地 Node helper 使用的 HTTP 端口，默认 `38660`。
+- **Proxy**：可选的 HTTP/HTTPS 网络代理。
+- **Environment variables**：每行一个 `KEY=VALUE`。provider 专属变量通常应
+  填在对应 provider 面板。
+
+MCP 面板可以启用内置 Zotero server，并配置外部 stdio 或 HTTP/SSE MCP server。
+Skills 面板用于管理内置和导入的学术 skill。Diagnostics 面板可以刷新运行时状态、
+导出诊断信息和重启 provider 服务。
+
+输入框权限模式包括 **Auto**、**Ask permissions**、**Accept edits**、**Plan**、
+**Don't ask** 和 **Bypass permissions**。实际可用模式和工具操作仍受所选 provider
+能力限制。
+
+不要将 API key 或其他密钥提交到仓库。优先使用 provider 环境变量面板或 provider
+自己的凭据存储。
+
+## 安全模型
+
+插件 UI 与本地 helper 只通过 loopback 通信。Provider 工具受当前权限模式和 provider
+安全设置约束。学术工作流默认只读；修改 Zotero 的工具需要用户批准，支持的修改会
+记录到 undo 栈。回答会先显示在面板中，用户再决定是否插入为笔记。
+
+## 故障排查
+
+### 找不到 Provider CLI
+
+将路径留空并重新打开面板以触发自动发现，或在 provider 面板填写绝对路径。DeepSeek
+可以点击警告卡中的 **Install DeepSeek Harness**，安装完成后重试。
+
+### DeepSeek 报 Node.js 兼容性错误
+
+安装 Node.js 24 或更高版本；如果不在标准路径，将其可执行文件设置到
+`DSH_NODE_PATH`。`dsh web` 与 Claudero 使用的 headless CLI 无关。
+
+### 认证或网络错误
+
+检查 provider 的 API key/登录状态、base URL、代理和 Diagnostics 面板。环境变量会
+传给 provider 子进程，修改后可能需要重启 provider runtime。
+
+### PDF 证据不完整
+
+在 Zotero Reader 中打开附件，并确认 Zotero 已建立索引。检查图表时保持 PDF 打开，
+这样才能使用页面渲染能力。
+
+## 开发和验证
+
+```bash
+npm install
+npm run build
+npm test
+npm run lint:check
+npm run test:runtime
+npm run test:helper:mock
+npm run test:evidence:ci
+```
+
+Helper smoke test 用于检查本地 HTTP 协议，可以针对当前机器上已安装的 provider
+运行：
+
+```bash
+npm run test:helper:quick
+npm run test:helper -- --providers deepseek
+```
+
+`npm test` 会运行 Zotero 浏览器测试，因此需要本机的 Zotero 程序和测试 profile。
+mock helper 测试不需要 provider 登录。正式发布前应完整运行 CI，并在干净的 Zotero
+profile 中安装生成的 XPI 做一次启动和对话验收。
+
+更多架构信息请阅读
+[doc/agent-architecture.md](agent-architecture.md)，其中介绍 provider 适配器、
+helper 协议、事件 trace、学术 skills 和 MCP 架构。
+
+## 许可证
+
+Claudero 使用 [AGPL-3.0-or-later](../LICENSE) 许可证。

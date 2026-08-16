@@ -1,6 +1,7 @@
 import { BasicTool } from "zotero-plugin-toolkit";
 import Addon from "./addon";
 import { config } from "../package.json";
+import { resolveBrowserGlobal } from "./utils/browserGlobals";
 
 const basicTool = new BasicTool();
 
@@ -15,6 +16,19 @@ if (!basicTool.getGlobal("Zotero")[config.addonInstance]) {
   defineBrowserGlobal("XMLSerializer");
   defineBrowserGlobal("HTMLCanvasElement");
   defineBrowserGlobal("FileReader");
+  defineBrowserGlobal("AbortController");
+  defineBrowserGlobal("AbortSignal");
+  defineBrowserGlobal("Blob");
+  defineBrowserGlobal("DOMException");
+  defineBrowserGlobal("FormData");
+  defineBrowserGlobal("Headers");
+  defineBrowserGlobal("Request");
+  defineBrowserGlobal("Response");
+  defineBrowserGlobal("TextDecoder");
+  defineBrowserGlobal("TextEncoder");
+  defineBrowserGlobal("URL");
+  defineBrowserGlobal("URLSearchParams");
+  defineBrowserGlobal("crypto");
   defineBrowserGlobal("MutationObserver");
   defineBrowserGlobal("ResizeObserver");
   defineBrowserGlobal("IntersectionObserver");
@@ -41,8 +55,5 @@ function defineGlobal(name: string, getter?: () => any) {
 }
 
 function defineBrowserGlobal(name: string): void {
-  defineGlobal(name, () => {
-    const mainWindow = Zotero.getMainWindow() as Window & Record<string, any>;
-    return mainWindow[name];
-  });
+  defineGlobal(name, () => resolveBrowserGlobal(name));
 }

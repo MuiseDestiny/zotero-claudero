@@ -7,7 +7,10 @@ type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
 type ContentBlock =
   | { type: "text"; text: string }
-  | { type: "image"; source: { type: "base64"; media_type: ImageMediaType; data: string } };
+  | {
+      type: "image";
+      source: { type: "base64"; media_type: ImageMediaType; data: string };
+    };
 
 type SDKUserMessage = {
   type: "user";
@@ -50,7 +53,11 @@ export class MessageChannel {
   private pendingResolve: (() => void) | null = null;
 
   async *[Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
-    while (!this.closed || this.queue.length > 0 || this.toolResultQueue.length > 0) {
+    while (
+      !this.closed ||
+      this.queue.length > 0 ||
+      this.toolResultQueue.length > 0
+    ) {
       if (this.toolResultQueue.length > 0) {
         const { toolUseId, result } = this.toolResultQueue.shift()!;
         yield {
@@ -66,7 +73,11 @@ export class MessageChannel {
           if (img && img.data && img.media_type) {
             content.push({
               type: "image",
-              source: { type: "base64", media_type: normalizeMediaType(img.media_type), data: img.data },
+              source: {
+                type: "base64",
+                media_type: normalizeMediaType(img.media_type),
+                data: img.data,
+              },
             });
           }
         }

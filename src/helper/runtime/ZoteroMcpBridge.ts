@@ -1,5 +1,6 @@
 import process from "node:process";
 import { AGENT_EVIDENCE_POLICY_MCP_INSTRUCTIONS } from "../../shared/agentEvidencePolicy";
+import { buildAuthenticatedZoteroPayload } from "../../shared/zoteroEndpointAuth";
 
 type JsonRecord = Record<string, unknown>;
 type McpContent =
@@ -34,6 +35,9 @@ interface JsonRpcRequest {
   method?: string;
   params?: unknown;
 }
+
+type StdioFraming = "content-length" | "line";
+const MAX_MCP_MESSAGE_BYTES = 8 * 1024 * 1024;
 
 function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === "object" ? (value as JsonRecord) : null;
@@ -183,7 +187,7 @@ function tools(): JsonRecord[] {
     {
       name: "get_evidence_pack",
       description:
-        "Build a citation-ready evidence pack for a Zotero item or attachment: ranked paragraphs, annotation provenance, page/open-pdf locators, and figure/table caption candidates with page-level visual evidence. Pass includePageImages=true when the PDF is open in Zotero Reader and a multimodal model needs rendered page screenshots.",
+        "Legacy ranked evidence helper for citation audits and verification workflows. For ordinary PDF Q&A, prefer get_numbered_evidence_pack so the model can choose source paragraph ids itself.",
       inputSchema: toolSchema({
         itemId: { type: "number" },
         attachmentId: { type: "number" },
@@ -197,9 +201,39 @@ function tools(): JsonRecord[] {
       }),
     },
     {
+      name: "get_numbered_evidence_pack",
+      description:
+        "Build Zotero-GPT-style numbered source context for a Zotero PDF. Ordinary PDFs return contextText with short citationMarkdown markers such as [Eabc123]; copy markers exactly without adding a URL. Long documents return a documentMap instead; call expand_evidence_range for relevant pages/sections before answering.",
+      inputSchema: toolSchema({
+        itemId: { type: "number" },
+        attachmentId: { type: "number" },
+        maxPages: { type: "number" },
+        includeAnnotations: { type: "boolean" },
+        maxContextChars: { type: "number" },
+        forceFull: { type: "boolean" },
+      }),
+    },
+    {
+      name: "expand_evidence_range",
+      description:
+        "Expand numbered source paragraphs from a long Zotero PDF by page range, source id range, or specific source ids. Use after get_numbered_evidence_pack returns mode='map'.",
+      inputSchema: toolSchema({
+        itemId: { type: "number" },
+        attachmentId: { type: "number" },
+        pageStart: { type: "number" },
+        pageEnd: { type: "number" },
+        sourceStart: { type: "string" },
+        sourceEnd: { type: "string" },
+        sourceIds: { type: "array", items: { type: "string" } },
+        maxPages: { type: "number" },
+        includeAnnotations: { type: "boolean" },
+        maxContextChars: { type: "number" },
+      }),
+    },
+    {
       name: "locate_quote",
       description:
-        "Locate a direct quote in Zotero evidence and return provenance: evidence id, page, paragraph/annotation, and zotero://open-pdf URI when available. Use before quoting text verbatim.",
+        "Locate an exact direct quote copied from Zotero evidence and return provenance: evidence id, page, paragraph/annotation, and zotero://open-pdf URI when available. Use before quoting text verbatim; do not pass broad questions or paraphrases as quote.",
       inputSchema: toolSchema(
         {
           quote: { type: "string" },
@@ -311,7 +345,7 @@ function tools(): JsonRecord[] {
     {
       name: "inspect_figure_table_page",
       description:
-        "Prepare a multimodal visual audit for a figure/table evidence page. Returns a strict inspection prompt plus the rendered PDF page as image content when the page is open in Zotero Reader. Use this before trusting figure/table claims or caption candidates.",
+        "Find and prepare a visual audit for a figure/table. Searches the full PDF when a label/query is given without a page. If it returns terminal=true or status='not_found', stop and report that the visual was not found; do not call locate_quote, shell/Python, or unrelated evidence tools. Otherwise inspect the rendered page before describing the visual.",
       inputSchema: toolSchema({
         itemId: { type: "number" },
         attachmentId: { type: "number" },
@@ -374,20 +408,36 @@ function tools(): JsonRecord[] {
   ];
 }
 
-function writeFrame(message: unknown): void {
-  const body = Buffer.from(JSON.stringify(message), "utf8");
+function writeMessage(message: unknown, framing: StdioFraming): void {
+  const json = JSON.stringify(message);
+  if (framing === "line") {
+    process.stdout.write(json + "\n");
+    return;
+  }
+  const body = Buffer.from(json, "utf8");
   process.stdout.write(`Content-Length: ${body.byteLength}\r\n\r\n`);
   process.stdout.write(body);
 }
 
-function result(id: number | string | undefined, value: unknown): void {
+function result(
+  id: number | string | undefined,
+  value: unknown,
+  framing: StdioFraming,
+): void {
   if (id === undefined) return;
-  writeFrame({ jsonrpc: "2.0", id, result: value });
+  writeMessage({ jsonrpc: "2.0", id, result: value }, framing);
 }
 
-function errorResponse(id: number | string | undefined, message: string): void {
+function errorResponse(
+  id: number | string | undefined,
+  message: string,
+  framing: StdioFraming,
+): void {
   if (id === undefined) return;
-  writeFrame({ jsonrpc: "2.0", id, error: { code: -32603, message } });
+  writeMessage(
+    { jsonrpc: "2.0", id, error: { code: -32603, message } },
+    framing,
+  );
 }
 
 async function requestPermission(
@@ -429,7 +479,9 @@ async function callZotero(
     response = await fetch(config.endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, ...args }),
+      body: JSON.stringify(
+        buildAuthenticatedZoteroPayload(action, args, config.token),
+      ),
     });
   } catch (error) {
     return {
@@ -468,20 +520,25 @@ function describeFetchError(error: unknown): string {
 async function handleRequest(
   config: BridgeConfig,
   request: JsonRpcRequest,
+  framing: StdioFraming,
 ): Promise<void> {
   const method = request.method || "";
   if (method === "notifications/initialized") return;
   if (method === "initialize") {
-    result(request.id, {
-      protocolVersion: "2024-11-05",
-      capabilities: { tools: {} },
-      serverInfo: { name: "zotero", version: "0.1.0" },
-      instructions: INSTRUCTIONS,
-    });
+    result(
+      request.id,
+      {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "zotero", version: "0.1.0" },
+        instructions: INSTRUCTIONS,
+      },
+      framing,
+    );
     return;
   }
   if (method === "tools/list") {
-    result(request.id, { tools: tools() });
+    result(request.id, { tools: tools() }, framing);
     return;
   }
   if (method === "tools/call") {
@@ -490,51 +547,125 @@ async function handleRequest(
     const args = asRecord(params.arguments) || {};
     if (!name) throw new Error("Missing tool name");
     const output = await callZotero(config, name, args);
-    result(request.id, {
-      content: toolContentFromOutput(output),
-      isError:
-        asRecord(output)?.success === false ||
-        typeof asRecord(output)?.error === "string",
-    });
+    result(
+      request.id,
+      {
+        content: toolContentFromOutput(output),
+        isError:
+          asRecord(output)?.success === false ||
+          typeof asRecord(output)?.error === "string",
+      },
+      framing,
+    );
     return;
   }
-  errorResponse(request.id, `Unsupported MCP method: ${method}`);
+  errorResponse(request.id, `Unsupported MCP method: ${method}`, framing);
+}
+
+function trimLeadingAsciiWhitespace(
+  buffer: Buffer<ArrayBufferLike>,
+): Buffer<ArrayBufferLike> {
+  let index = 0;
+  while (
+    index < buffer.length &&
+    (buffer[index] === 0x09 ||
+      buffer[index] === 0x0a ||
+      buffer[index] === 0x0d ||
+      buffer[index] === 0x20)
+  ) {
+    index++;
+  }
+  return index > 0 ? buffer.slice(index) : buffer;
+}
+
+function parseNextRequest(buffer: Buffer<ArrayBufferLike>): {
+  request: JsonRpcRequest;
+  framing: StdioFraming;
+  rest: Buffer<ArrayBufferLike>;
+} | null {
+  const trimmed = trimLeadingAsciiWhitespace(buffer);
+  if (trimmed.length === 0) return null;
+
+  if (trimmed[0] === 0x7b) {
+    const newline = trimmed.indexOf("\n");
+    if (newline < 0) return null;
+    const line = trimmed.slice(0, newline).toString("utf8").trim();
+    const rest = trimmed.slice(newline + 1);
+    if (!line) return { request: {}, framing: "line", rest };
+    return {
+      request: JSON.parse(line) as JsonRpcRequest,
+      framing: "line",
+      rest,
+    };
+  }
+
+  const headerEnd = trimmed.indexOf("\r\n\r\n");
+  if (headerEnd < 0) return null;
+  const header = trimmed.slice(0, headerEnd).toString("utf8");
+  const length = Number(header.match(/content-length:\s*(\d+)/i)?.[1]);
+  if (
+    !Number.isFinite(length) ||
+    length < 0 ||
+    length > MAX_MCP_MESSAGE_BYTES
+  ) {
+    throw new Error("Malformed MCP content-length header");
+  }
+  const bodyStart = headerEnd + 4;
+  const bodyEnd = bodyStart + length;
+  if (trimmed.length < bodyEnd) return null;
+  return {
+    request: JSON.parse(trimmed.slice(bodyStart, bodyEnd).toString("utf8")),
+    framing: "content-length",
+    rest: trimmed.slice(bodyEnd),
+  };
 }
 
 export function runZoteroMcpStdioServer(argv: string[]): void {
   const config = parseBridgeConfig(argv);
-  let buffer = Buffer.alloc(0);
+  let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  let draining = false;
   process.stdin.on("data", (chunk: Buffer) => {
     buffer = Buffer.concat([buffer, chunk]);
+    if (buffer.length > MAX_MCP_MESSAGE_BYTES) {
+      buffer = Buffer.alloc(0);
+      process.stderr.write("Claudero MCP request exceeded 8 MB\n");
+      return;
+    }
     void drain();
   });
 
   async function drain(): Promise<void> {
-    while (buffer.length > 0) {
-      const headerEnd = buffer.indexOf("\r\n\r\n");
-      if (headerEnd < 0) return;
-      const header = buffer.slice(0, headerEnd).toString("utf8");
-      const length = Number(header.match(/content-length:\s*(\d+)/i)?.[1]);
-      if (!Number.isFinite(length) || length < 0) return;
-      const bodyStart = headerEnd + 4;
-      const bodyEnd = bodyStart + length;
-      if (buffer.length < bodyEnd) return;
-      const body = buffer.slice(bodyStart, bodyEnd).toString("utf8");
-      buffer = buffer.slice(bodyEnd);
-      let request: JsonRpcRequest;
-      try {
-        request = JSON.parse(body) as JsonRpcRequest;
-      } catch {
-        continue;
+    if (draining) return;
+    draining = true;
+    try {
+      while (buffer.length > 0) {
+        let parsed: ReturnType<typeof parseNextRequest>;
+        try {
+          parsed = parseNextRequest(buffer);
+        } catch (error) {
+          buffer = Buffer.alloc(0);
+          errorResponse(
+            undefined,
+            error instanceof Error ? error.message : String(error),
+            "content-length",
+          );
+          return;
+        }
+        if (!parsed) return;
+        buffer = parsed.rest;
+        try {
+          await handleRequest(config, parsed.request, parsed.framing);
+        } catch (error) {
+          errorResponse(
+            parsed.request.id,
+            error instanceof Error ? error.message : String(error),
+            parsed.framing,
+          );
+        }
       }
-      try {
-        await handleRequest(config, request);
-      } catch (error) {
-        errorResponse(
-          request.id,
-          error instanceof Error ? error.message : String(error),
-        );
-      }
+    } finally {
+      draining = false;
+      if (buffer.length > 0) void drain();
     }
   }
 }

@@ -1,8 +1,11 @@
 import { getPref, setPref } from "../utils/prefs";
 import {
+  defaultEffortForProvider,
+  defaultModelForProvider,
   getProviderCapabilities,
   getProviderRuntimePrefs,
   normalizeProvider,
+  setProviderCliPath,
   type AiProvider,
   type CodexInstallationMethod,
   type CodexSafeMode,
@@ -14,9 +17,15 @@ import {
   isZoteroMcpEnabled,
   parseCustomMcpServers,
 } from "./mcpSettings";
+import { logDiagnostic } from "./diagnosticLog";
 import { getZoteroEndpointBaseUrl } from "./zoteroEndpoint";
 import type { AgentEventPayload } from "../shared/agentEvents";
 import { CLAUDERO_HELPER_VERSION as EXPECTED_HELPER_VERSION } from "../shared/helperProtocol";
+import type { ProviderModelDescriptor } from "../shared/providerModels";
+import type { AcademicToolPolicy } from "../shared/academicToolPolicy";
+import { windowsClaudeCandidates } from "../shared/windowsExecutablePaths";
+import { getOrCreateHelperToken } from "./helperToken";
+import { autoDetectSettings } from "./settingsAutoDetect";
 
 export type ClauderoQueryEvent = AgentEventPayload;
 
@@ -28,9 +37,10 @@ export interface ClauderoImageInput {
 export interface ClauderoQueryRequest {
   prompt: string;
   workspacePath: string;
-  provider?: "claude" | "codex";
+  provider?: AiProvider;
   claudePath?: string;
   codexPath?: string;
+  deepseekPath?: string;
   codexInstallationMethod?: CodexInstallationMethod;
   codexWslDistro?: string;
   codexSafeMode?: CodexSafeMode;
@@ -52,10 +62,11 @@ export interface ClauderoQueryRequest {
   images?: ClauderoImageInput[];
   conversationId?: string;
   providerState?: ConversationProviderState;
+  toolPolicy?: AcademicToolPolicy;
 }
 
 export interface ClauderoQueryOptions {
-  provider?: "claude" | "codex";
+  provider?: AiProvider;
   model?: string;
   effort?: string;
   additionalDirectories?: string[];
@@ -70,6 +81,7 @@ export interface ClauderoQueryOptions {
   images?: ClauderoImageInput[];
   conversationId?: string;
   providerState?: ConversationProviderState;
+  toolPolicy?: AcademicToolPolicy;
 }
 
 let helperProcess: nsIProcess | null = null;
@@ -87,40 +99,10 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
-function generateStableToken(): string {
-  const data = getProfilePath() + "claudero-salt-v1";
-  let h1 = 5381;
-  let h2 = 5381;
-  for (let i = 0; i < data.length; i++) {
-    h1 = ((h1 << 5) + h1 + data.charCodeAt(i)) | 0;
-    h2 = ((h2 << 3) ^ (h2 + data.charCodeAt(i) * 17)) | 0;
-  }
-  const a = Math.abs(h1).toString(16).padStart(8, "0");
-  const b = Math.abs(h2).toString(16).padStart(8, "0");
-  return (a + b + a + b).slice(0, 32);
-}
-
-async function getOrCreateHelperToken(): Promise<string> {
-  const tokenPath = PathUtils.join(
-    getProfilePath(),
-    "claudero",
-    "helper",
-    ".token",
-  );
-  try {
-    return (await IOUtils.readUTF8(tokenPath)).trim();
-  } catch {
-    const token = generateStableToken();
-    await IOUtils.makeDirectory(
-      PathUtils.join(getProfilePath(), "claudero", "helper"),
-      { createAncestors: true },
-    );
-    await IOUtils.writeUTF8(tokenPath, token);
-    return token;
-  }
-}
-
-function parseEnvironmentVariables(raw: string): Record<string, string> {
+function parseEnvironmentVariables(
+  raw: string,
+  inherited: Record<string, string> = {},
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -134,13 +116,62 @@ function parseEnvironmentVariables(raw: string): Record<string, string> {
     const value = normalized
       .slice(equals + 1)
       .trim()
-      .replace(/^["']|["']$/g, "");
+      .replace(/^["']|["']$/g, "")
+      .replace(
+        /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
+        (_match, braced, plain) => {
+          const name = String(braced || plain || "");
+          return env[name] ?? inherited[name] ?? Services.env.get(name) ?? "";
+        },
+      );
     if (key) env[key] = value;
   }
   return env;
 }
 
-function getClauderoEnvironment(): Record<string, string> {
+let proxyProbeCache:
+  | { proxy: string; reachable: boolean; checkedAt: number }
+  | undefined;
+
+async function isProxyReachable(proxy: string): Promise<boolean> {
+  const now = Date.now();
+  if (
+    proxyProbeCache?.proxy === proxy &&
+    now - proxyProbeCache.checkedAt < 30_000
+  ) {
+    return proxyProbeCache.reachable;
+  }
+  let url: URL;
+  try {
+    url = new URL(proxy);
+    if (!/^https?:$/.test(url.protocol)) return false;
+  } catch {
+    return false;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 900);
+  let reachable = false;
+  try {
+    await fetch(url.href, {
+      method: "HEAD",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    reachable = true;
+  } catch {
+    reachable = false;
+  } finally {
+    clearTimeout(timer);
+  }
+  proxyProbeCache = { proxy, reachable, checkedAt: now };
+  helperLog(
+    `proxy probe ${reachable ? "reachable" : "unreachable"}: ${url.protocol}//${url.host}`,
+  );
+  return reachable;
+}
+
+async function getClauderoEnvironment(): Promise<Record<string, string>> {
   const env: Record<string, string> = {};
 
   // Direct connections to the Anthropic API are geo-blocked in some regions
@@ -148,45 +179,49 @@ function getClauderoEnvironment(): Record<string, string> {
   // the Claude Code subprocess through a local/HTTP proxy. localhost is always
   // excluded so the helper's own loopback traffic is never proxied.
   const proxy = String(getPref("proxy") || "").trim();
-  if (proxy) {
+  if (proxy && (await isProxyReachable(proxy))) {
     env.HTTPS_PROXY = proxy;
     env.HTTP_PROXY = proxy;
     env.NO_PROXY = "localhost,127.0.0.1";
-    // Proxy SSL interception — Node.js doesn't trust proxy CA certs by default.
-    // User can override (set to "1") via environmentVariables preference.
-    env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
 
   // User-supplied variables (e.g. ANTHROPIC_API_KEY, a custom NO_PROXY)
   // override the proxy defaults above.
   return {
     ...env,
-    ...parseEnvironmentVariables(String(getPref("environmentVariables") || "")),
+    ...parseEnvironmentVariables(
+      String(getPref("environmentVariables") || ""),
+      env,
+    ),
   };
 }
 
-function getProviderEnvironment(provider: AiProvider): Record<string, string> {
+async function getProviderEnvironment(
+  provider: AiProvider,
+): Promise<Record<string, string>> {
   const runtime = getProviderRuntimePrefs(provider);
+  const base = await getClauderoEnvironment();
   return {
-    ...getClauderoEnvironment(),
-    ...parseEnvironmentVariables(runtime.environmentVariables),
+    ...base,
+    ...parseEnvironmentVariables(runtime.environmentVariables, base),
   };
 }
 
-function normalizeProviderPref(): "claude" | "codex" {
+function normalizeProviderPref(): AiProvider {
   return normalizeProvider(getPref("provider"));
 }
 
-function buildProviderPayload(provider: AiProvider) {
+async function buildProviderPayload(provider: AiProvider) {
   const runtime = getProviderRuntimePrefs(provider);
   return {
     provider,
     claudePath: provider === "claude" ? runtime.cliPath : undefined,
     codexPath: provider === "codex" ? runtime.cliPath : undefined,
+    deepseekPath: provider === "deepseek" ? runtime.cliPath : undefined,
     codexInstallationMethod: runtime.codexInstallationMethod,
     codexWslDistro: runtime.codexWslDistro,
     codexSafeMode: runtime.codexSafeMode,
-    environment: getProviderEnvironment(provider),
+    environment: await getProviderEnvironment(provider),
   };
 }
 
@@ -238,22 +273,38 @@ function getProfilePath(): string {
   const dir = profile.Profile?.dir;
   if (typeof dir === "string") return dir;
   if (dir && typeof dir === "object" && "path" in dir) {
-    return dir;
+    return (dir as nsIFile).path;
   }
   return Zotero.Profile.dir;
 }
 
-function resolveClaudePath(): string {
-  const configured = getProviderRuntimePrefs("claude").cliPath || "";
-  if (configured && fileExists(configured)) {
-    return configured;
+function getHomePath(): string {
+  const fromEnv =
+    Services.env.get("HOME") || Services.env.get("USERPROFILE") || "";
+  if (fromEnv && (fromEnv.startsWith("/") || /^[A-Z]:\\/i.test(fromEnv))) {
+    return fromEnv;
   }
 
   const profilePath = getProfilePath();
-  const home =
+  if (Zotero.isWin) return profilePath.split("\\AppData\\")[0] || "";
+  return (
     profilePath.split("/Library/Application Support/")[0] ||
     profilePath.split("/.zotero/")[0] ||
-    "";
+    ""
+  );
+}
+
+function resolveClaudePath(): string {
+  const configured = getProviderRuntimePrefs("claude").cliPath || "";
+  if (
+    configured &&
+    fileExists(configured) &&
+    (!Zotero.isWin || !/\.(?:cmd|bat)$/i.test(configured))
+  ) {
+    return configured;
+  }
+
+  const home = getHomePath();
   const candidates =
     Zotero.isMac || Zotero.isLinux
       ? [
@@ -268,11 +319,19 @@ function resolveClaudePath(): string {
           "/usr/local/bin/claude",
           "/usr/bin/claude",
         ]
-      : [
-          `${home}\\AppData\\Local\\Claude\\claude.exe`,
-          "C:\\Program Files\\Claude\\claude.exe",
-          "C:\\Program Files\\nodejs\\claude.exe",
-        ];
+      : windowsClaudeCandidates(
+          home,
+          {
+            appData: Services.env.get("APPDATA"),
+            localAppData: Services.env.get("LOCALAPPDATA"),
+            programFiles: Services.env.get("ProgramFiles"),
+            programFilesX86: Services.env.get("ProgramFiles(x86)"),
+          },
+          [
+            ...(configured ? [configured.replace(/[\\/][^\\/]+$/, "")] : []),
+            ...Services.env.get("PATH").split(";").filter(Boolean),
+          ],
+        );
 
   const found = candidates.find(fileExists);
   if (!found) {
@@ -289,11 +348,7 @@ function resolveCodexPath(): string {
     return configured;
   }
 
-  const profilePath = getProfilePath();
-  const home =
-    profilePath.split("/Library/Application Support/")[0] ||
-    profilePath.split("/.zotero/")[0] ||
-    "";
+  const home = getHomePath();
   const candidates =
     Zotero.isMac || Zotero.isLinux
       ? [
@@ -331,15 +386,35 @@ function resolveNodePath(): string {
     return configured;
   }
 
+  const pathEntries = Services.env
+    .get("PATH")
+    .split(Zotero.isWin ? ";" : ":")
+    .filter(Boolean);
+  const executableName = Zotero.isWin ? "node.exe" : "node";
   const candidates =
     Zotero.isMac || Zotero.isLinux
       ? [
+          ...pathEntries.map((entry) => PathUtils.join(entry, executableName)),
+          `${getHomePath()}/.volta/bin/node`,
+          `${getHomePath()}/.asdf/shims/node`,
           "/opt/homebrew/bin/node",
           "/usr/local/bin/node",
           "/usr/bin/node",
           "/bin/node",
         ]
       : [
+          ...pathEntries.map((entry) => PathUtils.join(entry, executableName)),
+          PathUtils.join(Services.env.get("NVM_SYMLINK"), "node.exe"),
+          PathUtils.join(
+            Services.env.get("ProgramFiles") || "C:\\Program Files",
+            "nodejs",
+            "node.exe",
+          ),
+          PathUtils.join(
+            Services.env.get("ProgramFiles(x86)") || "C:\\Program Files (x86)",
+            "nodejs",
+            "node.exe",
+          ),
           "C:\\Program Files\\nodejs\\node.exe",
           "C:\\Program Files (x86)\\nodejs\\node.exe",
         ];
@@ -359,6 +434,23 @@ async function readChromeText(url: string): Promise<string> {
     throw new Error(`Failed to read helper bundle: ${response.status}`);
   }
   return response.text();
+}
+
+async function fetchLoopbackHealth(
+  port: number,
+  token: string,
+  timeoutMs = 1200,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(`http://127.0.0.1:${port}/health`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function ensureHelperFile(): Promise<string> {
@@ -388,9 +480,7 @@ async function waitForHelper(
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const response = await fetchLoopbackHealth(port, token);
       if (response.ok) {
         helperLog(
           `helper ready port=${port} elapsedMs=${Date.now() - startedAt}`,
@@ -414,9 +504,7 @@ async function probePort(
   token: string,
 ): Promise<"reuse" | "occupied" | "free"> {
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/health`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const response = await fetchLoopbackHealth(port, token);
     if (response.ok) return "reuse";
     return "occupied";
   } catch {
@@ -463,6 +551,14 @@ async function startHelperOnPort(port: number, token: string): Promise<void> {
 }
 
 async function ensureClaudeHelperImpl(): Promise<void> {
+  // GUI-launched Zotero processes often inherit a reduced PATH. Run the same
+  // cross-platform discovery used by Preferences before resolving Node so
+  // NVM/Volta/custom Windows installations work without opening Preferences.
+  try {
+    await autoDetectSettings();
+  } catch (error) {
+    helperLog(`auto-detect failed: ${errorMessage(error)}`);
+  }
   const preferredPort = Number(getPref("helperPort") || 38660);
   const startedAt = Date.now();
   helperLog(`ensure start preferredPort=${preferredPort}`);
@@ -485,9 +581,7 @@ async function ensureClaudeHelperImpl(): Promise<void> {
 
     if (status === "reuse") {
       helperLog(`found helper candidate port=${p}`);
-      const healthResponse = await fetch(`http://127.0.0.1:${p}/health`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const healthResponse = await fetchLoopbackHealth(p, token);
       if (healthResponse.ok) {
         const healthData = (await healthResponse.json()) as unknown;
         const version =
@@ -582,12 +676,122 @@ export function ensureClaudeHelper(): Promise<void> {
   return helperEnsurePromise;
 }
 
+export async function prewarmClaudeHelper(): Promise<void> {
+  try {
+    await ensureClaudeHelper();
+    await initializePersistentQuery();
+  } catch (error) {
+    helperLog(`prewarm failed: ${errorMessage(error)}`);
+  }
+}
+
+export async function fetchProviderModels(
+  provider: AiProvider,
+): Promise<ProviderModelDescriptor[]> {
+  if (provider === "claude") return [];
+  await ensureClaudeHelper();
+  const port = Number(getPref("helperPort") || 38660);
+  const token = await getOrCreateHelperToken();
+  const response = await fetch(`http://127.0.0.1:${port}/models`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      workspacePath: getWorkspacePath(),
+      ...(await buildProviderPayload(provider)),
+      model: defaultModelForProvider(provider),
+      effort: defaultEffortForProvider(provider),
+      ...buildMcpPayload(provider),
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Failed to load ${provider} models: ${response.status} ${await response.text()}`,
+    );
+  }
+  const data = (await response.json()) as { models?: unknown };
+  const models = Array.isArray(data.models)
+    ? (data.models as ProviderModelDescriptor[]).filter(
+        (model) => !!model?.value && !!model?.label,
+      )
+    : [];
+  if (models.length > 0) persistentQueryInitialized = true;
+  return models;
+}
+
+export interface DeepSeekInstallResult {
+  cliPath: string;
+  installRoot: string;
+  nodePath: string;
+  version?: string;
+}
+
+export function isDeepSeekCliMissingError(
+  message: string | undefined,
+): boolean {
+  return (
+    !!message &&
+    /DeepSeek Harness CLI not found|dsh(?:\.cmd)? .*not found/i.test(message)
+  );
+}
+
+export async function installDeepSeekHarness(): Promise<DeepSeekInstallResult> {
+  await ensureClaudeHelper();
+  const port = Number(getPref("helperPort") || 38660);
+  const token = await getOrCreateHelperToken();
+  const response = await fetch(`http://127.0.0.1:${port}/install-deepseek`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    let message = body;
+    try {
+      const parsed = JSON.parse(body) as { error?: string };
+      message = parsed.error || body;
+    } catch {
+      // Preserve the raw helper response when it is not JSON.
+    }
+    throw new Error(
+      message || `DeepSeek installation failed: ${response.status}`,
+    );
+  }
+  const result = JSON.parse(body) as DeepSeekInstallResult;
+  if (!result.cliPath || !result.installRoot || !result.nodePath) {
+    throw new Error("DeepSeek Harness installation returned no CLI path.");
+  }
+  setProviderCliPath("deepseek", result.cliPath);
+  persistentQueryInitialized = false;
+  logDiagnostic("deepseek.install.complete", {
+    cliPath: result.cliPath,
+    installRoot: result.installRoot,
+    nodePath: result.nodePath,
+    version: result.version,
+  });
+  return result;
+}
+
 async function initializePersistentQuery(): Promise<void> {
   if (persistentQueryInitialized) return;
 
   const port = Number(getPref("helperPort") || 38660);
   const token = await getOrCreateHelperToken();
   const provider = normalizeProviderPref();
+  const startedAt = Date.now();
+  logDiagnostic("helper.init.start", {
+    provider,
+    port,
+    model: defaultModelForProvider(provider),
+    effort: defaultEffortForProvider(provider),
+    workspacePath: getWorkspacePath(),
+    enableZoteroMcp: isZoteroMcpEnabled(),
+  });
 
   const response = await fetch(`http://127.0.0.1:${port}/init`, {
     method: "POST",
@@ -597,25 +801,43 @@ async function initializePersistentQuery(): Promise<void> {
     },
     body: JSON.stringify({
       workspacePath: getWorkspacePath(),
-      ...buildProviderPayload(provider),
-      model: String(getPref("model") || "haiku") || undefined,
-      effort: String(getPref("effort") || "high") || undefined,
+      ...(await buildProviderPayload(provider)),
+      model: defaultModelForProvider(provider),
+      effort: defaultEffortForProvider(provider),
       ...buildMcpPayload(provider),
     }),
   });
 
   if (!response.ok) {
     const error = await response.text();
+    logDiagnostic(
+      "helper.init.error",
+      {
+        provider,
+        port,
+        status: response.status,
+        elapsedMs: Date.now() - startedAt,
+        body: error.slice(0, 800),
+      },
+      "error",
+    );
     throw new Error(`Failed to initialize persistent query: ${error}`);
   }
 
   persistentQueryInitialized = true;
+  logDiagnostic("helper.init.done", {
+    provider,
+    port,
+    elapsedMs: Date.now() - startedAt,
+  });
 }
 
 export async function* queryClaudeHelper(
   prompt: string,
   options: ClauderoQueryOptions = {},
 ): AsyncGenerator<ClauderoQueryEvent> {
+  const requestId = `query-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const startedAt = Date.now();
   await ensureClaudeHelper();
 
   // Try to use persistent query (new fast path)
@@ -638,53 +860,61 @@ export async function* queryClaudeHelper(
   const images = providerCapabilities.supportsImageAttachments
     ? options.images
     : undefined;
+  logDiagnostic("helper.query.start", {
+    requestId,
+    provider,
+    port,
+    promptLength: prompt.length,
+    imageCount: images?.length || 0,
+    persistentQueryInitialized,
+    conversationId: options.conversationId,
+    model: options.model,
+    effort: options.effort,
+    permissionMode: options.permissionMode,
+  });
 
   let response: Response;
 
   if (persistentQueryInitialized) {
-    // Use new /send endpoint (fast path with persistent query)
-    try {
-      response = await fetch(`http://127.0.0.1:${port}/send`, {
-        method: "POST",
-        signal: options.signal,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          prompt,
-          ...buildProviderPayload(provider),
-          // Always send the current claudePath/environment so the helper can
-          // detect changes (e.g. a newly configured proxy) and restart the
-          // persistent query instead of reusing a stale, geo-blocked session.
-          model: options.model,
-          effort: options.effort,
-          additionalDirectories: options.additionalDirectories,
-          permissionMode: options.permissionMode,
-          ...buildMcpPayload(provider, prompt),
-          images,
-          conversationId: options.conversationId,
-          providerState: options.providerState,
-        }),
-      });
-
-      // If /send succeeds, use it
-      if (response.ok) {
-        // Stream events from /send endpoint
-        yield* streamResponseEvents(response);
-        return;
-      }
-
-      // Fall back to legacy /query
-      ztoolkit.log(
-        "Failed to use /send endpoint, falling back to legacy /query",
-      );
-    } catch (error) {
-      ztoolkit.log(
-        "Failed to use /send endpoint, falling back to legacy /query:",
-        error,
+    response = await fetch(`http://127.0.0.1:${port}/send`, {
+      method: "POST",
+      signal: options.signal,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt,
+        ...(await buildProviderPayload(provider)),
+        model: options.model,
+        effort: options.effort,
+        additionalDirectories: options.additionalDirectories,
+        permissionMode: options.permissionMode,
+        ...buildMcpPayload(provider, prompt),
+        images,
+        conversationId: options.conversationId,
+        providerState: options.providerState,
+        toolPolicy: options.toolPolicy,
+      }),
+    });
+    logDiagnostic("helper.send.response", {
+      requestId,
+      provider,
+      status: response.status,
+      elapsedMs: Date.now() - startedAt,
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Claudero helper send failed: ${response.status} ${await response.text()}`,
       );
     }
+    yield* streamResponseEvents(response);
+    logDiagnostic("helper.send.stream.done", {
+      requestId,
+      provider,
+      elapsedMs: Date.now() - startedAt,
+    });
+    return;
   }
 
   // Use legacy /query endpoint (slow but compatible)
@@ -698,7 +928,7 @@ export async function* queryClaudeHelper(
     body: JSON.stringify({
       prompt,
       workspacePath: getWorkspacePath(),
-      ...buildProviderPayload(provider),
+      ...(await buildProviderPayload(provider)),
       model: options.model,
       effort: options.effort,
       additionalDirectories: options.additionalDirectories,
@@ -707,10 +937,22 @@ export async function* queryClaudeHelper(
       images,
       conversationId: options.conversationId,
       providerState: options.providerState,
+      toolPolicy: options.toolPolicy,
     } satisfies ClauderoQueryRequest),
+  });
+  logDiagnostic("helper.query.response", {
+    requestId,
+    provider,
+    status: response.status,
+    elapsedMs: Date.now() - startedAt,
   });
 
   yield* streamResponseEvents(response);
+  logDiagnostic("helper.query.stream.done", {
+    requestId,
+    provider,
+    elapsedMs: Date.now() - startedAt,
+  });
 }
 
 export async function runAuxClaudeQuery(
@@ -743,7 +985,7 @@ export async function runAuxClaudeQuery(
         prompt,
         systemPrompt: options.systemPrompt,
         workspacePath: getWorkspacePath(),
-        ...buildProviderPayload(normalizeProviderPref()),
+        ...(await buildProviderPayload(normalizeProviderPref())),
         model:
           options.model || String(getPref("model") || "haiku") || undefined,
         effort:
@@ -893,11 +1135,14 @@ async function runCliLogin(
   args: string[],
   label: string,
 ): Promise<void> {
+  const nodeScript = /\.(?:cjs|mjs|js)$/i.test(cliPath);
+  const executablePath = nodeScript ? resolveNodePath() : cliPath;
+  const executableArgs = nodeScript ? [cliPath, ...args] : args;
   if (Zotero.isMac) {
     const scriptDir = PathUtils.join(getProfilePath(), "claudero");
     await IOUtils.makeDirectory(scriptDir, { createAncestors: true });
     const scriptPath = PathUtils.join(scriptDir, `${label}-auth.command`);
-    const env = getClauderoEnvironment();
+    const env = await getClauderoEnvironment();
     const envLines = Object.entries(env).map(
       ([key, value]) => `export ${key}=${shellQuote(value)}`,
     );
@@ -907,20 +1152,21 @@ async function runCliLogin(
       [
         "#!/bin/zsh",
         "set -e",
+        "trap 'rm -f -- \"$0\"' EXIT",
         ...envLines,
-        `${shellQuote(cliPath)} ${args.map(shellQuote).join(" ")}`,
+        `${shellQuote(executablePath)} ${executableArgs.map(shellQuote).join(" ")}`,
         "echo",
         `echo '${label} auth finished. You can close this window.'`,
         "read -k 1 '?Press any key to close...'",
         "",
       ].join("\n"),
     );
-    await Zotero.Utilities.Internal.exec("/bin/chmod", ["+x", scriptPath]);
+    await Zotero.Utilities.Internal.exec("/bin/chmod", ["700", scriptPath]);
     await Zotero.Utilities.Internal.exec("/usr/bin/open", [scriptPath]);
     return;
   }
 
-  await Zotero.Utilities.Internal.exec(cliPath, args);
+  await Zotero.Utilities.Internal.exec(executablePath, executableArgs);
 }
 
 export async function runClaudeAuthLogin(): Promise<void> {
@@ -931,6 +1177,11 @@ export async function runProviderAuthLogin(): Promise<void> {
   if (normalizeProviderPref() === "codex") {
     await runCliLogin(resolveCodexPath(), ["login"], "codex");
     return;
+  }
+  if (normalizeProviderPref() === "deepseek") {
+    throw new Error(
+      "DeepSeek Harness has no interactive login command. Set DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL or configure the official dsh credentials in ~/.dsh (optionally set DSH_HOME).",
+    );
   }
   await runClaudeAuthLogin();
 }

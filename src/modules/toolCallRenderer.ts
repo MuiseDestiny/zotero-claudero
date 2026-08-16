@@ -80,7 +80,9 @@ function summarizeCommand(command: unknown): string {
   const gitMatch = raw.match(/\bgit\s+([^\s;&|]+)/i);
   if (gitMatch) return `git ${gitMatch[1]}`;
   const first = raw.match(/^[^\s;&|]+/);
-  return compactActivityValue(first ? basename(first[0]) : raw, 22) || "command";
+  return (
+    compactActivityValue(first ? basename(first[0]) : raw, 22) || "command"
+  );
 }
 
 function questionSummary(input: unknown, max = 160): string {
@@ -364,14 +366,14 @@ export function getToolActivityDescription(
     return `Running ${summarizeCommand(record?.command ?? input)}`;
   }
   const target = record
-    ? (record.file_path ||
-        record.path ||
-        record.pattern ||
-        record.query ||
-        record.prompt ||
-        record.action ||
-        record.itemId ||
-        record.attachmentId)
+    ? record.file_path ||
+      record.path ||
+      record.pattern ||
+      record.query ||
+      record.prompt ||
+      record.action ||
+      record.itemId ||
+      record.attachmentId
     : input;
   const suffix = compactActivityValue(target);
   const withSuffix = (verb: string) => (suffix ? `${verb} ${suffix}` : verb);

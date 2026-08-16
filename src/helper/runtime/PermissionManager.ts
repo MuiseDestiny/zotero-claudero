@@ -1,3 +1,8 @@
+import {
+  toolPolicyDenialReason,
+  type AcademicToolPolicy,
+} from "../../shared/academicToolPolicy";
+
 export interface PermissionRequest {
   id: string;
   toolName: string;
@@ -12,6 +17,7 @@ export interface PermissionDecision {
 interface PendingPermissionRequest {
   resolve: (decision: PermissionDecision) => void;
   request: PermissionRequest;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 export type ToolDecision =
@@ -33,73 +39,76 @@ export interface ToolOptions {
   toolUseID?: string;
 }
 
-const READ_ONLY_ZOTERO_ACTIONS = new Set([
-  "get_current_context",
-  "get_item",
-  "search_items",
-  "get_annotations",
-  "get_attachment_path",
-  "get_evidence_pack",
-  "build_academic_trace",
-  "build_trust_report",
-  "inspect_figure_table_page",
-  "locate_quote",
-  "verify_citations",
-  "list_history",
-]);
+const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000;
 
-function isReadOnlyZoteroCall(
-  toolName: string,
-  toolInput: Record<string, unknown>,
-): boolean {
-  if (toolName !== "Bash") return false;
-  const command = toolInput.command;
-  if (
-    typeof command !== "string" ||
-    !/127\.0\.0\.1:\d+\/claudero/.test(command)
-  ) {
-    return false;
+function stableValue(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableValue).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableValue(entry)}`)
+      .join(",")}}`;
   }
-  const action = command.match(/"action"\s*:\s*"(\w+)"/)?.[1];
-  return !!action && READ_ONLY_ZOTERO_ACTIONS.has(action);
+  return JSON.stringify(value) ?? String(value);
 }
 
 export class PermissionManager {
-  private currentRequest: PermissionRequest | null = null;
   private pendingRequests = new Map<string, PendingPermissionRequest>();
+  private requestQueue: string[] = [];
   private rememberedAllows = new Set<string>();
+  private toolPolicy: AcademicToolPolicy | undefined;
 
-  private rememberKey(toolName: string): string {
-    return toolName.replace(/\s+/g, " ").trim().toLowerCase();
+  setToolPolicy(policy: AcademicToolPolicy | undefined): void {
+    this.toolPolicy = policy;
   }
 
-  isRemembered(toolName: string): boolean {
-    return this.rememberedAllows.has(this.rememberKey(toolName));
+  getToolPolicyDenial(toolName: string): string | null {
+    return toolPolicyDenialReason(toolName, this.toolPolicy);
   }
 
-  remember(toolName: string): void {
-    this.rememberedAllows.add(this.rememberKey(toolName));
+  private rememberKey(toolName: string, input: unknown): string {
+    const normalizedTool = toolName.replace(/\s+/g, " ").trim().toLowerCase();
+    return `${normalizedTool}:${stableValue(input)}`;
+  }
+
+  isRemembered(toolName: string, input: unknown): boolean {
+    return this.rememberedAllows.has(this.rememberKey(toolName, input));
+  }
+
+  remember(toolName: string, input: unknown): void {
+    this.rememberedAllows.add(this.rememberKey(toolName, input));
   }
 
   getCurrentRequest(): PermissionRequest | null {
-    return this.currentRequest;
+    while (this.requestQueue.length > 0) {
+      const pending = this.pendingRequests.get(this.requestQueue[0]);
+      if (pending) return pending.request;
+      this.requestQueue.shift();
+    }
+    return null;
   }
 
   request(request: PermissionRequest): Promise<PermissionDecision> {
+    if (this.getToolPolicyDenial(request.toolName)) {
+      return Promise.resolve({ allowed: false });
+    }
     return new Promise((resolve) => {
-      this.pendingRequests.set(request.id, { resolve, request });
-      this.currentRequest = request;
+      const timer = setTimeout(
+        () => this.resolve(request.id, { allowed: false }),
+        PERMISSION_TIMEOUT_MS,
+      );
+      this.pendingRequests.set(request.id, { resolve, request, timer });
+      this.requestQueue.push(request.id);
     });
   }
 
   resolve(requestId: string, decision: PermissionDecision): boolean {
     const pending = this.pendingRequests.get(requestId);
     if (!pending) return false;
+    clearTimeout(pending.timer);
     pending.resolve(decision);
     this.pendingRequests.delete(requestId);
-    if (this.currentRequest?.id === requestId) {
-      this.currentRequest = null;
-    }
+    this.requestQueue = this.requestQueue.filter((id) => id !== requestId);
     return true;
   }
 
@@ -111,7 +120,7 @@ export class PermissionManager {
     for (const [id] of this.pendingRequests) {
       this.cancel(id);
     }
-    this.currentRequest = null;
+    this.requestQueue = [];
   }
 
   createCanUseToolHandler(): (
@@ -120,14 +129,16 @@ export class PermissionManager {
     toolOptions: ToolOptions,
   ) => Promise<ToolDecision> {
     return async (toolName, toolInput, toolOptions) => {
-      if (isReadOnlyZoteroCall(toolName, toolInput)) {
+      const policyDenial = this.getToolPolicyDenial(toolName);
+      if (policyDenial) {
         return {
-          behavior: "allow",
-          updatedInput: toolInput,
+          behavior: "deny",
+          message: policyDenial,
+          interrupt: false,
           toolUseID: toolOptions.toolUseID,
         };
       }
-      if (this.isRemembered(toolName)) {
+      if (this.isRemembered(toolName, toolInput)) {
         return {
           behavior: "allow",
           updatedInput: toolInput,
@@ -151,7 +162,7 @@ export class PermissionManager {
       try {
         const decision = await permissionPromise;
         if (decision.allowed) {
-          if (decision.remember) this.remember(toolName);
+          if (decision.remember) this.remember(toolName, toolInput);
           return {
             behavior: "allow",
             updatedInput: toolInput,

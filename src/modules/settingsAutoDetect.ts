@@ -4,11 +4,13 @@ import {
   type AiProvider,
 } from "./providerRegistry";
 import { getPref, setPref } from "../utils/prefs";
+import { windowsClaudeCandidates } from "../shared/windowsExecutablePaths";
 
 export interface SettingsAutoDetectResult {
   nodePath?: string;
   claudePath?: string;
   codexPath?: string;
+  deepseekPath?: string;
 }
 
 function fileExists(path: string): boolean {
@@ -61,23 +63,58 @@ function getHomePath(): string {
 
 function pathCandidates(executableName: string): string[] {
   const home = getHomePath();
+  const managedDeepSeekEntrypoint = PathUtils.join(
+    home,
+    ".claudero",
+    "deepseek",
+    "node_modules",
+    "@deepseek-ai",
+    "dsh",
+    "lib",
+    "bin.js",
+  );
   const pathDirs = Services.env
     .get("PATH")
     .split(Zotero.isWin ? ";" : ":")
     .filter(Boolean);
 
   if (Zotero.isWin) {
-    const exe = `${executableName}.exe`;
+    const executables =
+      executableName === "dsh"
+        ? ["dsh.cmd", "dsh.exe"]
+        : [`${executableName}.exe`];
+    const environment = {
+      appData: Services.env.get("APPDATA"),
+      localAppData: Services.env.get("LOCALAPPDATA"),
+      programFiles: Services.env.get("ProgramFiles"),
+      programFilesX86: Services.env.get("ProgramFiles(x86)"),
+    };
     return unique([
-      ...pathDirs.map((dir) => PathUtils.join(dir, exe)),
-      PathUtils.join(home, "AppData", "Local", executableName, exe),
-      PathUtils.join(home, "AppData", "Local", "Programs", executableName, exe),
-      PathUtils.join("C:\\Program Files", executableName, exe),
-      PathUtils.join("C:\\Program Files\\nodejs", exe),
+      ...(executableName === "dsh" ? [managedDeepSeekEntrypoint] : []),
+      ...pathDirs.flatMap((dir) =>
+        executables.map((executable) => PathUtils.join(dir, executable)),
+      ),
+      ...(executableName === "claude"
+        ? windowsClaudeCandidates(home, environment, pathDirs)
+        : []),
+      ...executables.flatMap((executable) => [
+        PathUtils.join(home, "AppData", "Local", executableName, executable),
+        PathUtils.join(
+          home,
+          "AppData",
+          "Local",
+          "Programs",
+          executableName,
+          executable,
+        ),
+        PathUtils.join("C:\\Program Files", executableName, executable),
+        PathUtils.join("C:\\Program Files\\nodejs", executable),
+      ]),
     ]);
   }
 
   return unique([
+    ...(executableName === "dsh" ? [managedDeepSeekEntrypoint] : []),
     ...pathDirs.map((dir) => PathUtils.join(dir, executableName)),
     PathUtils.join(home, ".claude", "local", executableName),
     PathUtils.join(home, ".npm-global", "bin", executableName),
@@ -128,14 +165,17 @@ export async function autoDetectSettings(): Promise<SettingsAutoDetectResult> {
     }
   }
 
-  const providers: AiProvider[] = ["claude", "codex"];
+  const providers: AiProvider[] = ["claude", "codex", "deepseek"];
   for (const provider of providers) {
     if (getProviderCliPath(provider)) continue;
-    const cliPath = await findExecutable(provider);
+    const cliPath = await findExecutable(
+      provider === "deepseek" ? "dsh" : provider,
+    );
     if (!cliPath) continue;
     setProviderCliPath(provider, cliPath);
     if (provider === "claude") result.claudePath = cliPath;
-    else result.codexPath = cliPath;
+    else if (provider === "codex") result.codexPath = cliPath;
+    else result.deepseekPath = cliPath;
   }
 
   return result;

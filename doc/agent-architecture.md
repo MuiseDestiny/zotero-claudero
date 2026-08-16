@@ -1,9 +1,11 @@
 # Claudero Agent Architecture
 
-Claudero treats Claude Code and Codex as agent runtimes behind a shared helper
+Claudero treats Claude Code, Codex, and DeepSeek Harness as agent runtimes behind a shared helper
 protocol. The goal is to keep Zotero UI code provider-neutral while each runtime
 adapter owns provider-specific launch, session, stream, permission, and command
-details.
+details. DeepSeek Harness is launched through its documented `dsh --profile
+headless "task"` entry point; its final stdout is normalized into the shared
+stream protocol while the Zotero conversation supplies cross-turn context.
 
 ## Layers
 
@@ -13,7 +15,7 @@ details.
   preferences and conversation state into helper requests, gated by provider
   capabilities.
 - Helper runtime adapters: `src/helper/runtime/AgentRuntimeAdapter.ts` exposes a
-  common adapter interface for Claude and Codex runtimes.
+  common adapter interface for Claude, Codex, and DeepSeek Harness runtimes.
 - Event protocol: `src/shared/agentEvents.ts` defines versioned event envelopes,
   traces, and replay helpers.
 - Conversation state: `src/modules/providerSessionState.ts` merges provider

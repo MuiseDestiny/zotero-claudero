@@ -32,9 +32,11 @@ import {
   type AcademicSkill,
   type AcademicSkillRecord,
 } from "./academicSkills";
+import { ensureClaudeHelper, fetchProviderModels } from "./claudeHelperClient";
 import { exportDiagnosticLog } from "./diagnosticLog";
 import { autoDetectSettings } from "./settingsAutoDetect";
 import { getPref, setPref } from "../utils/prefs";
+import { getString } from "../utils/locale";
 
 type XulValueElement = HTMLElement & {
   value: string;
@@ -59,6 +61,9 @@ export async function registerPrefsScripts(window: Window) {
     hostKey;
   doc.querySelector<HTMLElement>("#claudero-pref-host-key-codex")!.textContent =
     hostKey;
+  doc.querySelector<HTMLElement>(
+    "#claudero-pref-host-key-deepseek",
+  )!.textContent = hostKey;
 
   const tabs = Array.from(
     doc.querySelectorAll(".claudero-pref-tab"),
@@ -70,34 +75,46 @@ export async function registerPrefsScripts(window: Window) {
   const tabIndicator = doc.querySelector<HTMLElement>(
     "#claudero-pref-tab-indicator",
   );
-  const updateTabIndicator = () => {
-    if (!tabNav || !tabIndicator) return;
-    const active = tabs.find((tab) => tab.dataset.active === "true");
-    if (!active) {
-      delete tabNav.dataset.indicatorReady;
-      return;
-    }
-    tabIndicator.style.left = `${active.offsetLeft}px`;
-    tabIndicator.style.width = `${active.offsetWidth}px`;
-    if (active.offsetWidth > 0) {
+  const getActiveTab = () => tabs.find((tab) => tab.dataset.active === "true");
+  const moveTabIndicator = (tab: HTMLElement) => {
+    if (!tabIndicator) return;
+    tabIndicator.style.left = `${tab.offsetLeft}px`;
+    tabIndicator.style.width = `${tab.offsetWidth}px`;
+  };
+  const setTabIndicatorReady = (tab: HTMLElement) => {
+    if (!tabNav) return false;
+    const ready = tab.offsetWidth > 0;
+    if (ready) {
       tabNav.dataset.indicatorReady = "true";
     } else {
       delete tabNav.dataset.indicatorReady;
     }
+    return ready;
   };
-  const scheduleTabIndicatorUpdate = () => {
-    updateTabIndicator();
-    window.requestAnimationFrame(() => {
-      updateTabIndicator();
-      window.requestAnimationFrame(updateTabIndicator);
-    });
-    window.setTimeout(updateTabIndicator, 60);
+  const syncTabIndicator = (
+    tab: HTMLElement | undefined = getActiveTab(),
+    attempts = 0,
+  ) => {
+    if (!tabNav || !tabIndicator) return;
+    if (!tab || tab.dataset.active !== "true") {
+      delete tabNav.dataset.indicatorReady;
+      return;
+    }
+    tabIndicator.style.transition = "none";
+    moveTabIndicator(tab);
+    tabIndicator.getBoundingClientRect();
+    const ready = setTabIndicatorReady(tab);
+    tabIndicator.style.transition = "";
+    if (!ready && attempts < 20) {
+      window.setTimeout(() => syncTabIndicator(tab, attempts + 1), 50);
+    }
   };
   const showPanel = (name: string) => {
     const normalized = [
       "general",
       "claude",
       "codex",
+      "deepseek",
       "mcp",
       "skills",
       "diagnostics",
@@ -112,25 +129,195 @@ export async function registerPrefsScripts(window: Window) {
     panels.forEach((panel) => {
       panel.hidden = panel.id !== `claudero-pref-panel-${normalized}`;
     });
-    scheduleTabIndicatorUpdate();
+    const activeTab = getActiveTab();
+    if (!activeTab) return;
+    moveTabIndicator(activeTab);
+    if (!setTabIndicatorReady(activeTab)) {
+      window.setTimeout(() => syncTabIndicator(activeTab), 50);
+    }
   };
   tabs.forEach((tab) => {
     tab.addEventListener("click", () =>
       showPanel(tab.dataset.panel || "general"),
     );
   });
-  window.addEventListener("resize", scheduleTabIndicatorUpdate);
+  window.addEventListener("resize", () => syncTabIndicator());
 
   bindProviderPath(doc, "claude");
   bindProviderPath(doc, "codex");
+  bindProviderPath(doc, "deepseek");
   bindProviderEnvironment(doc, "claude");
   bindProviderEnvironment(doc, "codex");
+  bindProviderEnvironment(doc, "deepseek");
   bindCodexSettings(doc);
   bindMcpSettings(doc);
   bindAcademicSkills(doc);
+  bindSetupWizard(doc);
   bindDiagnostics(doc);
   showPanel(String(getPref("settingsProvider") || "general"));
-  scheduleTabIndicatorUpdate();
+  window.setTimeout(() => syncTabIndicator(), 50);
+}
+
+function setupFileExists(value: string): boolean {
+  const candidate = value.trim();
+  if (!candidate) return false;
+  try {
+    const file = (Components.classes as any)[
+      "@mozilla.org/file/local;1"
+    ].createInstance(Components.interfaces.nsIFile) as nsIFile;
+    file.initWithPath(candidate);
+    return file.exists() && file.isFile();
+  } catch {
+    return false;
+  }
+}
+
+function setupEnvironmentKeys(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^export\s+/, ""))
+    .map((line) => {
+      const equals = line.indexOf("=");
+      return equals > 0 ? line.slice(0, equals).trim() : "";
+    })
+    .filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
+}
+
+function bindSetupWizard(doc: Document): void {
+  const runButton = doc.querySelector<HTMLButtonElement>(
+    "#claudero-pref-setup-run",
+  );
+  const status = doc.querySelector<HTMLElement>("#claudero-pref-setup-status");
+  const details = doc.querySelector<HTMLElement>(
+    "#claudero-pref-setup-details",
+  );
+  if (!runButton || !status || !details) return;
+
+  type SetupRowState = "success" | "error" | "info";
+  const createRow = (
+    label: string,
+    rowState: SetupRowState,
+    detail: string,
+  ): HTMLElement => {
+    const row = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "div",
+    ) as HTMLElement;
+    row.className = `claudero-pref-setup-row ${rowState}`;
+    const marker = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "span",
+    ) as HTMLElement;
+    marker.textContent =
+      rowState === "success" ? "✓" : rowState === "error" ? "!" : "i";
+    const text = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "span",
+    ) as HTMLElement;
+    text.textContent = `${label}: ${detail}`;
+    row.append(marker, text);
+    return row;
+  };
+
+  const run = async () => {
+    runButton.disabled = true;
+    status.classList.remove("error", "success");
+    status.textContent = getString("pref-setup-running");
+    details.replaceChildren();
+    try {
+      const detected = await autoDetectSettings();
+      const provider = String(getPref("provider") || "claude") as AiProvider;
+      const nodePath = String(getPref("nodePath") || "");
+      const cliPath = getProviderCliPath(provider);
+      const envKeys = setupEnvironmentKeys(getProviderEnvironment(provider));
+      let helperReady = false;
+      let helperError = "";
+      try {
+        await ensureClaudeHelper();
+        helperReady = true;
+      } catch (error) {
+        helperError = error instanceof Error ? error.message : String(error);
+      }
+      const nodeOk = setupFileExists(nodePath);
+      const cliOk = setupFileExists(cliPath);
+      let runtimeState: SetupRowState = "info";
+      let runtimeDetail = getString("pref-setup-runtime-not-checked");
+      if (provider === "deepseek") {
+        if (nodeOk && cliOk && helperReady) {
+          try {
+            // /models runs the same DeepSeek Node/entrypoint resolution used by
+            // a real request, without contacting the model API.
+            await fetchProviderModels("deepseek");
+            runtimeState = "success";
+            runtimeDetail = getString("pref-setup-runtime-ready");
+          } catch (error) {
+            runtimeState = "error";
+            runtimeDetail =
+              error instanceof Error ? error.message : String(error);
+          }
+        }
+      }
+      details.append(
+        createRow(
+          getString("pref-setup-node"),
+          nodeOk ? "success" : "error",
+          nodeOk ? nodePath : getString("pref-setup-missing"),
+        ),
+        createRow(
+          getString("pref-setup-cli", { args: { provider } }),
+          cliOk ? "success" : "error",
+          cliOk ? cliPath : getString("pref-setup-missing"),
+        ),
+        createRow(
+          getString("pref-setup-env"),
+          envKeys.length > 0 ? "success" : "info",
+          envKeys.length > 0
+            ? envKeys.join(", ")
+            : getString("pref-setup-env-empty"),
+        ),
+        createRow(
+          getString("pref-setup-helper"),
+          helperReady ? "success" : "error",
+          helperReady ? getString("pref-setup-ready") : helperError,
+        ),
+      );
+      if (provider === "deepseek") {
+        details.append(
+          createRow(
+            getString("pref-setup-runtime"),
+            runtimeState,
+            runtimeDetail,
+          ),
+        );
+      }
+      const allRuntimeChecksPassed =
+        provider !== "deepseek" || runtimeState === "success";
+      const allOk = nodeOk && cliOk && helperReady && allRuntimeChecksPassed;
+      status.textContent = allOk
+        ? getString("pref-setup-complete")
+        : getString("pref-setup-action-needed");
+      status.classList.add(allOk ? "success" : "error");
+      setPref("setupChecked", true);
+      if (
+        detected.nodePath ||
+        detected.claudePath ||
+        detected.codexPath ||
+        detected.deepseekPath
+      ) {
+        status.textContent = `${status.textContent} ${getString("pref-setup-auto-detected")}`;
+      }
+    } catch (error) {
+      status.textContent = getString("pref-setup-failed", {
+        args: { error: error instanceof Error ? error.message : String(error) },
+      });
+      status.classList.add("error");
+    } finally {
+      runButton.disabled = false;
+    }
+  };
+
+  runButton.addEventListener("click", () => void run());
+  if (getPref("setupChecked") !== true) void run();
 }
 
 async function readHelperToken(): Promise<string> {
@@ -282,18 +469,18 @@ function bindMcpSettings(doc: Document): void {
     const value = raw.trim();
     status.classList.remove("error", "success");
     if (!value) {
-      status.textContent = "No external MCP servers configured";
+      status.textContent = getString("mcp-no-configured");
       return;
     }
     try {
       const count = Object.keys(parseCustomMcpServers(value)).length;
-      status.textContent = `MCP JSON saved (${count} server${count === 1 ? "" : "s"})`;
+      status.textContent = getString("mcp-saved", { args: { count } });
       status.classList.add("success");
     } catch (error) {
       status.textContent =
         error instanceof Error
           ? `Invalid MCP JSON: ${error.message}`
-          : "Invalid MCP JSON";
+          : getString("mcp-invalid");
       status.classList.add("error");
     }
   };
@@ -337,7 +524,7 @@ function bindMcpSettings(doc: Document): void {
     if (entries.length === 0) {
       const empty = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
       empty.className = "claudero-pref-mcp-empty";
-      empty.textContent = "No MCP servers configured.";
+      empty.textContent = getString("mcp-empty");
       list.appendChild(empty);
       return;
     }
@@ -355,7 +542,13 @@ function bindMcpSettings(doc: Document): void {
       title.textContent = name;
       const meta = createHtml("div");
       meta.className = "claudero-pref-mcp-card-meta";
-      meta.textContent = `${serverType(config)} · ${config.contextSaving ? "@" : "always"} · ${serverPreview(config) || "no command/url"}`;
+      meta.textContent = getString("mcp-meta", {
+        args: {
+          type: serverType(config),
+          scope: config.contextSaving ? "@" : getString("mcp-always"),
+          preview: serverPreview(config) || getString("mcp-no-command"),
+        },
+      });
       main.append(title, meta);
 
       const toolsPanel = createHtml("div", "claudero-pref-mcp-tools");
@@ -370,12 +563,12 @@ function bindMcpSettings(doc: Document): void {
       };
       actions.append(
         makeButton("Verify", () => {
-          toolsPanel.textContent = "Testing...";
+          toolsPanel.textContent = getString("mcp-testing");
           void testMcpServer(config)
             .then((result) => {
               toolsPanel.replaceChildren();
               if (!result.success) {
-                toolsPanel.textContent = result.error || "Verification failed";
+                toolsPanel.textContent = result.error || getString("ui-failed");
                 toolsPanel.classList.add("error");
                 return;
               }
@@ -385,13 +578,13 @@ function bindMcpSettings(doc: Document): void {
                 .filter(Boolean)
                 .join(" ");
               heading.textContent = label
-                ? `${label} tools`
-                : "Available tools";
+                ? `${label} ${getString("ui-available-tools")}`
+                : getString("ui-available-tools");
               toolsPanel.appendChild(heading);
               const toolRows = result.tools || [];
               if (toolRows.length === 0) {
                 const empty = createHtml("div", "claudero-pref-mcp-tool-row");
-                empty.textContent = "No tools reported.";
+                empty.textContent = getString("mcp-no-tools");
                 toolsPanel.appendChild(empty);
                 return;
               }
@@ -407,7 +600,9 @@ function bindMcpSettings(doc: Document): void {
                 desc.textContent = tool.description || "";
                 body.append(toolName, desc);
                 const toggle = makeButton(
-                  tool.enabled ? "Disable" : "Enable",
+                  tool.enabled
+                    ? getString("ui-disable")
+                    : getString("ui-enable"),
                   () => {
                     const next = readManaged();
                     const current = next[name] || {};
@@ -443,7 +638,7 @@ function bindMcpSettings(doc: Document): void {
         }),
         makeButton("Edit", () => {
           const raw = win?.prompt(
-            `Edit MCP server "${name}" JSON`,
+            getString("mcp-edit-json", { args: { name } }),
             JSON.stringify(config, null, 2),
           );
           if (raw === null || raw === undefined) return;
@@ -454,12 +649,15 @@ function bindMcpSettings(doc: Document): void {
             saveManaged(next);
           } catch (error) {
             win?.alert(
-              error instanceof Error ? error.message : "Invalid MCP JSON",
+              error instanceof Error ? error.message : getString("mcp-invalid"),
             );
           }
         }),
         makeButton("Delete", () => {
-          if (!win?.confirm(`Delete MCP server "${name}"?`)) return;
+          if (
+            !win?.confirm(getString("mcp-delete-confirm", { args: { name } }))
+          )
+            return;
           const next = readManaged();
           delete next[name];
           saveManaged(next);
@@ -495,13 +693,15 @@ function bindMcpSettings(doc: Document): void {
   }
 
   addStdio?.addEventListener("click", () => {
-    const name = win?.prompt("MCP server name", "filesystem")?.trim();
+    const name = win
+      ?.prompt(getString("mcp-server-name"), "filesystem")
+      ?.trim();
     if (!name) return;
-    const command = win?.prompt("Command", "npx")?.trim();
+    const command = win?.prompt(getString("mcp-command"), "npx")?.trim();
     if (!command) return;
     const argsText =
       win?.prompt(
-        "Arguments, separated by spaces",
+        getString("mcp-arguments"),
         "-y @modelcontextprotocol/server-filesystem /tmp",
       ) || "";
     const next = readManaged();
@@ -514,10 +714,10 @@ function bindMcpSettings(doc: Document): void {
   });
 
   addHttp?.addEventListener("click", () => {
-    const name = win?.prompt("MCP server name", "remote")?.trim();
+    const name = win?.prompt(getString("mcp-server-name"), "remote")?.trim();
     if (!name) return;
     const url = win
-      ?.prompt("HTTP/SSE URL", "http://127.0.0.1:3000/sse")
+      ?.prompt(getString("mcp-http-url"), "http://127.0.0.1:3000/sse")
       ?.trim();
     if (!url) return;
     const next = readManaged();
@@ -708,7 +908,7 @@ function bindAcademicSkills(doc: Document): void {
       source.textContent = record.skill.source?.type || "custom";
       titleCell.append(title, source);
 
-      const statusCell = createHtml("td");
+      const statusCell = createHtml("td", "claudero-pref-skill-status-cell");
       const enabledBadge = createHtml("span", "claudero-pref-skill-badge");
       enabledBadge.classList.add(record.enabled ? "enabled" : "disabled");
       enabledBadge.textContent = record.enabled ? "enabled" : "disabled";
@@ -797,7 +997,9 @@ function bindAcademicSkills(doc: Document): void {
       const desc = createHtml("div", "claudero-pref-skill-desc");
       desc.textContent = record.skill.description;
       const examples = createHtml("div", "claudero-pref-skill-meta");
-      examples.textContent = `Examples: ${shortList(record.skill.intentExamples.slice(0, 3))}`;
+      examples.textContent = getString("skills-examples", {
+        args: { values: shortList(record.skill.intentExamples.slice(0, 3)) },
+      });
       detailCell.append(desc, examples);
       detailRow.appendChild(detailCell);
       tbody.appendChild(detailRow);
@@ -812,7 +1014,7 @@ function bindAcademicSkills(doc: Document): void {
     const query = testInput?.value.trim() || "";
     if (!testResult) return;
     if (!query) {
-      testResult.textContent = "Enter a prompt to test skill routing.";
+      testResult.textContent = getString("skills-test-prompt");
       return;
     }
     const skills = getAcademicSkillRecords()
@@ -826,7 +1028,13 @@ function bindAcademicSkills(doc: Document): void {
       return;
     }
     testResult.classList.add("success");
-    testResult.textContent = `Matched ${match.skill.title} (${match.confidence.toFixed(2)}): ${match.matchedTerms.join(", ")}`;
+    testResult.textContent = getString("skills-matched", {
+      args: {
+        title: match.skill.title,
+        confidence: match.confidence.toFixed(2),
+        terms: match.matchedTerms.join(", "),
+      },
+    });
   });
 
   importButton?.addEventListener("click", () => {
@@ -862,6 +1070,7 @@ interface DiagnosticsPayload {
     version?: number;
     activeProvider?: string;
     active?: boolean;
+    runtimeActive?: boolean;
   };
   runtimes?: Record<
     string,
@@ -870,6 +1079,10 @@ interface DiagnosticsPayload {
       workspacePath?: string | null;
       mcpServers?: string[];
       zoteroMcp?: boolean;
+      debugEvents?: unknown[];
+      pendingRequests?: unknown[];
+      launch?: unknown;
+      process?: unknown;
       session?: {
         threadId?: string;
         sessionFilePath?: string;
@@ -895,6 +1108,7 @@ interface DiagnosticsPayload {
       };
     } | null;
   } | null;
+  debugLog?: unknown[];
 }
 
 function bindDiagnostics(doc: Document): void {
@@ -903,6 +1117,9 @@ function bindDiagnostics(doc: Document): void {
   );
   const exportButton = doc.querySelector<HTMLButtonElement>(
     "#claudero-pref-diagnostics-export",
+  );
+  const restartButton = doc.querySelector<HTMLButtonElement>(
+    "#claudero-pref-diagnostics-restart",
   );
   const status = doc.querySelector<HTMLElement>(
     "#claudero-pref-diagnostics-status",
@@ -957,7 +1174,7 @@ function bindDiagnostics(doc: Document): void {
   const load = async () => {
     if (status) {
       status.classList.remove("error", "success");
-      status.textContent = "Loading helper diagnostics...";
+      status.textContent = getString("diagnostics-loading");
     }
     try {
       const port = Number(getPref("helperPort") || 38660);
@@ -973,7 +1190,7 @@ function bindDiagnostics(doc: Document): void {
         renderCard("Helper", [
           ["Version", data.helper?.version],
           ["Active provider", data.helper?.activeProvider],
-          ["Runtime active", data.helper?.active],
+          ["Runtime active", data.helper?.runtimeActive],
         ]),
         renderCard("Claude", [
           ["Active", data.runtimes?.claude?.active],
@@ -1004,47 +1221,101 @@ function bindDiagnostics(doc: Document): void {
             eventCounts: data.trace?.eventCounts || {},
             lastEvent: data.trace?.lastEvent || null,
             errors: data.trace?.errors || [],
+            helperDebugLog: data.debugLog || [],
+            codex: {
+              launch: data.runtimes?.codex?.launch || null,
+              process: data.runtimes?.codex?.process || null,
+              pendingRequests: data.runtimes?.codex?.pendingRequests || [],
+              debugEvents: data.runtimes?.codex?.debugEvents || [],
+            },
           },
           null,
           2,
         );
       }
       if (status) {
-        status.textContent = "Helper diagnostics loaded";
+        status.textContent = getString("diagnostics-loaded");
         status.classList.add("success");
       }
     } catch (error) {
       summary?.replaceChildren();
       if (trace) trace.textContent = "";
       if (status) {
-        status.textContent =
-          error instanceof Error
-            ? `Diagnostics unavailable: ${error.message}`
-            : "Diagnostics unavailable";
+        status.textContent = getString("diagnostics-unavailable", {
+          args: { error: error instanceof Error ? error.message : "" },
+        });
         status.classList.add("error");
       }
     }
   };
 
   refresh?.addEventListener("click", () => void load());
+  restartButton?.addEventListener("click", () => {
+    if (status) {
+      status.classList.remove("error", "success");
+      status.textContent = getString("diagnostics-restarting");
+    }
+    const restart = async () => {
+      const port = Number(getPref("helperPort") || 38660);
+      const token = await readHelperToken();
+      const response = await fetch(
+        `http://127.0.0.1:${port}/restart-runtimes`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (response.status === 404) {
+        await fetch(`http://127.0.0.1:${port}/shutdown`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+        await Zotero.Promise.delay(500);
+        await ensureClaudeHelper();
+        if (status) {
+          status.textContent = getString("diagnostics-old-restarted");
+          status.classList.add("success");
+        }
+        await load();
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(`Helper returned ${response.status}`);
+      }
+      if (status) {
+        status.textContent = getString("diagnostics-restarted");
+        status.classList.add("success");
+      }
+      await load();
+    };
+    void restart().catch((error) => {
+      if (status) {
+        status.textContent = getString("diagnostics-restart-failed", {
+          args: { error: error instanceof Error ? error.message : "" },
+        });
+        status.classList.add("error");
+      }
+    });
+  });
   exportButton?.addEventListener("click", () => {
     if (status) {
       status.classList.remove("error", "success");
-      status.textContent = "Exporting diagnostic log...";
+      status.textContent = getString("diagnostics-exporting");
     }
     void exportDiagnosticLog()
       .then((path) => {
         if (status) {
-          status.textContent = `Diagnostic log saved: ${path}`;
+          status.textContent = getString("diagnostics-saved", {
+            args: { path },
+          });
           status.classList.add("success");
         }
       })
       .catch((error) => {
         if (status) {
-          status.textContent =
-            error instanceof Error
-              ? `Export failed: ${error.message}`
-              : "Export failed";
+          status.textContent = getString("diagnostics-export-failed", {
+            args: { error: error instanceof Error ? error.message : "" },
+          });
           status.classList.add("error");
         }
       });

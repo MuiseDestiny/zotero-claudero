@@ -3,10 +3,17 @@ import {
   registerClauderoPane,
   registerClauderoStyles,
   registerClauderoToolbarButton,
+  unregisterClauderoPane,
 } from "./modules/clauderoPane";
-import { shutdownClaudeHelper } from "./modules/claudeHelperClient";
+import {
+  prewarmClaudeHelper,
+  shutdownClaudeHelper,
+} from "./modules/claudeHelperClient";
 import { registerPrefsScripts } from "./modules/preferenceScript";
-import { registerZoteroEndpoint, unregisterZoteroEndpoint } from "./modules/zoteroEndpoint";
+import {
+  registerZoteroEndpoint,
+  unregisterZoteroEndpoint,
+} from "./modules/zoteroEndpoint";
 import { initLocale } from "./utils/locale";
 import { createZToolkit } from "./utils/ztoolkit";
 
@@ -18,8 +25,7 @@ async function onStartup() {
   ]);
 
   initLocale();
-
-
+  addon.data.ztoolkit = createZToolkit();
   Zotero.PreferencePanes.register({
     pluginID: addon.data.config.addonID,
     src: rootURI + "content/preferences.xhtml",
@@ -33,10 +39,10 @@ async function onStartup() {
 
   addon.data.initialized = true;
   registerZoteroEndpoint();
+  void prewarmClaudeHelper();
 }
 
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
-  addon.data.ztoolkit = createZToolkit();
   win.MozXULElement.insertFTLIfNeeded(
     `${addon.data.config.addonRef}-mainWindow.ftl`,
   );
@@ -46,8 +52,8 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   registerClauderoMenu();
 }
 
-async function onMainWindowUnload(_win: Window): Promise<void> {
-  ztoolkit.unregisterAll();
+async function onMainWindowUnload(win: Window): Promise<void> {
+  unregisterClauderoPane(win);
 }
 
 function onShutdown(): void {

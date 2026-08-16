@@ -4,7 +4,7 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { createInterface } from "node:readline";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -20,9 +20,25 @@ import type {
 } from "./PersistentQueryManager";
 import {
   buildCodexMcpConfigOverrides,
+  buildCodexMcpThreadConfig,
   buildZoteroBridgeMcpServer,
 } from "./CodexMcpConfig";
 import type { ClauderoStreamEvent } from "../stream/types";
+import {
+  parseCodexModelListPage,
+  type ProviderModelDescriptor,
+} from "../../shared/providerModels";
+import { isProcessAlive } from "./processHealth";
+import {
+  hasModelsCacheSchemaError,
+  stripAnsi,
+  userFacingCodexStderr,
+} from "./codexCompatibility";
+import {
+  codexTurnIdleTimeoutMs,
+  parseCodexReconnectStatus,
+} from "./codexTurnPolicy";
+import type { AcademicToolPolicy } from "../../shared/academicToolPolicy";
 
 export interface CodexConfig {
   workspacePath: string;
@@ -63,7 +79,13 @@ type RestartConfig = Omit<Partial<CodexConfig>, "workspacePath">;
 
 type JsonRecord = Record<string, unknown>;
 type QueueItem = ClauderoStreamEvent | { type: "__done" };
-const CODEX_TURN_IDLE_TIMEOUT_MS = 90_000;
+const MAX_CODEX_DIAGNOSTIC_EVENTS = 240;
+const CODEX_BASE_INSTRUCTIONS = [
+  "You are Claudero, an academic Zotero agent embedded in Zotero.",
+  "Use Zotero MCP tools first for Zotero state, selected items, annotations, item metadata, evidence lookup, and safe writes.",
+  "Use shell or Python only for local files, heavy PDF extraction, or fallback cases where MCP is unavailable or insufficient.",
+  "When answering academic questions, preserve citation provenance with source, page, quote, and uncertainty whenever possible.",
+].join("\n");
 
 interface PendingQuestion {
   toolUseId: string;
@@ -82,10 +104,28 @@ interface PendingExitPlanResolver {
 }
 
 interface PendingRpc {
+  method: string;
+  startedAt: number;
+  timeoutMs: number;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout | null;
 }
+
+type CodexDiagnosticLevel = "info" | "warning" | "error";
+
+export interface CodexDiagnosticEvent {
+  ts: string;
+  level: CodexDiagnosticLevel;
+  event: string;
+  data?: JsonRecord;
+}
+
+type CodexDiagnosticLogger = (
+  event: string,
+  data?: JsonRecord,
+  level?: CodexDiagnosticLevel,
+) => void;
 
 export interface CodexExecutionTarget {
   method: "host-native" | "native-windows" | "wsl";
@@ -238,7 +278,6 @@ function buildSandboxPolicy(
   if (effectiveSandbox === "read-only") {
     return {
       type: "readOnly",
-      access: { type: "fullAccess" },
       networkAccess: false,
     };
   }
@@ -251,7 +290,6 @@ function buildSandboxPolicy(
   return {
     type: "workspaceWrite",
     writableRoots: [...new Set(writableRoots)],
-    readOnlyAccess: { type: "fullAccess" },
     networkAccess: false,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
@@ -473,13 +511,181 @@ function buildCodexMcpServers(
 }
 
 function normalizeEffort(value: string | undefined): string {
-  return ["low", "medium", "high", "xhigh"].includes(value || "")
+  return ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+    value || "",
+  )
     ? value!
     : "medium";
 }
 
 function normalizeModel(value: string | undefined): string {
   return value?.trim() || "gpt-5.5";
+}
+
+function truncateDiagnosticText(
+  value: unknown,
+  limit = 600,
+): string | undefined {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return undefined;
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function redactLaunchArgs(args: string[]): string[] {
+  const redacted: string[] = [];
+  let redactNext = false;
+  for (const arg of args) {
+    if (redactNext) {
+      redacted.push("[redacted]");
+      redactNext = false;
+      continue;
+    }
+    if (["--token", "--password", "--secret", "--api-key"].includes(arg)) {
+      redacted.push(arg);
+      redactNext = true;
+      continue;
+    }
+    if (
+      /token|secret|password|api[_-]?key|authorization|http_headers/i.test(arg)
+    ) {
+      redacted.push("[redacted sensitive argument]");
+      continue;
+    }
+    redacted.push(arg);
+  }
+  return redacted;
+}
+
+function diagnosticError(error: unknown): JsonRecord {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: truncateDiagnosticText(error.stack, 1200),
+    };
+  }
+  return { message: String(error) };
+}
+
+function summarizeInputForDiagnostics(input: unknown): JsonRecord {
+  if (!Array.isArray(input)) return { type: typeof input };
+  let textChars = 0;
+  let imageCount = 0;
+  const types: string[] = [];
+  for (const entry of input) {
+    const record = asRecord(entry);
+    const type = textValue(record?.type) || typeof entry;
+    types.push(type);
+    if (type === "text") textChars += textValue(record?.text).length;
+    if (type === "localImage") imageCount += 1;
+  }
+  return { count: input.length, types, textChars, imageCount };
+}
+
+function summarizeSandboxPolicyForDiagnostics(value: unknown): JsonRecord {
+  const record = asRecord(value);
+  if (!record) return {};
+  const writableRoots = Array.isArray(record.writableRoots)
+    ? record.writableRoots
+    : [];
+  return {
+    type: textValue(record.type),
+    networkAccess: record.networkAccess,
+    writableRoots: writableRoots.slice(0, 8),
+    writableRootCount: writableRoots.length,
+    excludeTmpdirEnvVar: record.excludeTmpdirEnvVar,
+    excludeSlashTmp: record.excludeSlashTmp,
+  };
+}
+
+function summarizeRpcParams(method: string, params: unknown): JsonRecord {
+  const record = asRecord(params);
+  if (!record) return {};
+  if (method === "initialize") {
+    return {
+      clientInfo: record.clientInfo,
+      capabilities: record.capabilities,
+    };
+  }
+  if (method === "thread/start" || method === "thread/resume") {
+    return {
+      threadId: textValue(record.threadId) || undefined,
+      cwd: textValue(record.cwd) || undefined,
+      model: textValue(record.model),
+      approvalPolicy: textValue(record.approvalPolicy),
+      sandbox: textValue(record.sandbox),
+      experimentalRawEvents: record.experimentalRawEvents,
+      persistExtendedHistory: record.persistExtendedHistory,
+      hasBaseInstructions: typeof record.baseInstructions === "string",
+    };
+  }
+  if (method === "thread/fork") {
+    return { threadId: textValue(record.threadId) };
+  }
+  if (method === "thread/rollback") {
+    return {
+      threadId: textValue(record.threadId),
+      numTurns: record.numTurns,
+    };
+  }
+  if (method === "turn/start") {
+    return {
+      threadId: textValue(record.threadId),
+      input: summarizeInputForDiagnostics(record.input),
+      approvalPolicy: textValue(record.approvalPolicy),
+      model: textValue(record.model),
+      effort: textValue(record.effort),
+      summary: textValue(record.summary),
+      sandboxPolicy: summarizeSandboxPolicyForDiagnostics(record.sandboxPolicy),
+    };
+  }
+  if (method === "turn/interrupt") {
+    return {
+      threadId: textValue(record.threadId),
+      turnId: textValue(record.turnId),
+    };
+  }
+  return { keys: Object.keys(record).sort() };
+}
+
+function summarizeRpcResult(method: string, result: unknown): JsonRecord {
+  const record = asRecord(result);
+  if (!record) return { type: typeof result };
+  const thread = asRecord(record.thread);
+  const turn = asRecord(record.turn);
+  if (thread || turn) {
+    return {
+      threadId: textValue(thread?.id),
+      threadPath: textValue(thread?.path),
+      turnId: textValue(turn?.id),
+      turnStatus: textValue(turn?.status),
+      turnItemCount: Array.isArray(turn?.items) ? turn!.items.length : 0,
+    };
+  }
+  return { keys: Object.keys(record).sort() };
+}
+
+function summarizeNotification(method: string, params: unknown): JsonRecord {
+  const record = asRecord(params);
+  if (!record) return { method };
+  const item = asRecord(record.item);
+  const turn = asRecord(record.turn);
+  const error = asRecord(record.error);
+  return {
+    method,
+    threadId: textValue(record.threadId),
+    turnId: textValue(record.turnId, record.turn_id, turn?.id),
+    itemId: textValue(record.itemId, item?.id),
+    itemType: textValue(item?.type, record.type),
+    error: error
+      ? truncateDiagnosticText(
+          textValue(error.message, error.codexErrorInfo) ||
+            JSON.stringify(error),
+        )
+      : undefined,
+  };
 }
 
 function normalizeAnswers(value: string | string[]): string[] {
@@ -496,32 +702,78 @@ class CodexRpcTransport {
   >();
   private stderrTail = "";
 
-  constructor(private readonly proc: ChildProcessWithoutNullStreams) {}
+  constructor(
+    private readonly proc: ChildProcessWithoutNullStreams,
+    private readonly debug?: CodexDiagnosticLogger,
+  ) {}
 
   start(): void {
     const rl = createInterface({ input: this.proc.stdout });
     rl.on("line", (line) => this.handleLine(line));
-    this.proc.on("exit", () => {
+    this.proc.on("exit", (code, signal) => {
+      this.debug?.(
+        "process.exit",
+        {
+          code,
+          signal,
+          pendingRequests: this.pending.size,
+          stderrTail: truncateDiagnosticText(this.stderrTail),
+        },
+        "error",
+      );
       this.rejectAll(new Error("Codex app-server exited"));
     });
     this.proc.stderr.on("data", (chunk: Buffer) => {
       // Drain stderr so a noisy app-server cannot block on a full pipe, but keep
       // a small tail for diagnostics when a turn stalls before any event arrives.
-      this.stderrTail = (this.stderrTail + chunk.toString("utf8")).slice(-4000);
+      const text = stripAnsi(chunk.toString("utf8"));
+      this.stderrTail = (this.stderrTail + text).slice(-4000);
+      if (text.trim()) {
+        this.debug?.(
+          "process.stderr",
+          {
+            bytes: chunk.length,
+            preview: truncateDiagnosticText(text),
+          },
+          "warning",
+        );
+      }
     });
   }
 
   request<T>(method: string, params: unknown, timeoutMs = 30_000): Promise<T> {
     const id = this.nextId++;
+    const startedAt = Date.now();
+    this.debug?.("rpc.request", {
+      id,
+      method,
+      timeoutMs,
+      params: summarizeRpcParams(method, params),
+    });
     return new Promise<T>((resolve, reject) => {
       const timer =
         timeoutMs > 0
           ? setTimeout(() => {
               this.pending.delete(id);
+              this.debug?.(
+                "rpc.timeout",
+                {
+                  id,
+                  method,
+                  timeoutMs,
+                  elapsedMs: Date.now() - startedAt,
+                  pendingRequests: this.getPendingRequests(),
+                  stderrTail: truncateDiagnosticText(this.stderrTail),
+                },
+                "error",
+              );
               reject(new Error(`Codex request timed out: ${method}`));
             }, timeoutMs)
           : null;
       this.pending.set(id, {
+        method,
+        startedAt,
+        timeoutMs,
         resolve: (value) => resolve(value as T),
         reject,
         timer,
@@ -531,6 +783,11 @@ class CodexRpcTransport {
   }
 
   notify(method: string, params?: unknown): void {
+    this.debug?.("rpc.notify", {
+      method,
+      params:
+        params === undefined ? undefined : summarizeRpcParams(method, params),
+    });
     this.send(
       params === undefined
         ? { jsonrpc: "2.0", method }
@@ -555,6 +812,15 @@ class CodexRpcTransport {
 
   getStderrTail(): string {
     return this.stderrTail.trim();
+  }
+
+  getPendingRequests(): JsonRecord[] {
+    return [...this.pending.entries()].map(([id, pending]) => ({
+      id,
+      method: pending.method,
+      elapsedMs: Date.now() - pending.startedAt,
+      timeoutMs: pending.timeoutMs,
+    }));
   }
 
   private send(message: unknown): void {
@@ -594,9 +860,27 @@ class CodexRpcTransport {
     if (pending.timer) clearTimeout(pending.timer);
     const error = asRecord(message.error);
     if (error) {
+      this.debug?.(
+        "rpc.response.error",
+        {
+          id: numericId,
+          method: pending.method,
+          elapsedMs: Date.now() - pending.startedAt,
+          error: truncateDiagnosticText(
+            textValue(error.message) || JSON.stringify(error),
+          ),
+        },
+        "error",
+      );
       pending.reject(new Error(textValue(error.message) || "Codex error"));
       return;
     }
+    this.debug?.("rpc.response", {
+      id: numericId,
+      method: pending.method,
+      elapsedMs: Date.now() - pending.startedAt,
+      result: summarizeRpcResult(pending.method, message.result),
+    });
     pending.resolve(message.result);
   }
 
@@ -607,6 +891,7 @@ class CodexRpcTransport {
   ): void {
     const handler = this.requestHandlers.get(method);
     if (!handler) {
+      this.debug?.("rpc.server_request.unhandled", { id, method }, "warning");
       this.send({
         jsonrpc: "2.0",
         id,
@@ -614,9 +899,22 @@ class CodexRpcTransport {
       });
       return;
     }
+    this.debug?.("rpc.server_request", {
+      id,
+      method,
+      params: summarizeNotification(method, params),
+    });
     handler(id, params).then(
-      (result) => this.send({ jsonrpc: "2.0", id, result }),
-      (error) =>
+      (result) => {
+        this.debug?.("rpc.server_request.response", { id, method });
+        this.send({ jsonrpc: "2.0", id, result });
+      },
+      (error) => {
+        this.debug?.(
+          "rpc.server_request.error",
+          { id, method, error: diagnosticError(error) },
+          "error",
+        );
         this.send({
           jsonrpc: "2.0",
           id,
@@ -624,7 +922,8 @@ class CodexRpcTransport {
             code: -32603,
             message: error instanceof Error ? error.message : String(error),
           },
-        }),
+        });
+      },
     );
   }
 
@@ -664,15 +963,34 @@ export class CodexPersistentQueryManager {
   private rawToolInputsById = new Map<string, JsonRecord>();
   private streamedAssistantText = "";
   private planUpdateCounter = 0;
+  private diagnosticEvents: CodexDiagnosticEvent[] = [];
+  private latestMcpStatus: JsonRecord | null = null;
+  private turnStreamActive = false;
+  private runtimeUnhealthyReason: string | null = null;
+  private contextCompactionActive = false;
+  private toolPolicy: AcademicToolPolicy | undefined;
 
   constructor(private readonly permissionManager: PermissionManager) {}
 
   get isActive(): boolean {
-    return !!this.proc && !this.proc.killed && !!this.transport;
+    return (
+      !this.runtimeUnhealthyReason &&
+      isProcessAlive(this.proc) &&
+      !!this.transport
+    );
+  }
+
+  get isBusy(): boolean {
+    return this.turnStreamActive;
   }
 
   get workspacePath(): string | null {
     return this.config?.workspacePath || null;
+  }
+
+  setToolPolicy(policy: AcademicToolPolicy | undefined): void {
+    this.toolPolicy = policy;
+    this.permissionManager.setToolPolicy(policy);
   }
 
   getMcpServerNames(): string[] {
@@ -682,11 +1000,93 @@ export class CodexPersistentQueryManager {
     ).sort();
   }
 
+  async listModels(): Promise<ProviderModelDescriptor[]> {
+    if (!this.transport || !this.isActive) {
+      throw new Error("Codex runtime is not initialized.");
+    }
+    const models: ProviderModelDescriptor[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    for (let pageIndex = 0; pageIndex < 10; pageIndex += 1) {
+      const response = await this.transport.request<JsonRecord>("model/list", {
+        ...(cursor ? { cursor } : {}),
+        includeHidden: false,
+        limit: 100,
+      });
+      const page = parseCodexModelListPage(response);
+      for (const model of page.models) {
+        if (seen.has(model.value)) continue;
+        seen.add(model.value);
+        models.push(model);
+      }
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    this.debug("models.list", {
+      count: models.length,
+      defaultModel: models.find((model) => model.isDefault)?.value,
+    });
+    return models;
+  }
+
+  getDiagnostics(): {
+    events: CodexDiagnosticEvent[];
+    pendingRequests: JsonRecord[];
+    launch: JsonRecord | null;
+    process: JsonRecord | null;
+    mcpStatus: JsonRecord | null;
+  } {
+    return {
+      events: this.diagnosticEvents.slice(-160),
+      pendingRequests: this.transport?.getPendingRequests() || [],
+      launch: this.launchSpec
+        ? {
+            command: this.launchSpec.command,
+            args: redactLaunchArgs(this.launchSpec.args),
+            spawnCwd: this.launchSpec.spawnCwd,
+            targetCwd: this.launchSpec.targetCwd,
+            target: this.launchSpec.pathMapper.target,
+          }
+        : null,
+      process: this.proc
+        ? {
+            pid: this.proc.pid,
+            killed: this.proc.killed,
+            exitCode: this.proc.exitCode,
+            signalCode: this.proc.signalCode,
+            unhealthyReason: this.runtimeUnhealthyReason,
+          }
+        : null,
+      mcpStatus: this.latestMcpStatus,
+    };
+  }
+
   async initialize(config: CodexConfig): Promise<void> {
+    const startedAt = Date.now();
     await mkdir(config.workspacePath, { recursive: true });
     this.close();
+    this.runtimeUnhealthyReason = null;
+    this.debug("initialize.start", {
+      workspacePath: config.workspacePath,
+      codexPath: config.codexPath,
+      installationMethod: config.codexInstallationMethod || "native",
+      safeMode: config.codexSafeMode || "workspace-write",
+      model: normalizeModel(config.model),
+      effort: normalizeEffort(config.effort),
+      enableZoteroMcp: config.enableZoteroMcp !== false,
+      customMcpServerCount: Object.keys(config.mcpServers || {}).length,
+      environmentKeys: Object.keys(config.environment || {}).sort(),
+    });
     this.config = config;
     this.launchSpec = buildCodexLaunchSpec(config);
+    this.debug("initialize.launch", {
+      command: this.launchSpec.command,
+      args: this.launchSpec.args,
+      spawnCwd: this.launchSpec.spawnCwd,
+      targetCwd: this.launchSpec.targetCwd,
+      target: this.launchSpec.pathMapper.target,
+      mcpServers: this.getMcpServerNames(),
+    });
     this.threadId = config.providerState?.threadId || null;
     this.sessionFilePath = config.providerState?.sessionFilePath || null;
     this.pendingFork = config.providerState?.forkSource || null;
@@ -697,7 +1097,10 @@ export class CodexPersistentQueryManager {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
-    this.transport = new CodexRpcTransport(this.proc);
+    this.debug("initialize.spawned", { pid: this.proc.pid });
+    this.transport = new CodexRpcTransport(this.proc, (event, data, level) =>
+      this.debug(event, data, level),
+    );
     this.transport.start();
     this.wireTransportHandlers();
     await this.transport.request("initialize", {
@@ -705,22 +1108,57 @@ export class CodexPersistentQueryManager {
       capabilities: { experimentalApi: true, requestAttestation: false },
     });
     this.transport.notify("initialized", {});
+    await this.refreshMcpServerStatus("initialize", true);
+    const startupStderr = this.transport.getStderrTail();
+    if (hasModelsCacheSchemaError(startupStderr)) {
+      this.runtimeUnhealthyReason = "incompatible_models_cache";
+      throw new Error(
+        "This Codex CLI is older than the models cache written by Codex Desktop. Configure a newer Codex executable or use the executable bundled with ChatGPT Desktop.",
+      );
+    }
+    this.debug("initialize.complete", {
+      elapsedMs: Date.now() - startedAt,
+      active: this.isActive,
+    });
   }
 
   async *sendMessageEvents(
     prompt: string,
     images?: ImageInput[],
   ): AsyncIterable<ClauderoStreamEvent> {
+    if (this.turnStreamActive) {
+      throw new Error("A Codex turn is already in progress.");
+    }
     if (!this.config || !this.transport || !this.launchSpec) {
       throw new Error("Codex runtime not initialized. Call /init first.");
     }
+    if (!this.isActive) {
+      throw new Error(
+        "Codex app-server is not running. Reinitialize the runtime.",
+      );
+    }
+    this.turnStreamActive = true;
+    const startedAt = Date.now();
+    this.debug("turn.stream.start", {
+      promptChars: prompt.length,
+      imageCount: images?.length || 0,
+      threadId: this.threadId || undefined,
+      loadedThreadId: this.loadedThreadId || undefined,
+      model: normalizeModel(this.config.model),
+      effort: normalizeEffort(this.config.effort),
+    });
     this.resetTurnState();
     const tempDirs: string[] = [];
     try {
       const threadId = await this.ensureThread();
       this.currentThreadId = threadId;
+      this.debug("turn.thread.ready", {
+        threadId,
+        sessionFilePath: this.sessionFilePath || undefined,
+      });
       yield { type: "session", session: this.getSessionState() };
       if (prompt.trim() === "/compact") {
+        this.debug("turn.compact.start", { threadId });
         await this.transport.request("thread/compact/start", { threadId });
         this.flushPendingNotifications();
         while (true) {
@@ -731,30 +1169,50 @@ export class CodexPersistentQueryManager {
         return;
       }
       const input = await this.buildInput(prompt, images, tempDirs);
-      const sandboxConfig = resolveSandboxConfig(this.config.permissionMode);
-      const result = await this.transport.request<JsonRecord>("turn/start", {
+      this.debug("turn.input.ready", summarizeInputForDiagnostics(input));
+      const configuredSandbox = resolveSandboxConfig(
+        this.config.permissionMode,
+      );
+      const sandboxConfig =
+        this.toolPolicy && !this.toolPolicy.allowScripts
+          ? {
+              approvalPolicy: "on-request" as const,
+              sandbox: "read-only" as const,
+            }
+          : configuredSandbox;
+      const sandboxPolicy = buildSandboxPolicy(
+        this.config,
+        sandboxConfig.sandbox,
+        this.launchSpec.pathMapper,
+      );
+      this.debug("turn.start.request", {
         threadId,
-        input,
         approvalPolicy: sandboxConfig.approvalPolicy,
         model: normalizeModel(this.config.model),
         effort: normalizeEffort(this.config.effort),
-        summary: "detailed",
-        sandboxPolicy: buildSandboxPolicy(
-          this.config,
-          sandboxConfig.sandbox,
-          this.launchSpec.pathMapper,
-        ),
-        collaborationMode: {
-          mode: this.config.permissionMode === "plan" ? "plan" : "default",
-          settings: {
-            model: normalizeModel(this.config.model),
-            reasoning_effort: normalizeEffort(this.config.effort),
-            developer_instructions: null,
-          },
-        },
+        sandboxPolicy: summarizeSandboxPolicyForDiagnostics(sandboxPolicy),
       });
+      const result = await this.transport.request<JsonRecord>(
+        "turn/start",
+        {
+          threadId,
+          input,
+          approvalPolicy: sandboxConfig.approvalPolicy,
+          model: normalizeModel(this.config.model),
+          effort: normalizeEffort(this.config.effort),
+          summary: "detailed",
+          sandboxPolicy,
+        },
+        30_000,
+      );
       const turn = asRecord(result.turn);
       this.currentTurnId = textValue(turn?.id);
+      this.debug("turn.start.response", {
+        threadId,
+        turnId: this.currentTurnId || undefined,
+        status: textValue(turn?.status),
+        itemCount: Array.isArray(turn?.items) ? turn!.items.length : 0,
+      });
       this.handleTurnSnapshot(turn);
       yield { type: "session", session: this.getSessionState() };
       this.flushPendingNotifications();
@@ -764,11 +1222,27 @@ export class CodexPersistentQueryManager {
         if (item.type === "__done") break;
         yield item;
       }
+      this.debug("turn.stream.complete", {
+        elapsedMs: Date.now() - startedAt,
+        threadId,
+        turnId: this.currentTurnId || undefined,
+      });
+    } catch (error) {
+      this.debug(
+        "turn.stream.error",
+        {
+          elapsedMs: Date.now() - startedAt,
+          error: diagnosticError(error),
+        },
+        "error",
+      );
+      throw error;
     } finally {
       for (const dir of tempDirs) {
         await rm(dir, { recursive: true, force: true }).catch(() => {});
       }
       this.resetTurnState();
+      this.turnStreamActive = false;
     }
   }
 
@@ -873,6 +1347,11 @@ export class CodexPersistentQueryManager {
     const transport = this.transport;
     const threadId = this.currentThreadId || this.threadId;
     const turnId = this.currentTurnId;
+    this.debug("turn.cancel", {
+      threadId: threadId || undefined,
+      turnId: turnId || undefined,
+      hasTransport: !!transport,
+    });
     if (transport && threadId && turnId) {
       transport
         .request("turn/interrupt", { threadId, turnId }, 1_000)
@@ -885,14 +1364,23 @@ export class CodexPersistentQueryManager {
   }
 
   close(): void {
+    this.debug("runtime.close", {
+      active: this.isActive,
+      pid: this.proc?.pid,
+      threadId: this.threadId || undefined,
+      pendingRequests: this.transport?.getPendingRequests() || [],
+    });
     this.cancelPendingQuestion();
     this.cancelPendingExitPlan();
     this.transport?.dispose();
     this.transport = null;
-    if (this.proc && !this.proc.killed) {
-      this.proc.kill("SIGTERM");
+    const proc = this.proc;
+    if (proc && !proc.killed) {
+      proc.kill("SIGTERM");
       setTimeout(() => {
-        if (this.proc && !this.proc.killed) this.proc.kill("SIGKILL");
+        if (proc.exitCode === null && proc.signalCode === null) {
+          proc.kill("SIGKILL");
+        }
       }, 3000);
     }
     this.proc = null;
@@ -902,6 +1390,8 @@ export class CodexPersistentQueryManager {
     this.loadedThreadId = null;
     this.launchSpec = null;
     this.config = null;
+    this.runtimeUnhealthyReason = null;
+    this.turnStreamActive = false;
     this.resetTurnState();
   }
 
@@ -939,6 +1429,28 @@ export class CodexPersistentQueryManager {
     this.config = { ...this.config, ...newConfig };
     if (newConfig.providerState)
       this.applyProviderState(newConfig.providerState);
+    this.debug("config.update", {
+      keys: Object.keys(newConfig).sort(),
+      model: normalizeModel(this.config.model),
+      effort: normalizeEffort(this.config.effort),
+      safeMode: this.config.codexSafeMode || "workspace-write",
+    });
+  }
+
+  private debug(
+    event: string,
+    data: JsonRecord = {},
+    level: CodexDiagnosticLevel = "info",
+  ): void {
+    this.diagnosticEvents.push({
+      ts: new Date().toISOString(),
+      level,
+      event,
+      data,
+    });
+    while (this.diagnosticEvents.length > MAX_CODEX_DIAGNOSTIC_EVENTS) {
+      this.diagnosticEvents.shift();
+    }
   }
 
   private getComparableProviderState(): CodexProviderState {
@@ -965,8 +1477,17 @@ export class CodexPersistentQueryManager {
       throw new Error("Codex launch spec not initialized");
     }
     const sandboxConfig = resolveSandboxConfig(this.config.permissionMode);
+    this.debug("thread.ensure.start", {
+      threadId: this.threadId || undefined,
+      loadedThreadId: this.loadedThreadId || undefined,
+      hasPendingFork: !!this.pendingFork,
+    });
     if (this.pendingFork?.threadId) {
       const fork = this.pendingFork;
+      this.debug("thread.fork.start", {
+        sourceThreadId: fork.threadId,
+        resumeAt: fork.resumeAt,
+      });
       const forkResult = await this.transport.request<JsonRecord>(
         "thread/fork",
         {
@@ -980,11 +1501,18 @@ export class CodexPersistentQueryManager {
       this.threadId = forkThreadId;
       this.sessionFilePath = this.toHostSessionPath(forkThreadPath);
 
+      this.debug("thread.fork.resume", {
+        threadId: forkThreadId,
+        sessionFilePath: this.sessionFilePath || undefined,
+      });
       await this.transport.request("thread/resume", {
         threadId: forkThreadId,
+        cwd: this.launchSpec.targetCwd,
         model: normalizeModel(this.config.model),
         approvalPolicy: sandboxConfig.approvalPolicy,
         sandbox: effectiveCodexSandbox(this.config, sandboxConfig.sandbox),
+        config: this.buildThreadConfigOverrides(),
+        baseInstructions: CODEX_BASE_INSTRUCTIONS,
         experimentalRawEvents: true,
         persistExtendedHistory: true,
       });
@@ -1008,17 +1536,23 @@ export class CodexPersistentQueryManager {
 
       this.loadedThreadId = forkThreadId;
       this.pendingFork = null;
+      this.debug("thread.fork.ready", { threadId: forkThreadId });
       return forkThreadId;
     }
     if (this.threadId && this.loadedThreadId === this.threadId) {
+      this.debug("thread.ensure.reuse_loaded", { threadId: this.threadId });
       return this.threadId;
     }
     if (this.threadId && this.loadedThreadId !== this.threadId) {
+      this.debug("thread.resume.start", { threadId: this.threadId });
       const result = await this.transport.request<JsonRecord>("thread/resume", {
         threadId: this.threadId,
+        cwd: this.launchSpec.targetCwd,
         model: normalizeModel(this.config.model),
         approvalPolicy: sandboxConfig.approvalPolicy,
         sandbox: effectiveCodexSandbox(this.config, sandboxConfig.sandbox),
+        config: this.buildThreadConfigOverrides(),
+        baseInstructions: CODEX_BASE_INSTRUCTIONS,
         experimentalRawEvents: true,
         persistExtendedHistory: true,
       });
@@ -1027,13 +1561,28 @@ export class CodexPersistentQueryManager {
       this.sessionFilePath =
         this.toHostSessionPath(textValue(thread?.path)) || this.sessionFilePath;
       this.loadedThreadId = this.threadId;
+      this.debug("thread.resume.ready", {
+        threadId: this.threadId,
+        sessionFilePath: this.sessionFilePath || undefined,
+      });
+      await this.refreshMcpServerStatus("thread.resume", false);
       return this.threadId;
     }
+    const threadConfig = this.buildThreadConfigOverrides();
+    this.debug("thread.start.start", {
+      cwd: this.launchSpec.targetCwd,
+      model: normalizeModel(this.config.model),
+      approvalPolicy: sandboxConfig.approvalPolicy,
+      sandbox: effectiveCodexSandbox(this.config, sandboxConfig.sandbox),
+      configKeys: Object.keys(threadConfig || {}).sort(),
+    });
     const result = await this.transport.request<JsonRecord>("thread/start", {
       model: normalizeModel(this.config.model),
       cwd: this.launchSpec.targetCwd,
       approvalPolicy: sandboxConfig.approvalPolicy,
       sandbox: effectiveCodexSandbox(this.config, sandboxConfig.sandbox),
+      config: threadConfig,
+      baseInstructions: CODEX_BASE_INSTRUCTIONS,
       experimentalRawEvents: true,
       persistExtendedHistory: true,
     });
@@ -1042,7 +1591,93 @@ export class CodexPersistentQueryManager {
     this.sessionFilePath = this.toHostSessionPath(textValue(thread?.path));
     if (!this.threadId) throw new Error("Codex did not return a thread id");
     this.loadedThreadId = this.threadId;
+    this.debug("thread.start.ready", {
+      threadId: this.threadId,
+      sessionFilePath: this.sessionFilePath || undefined,
+    });
+    await this.refreshMcpServerStatus("thread.start", false);
     return this.threadId;
+  }
+
+  private buildThreadConfigOverrides(): JsonRecord | undefined {
+    if (!this.config || !this.launchSpec) return undefined;
+    const config = buildCodexMcpThreadConfig(
+      {
+        ...this.config,
+        mcpServers: buildCodexMcpServers(
+          this.config,
+          this.launchSpec.pathMapper,
+        ),
+      },
+      this.launchSpec.pathMapper,
+    );
+    return Object.keys(config).length ? config : undefined;
+  }
+
+  private async refreshMcpServerStatus(
+    reason: string,
+    reload: boolean,
+  ): Promise<void> {
+    if (!this.transport) return;
+    const expectedServers = this.getMcpServerNames();
+    if (expectedServers.length === 0) {
+      this.latestMcpStatus = { reason, expectedServers, servers: [] };
+      return;
+    }
+    const threadId = this.currentThreadId || this.threadId || undefined;
+    const status: JsonRecord = { reason, expectedServers, threadId };
+    if (reload) {
+      try {
+        this.debug("mcp.reload.start", { reason, expectedServers });
+        await this.transport.request("config/mcpServer/reload", undefined);
+        this.debug("mcp.reload.complete", { reason });
+      } catch (error) {
+        status.reloadError = diagnosticError(error);
+        this.debug(
+          "mcp.reload.error",
+          { reason, error: diagnosticError(error) },
+          "warning",
+        );
+      }
+    }
+    try {
+      const response = await this.transport.request<JsonRecord>(
+        "mcpServerStatus/list",
+        {
+          detail: "toolsAndAuthOnly",
+          ...(threadId ? { threadId } : {}),
+        },
+      );
+      const data = Array.isArray(response.data) ? response.data : [];
+      const servers = data.map((entry) => {
+        const server = asRecord(entry) || {};
+        const tools = asRecord(server.tools) || {};
+        return {
+          name: textValue(server.name),
+          toolCount: Object.keys(tools).length,
+          toolNames: Object.keys(tools).sort(),
+          authStatus: server.authStatus,
+        };
+      });
+      status.servers = servers;
+      status.serverCount = servers.length;
+      status.nextCursor = response.nextCursor ?? null;
+      this.latestMcpStatus = status;
+      this.debug("mcp.status.loaded", {
+        reason,
+        threadId,
+        expectedServers,
+        servers,
+      });
+    } catch (error) {
+      status.statusError = diagnosticError(error);
+      this.latestMcpStatus = status;
+      this.debug(
+        "mcp.status.error",
+        { reason, error: diagnosticError(error) },
+        "warning",
+      );
+    }
   }
 
   private toHostSessionPath(targetPath: string | undefined): string | null {
@@ -1113,6 +1748,12 @@ export class CodexPersistentQueryManager {
       "item/fileChange/requestApproval",
       "item/permissions/requestApproval",
       "item/tool/requestUserInput",
+      "mcpServer/elicitation/request",
+      "item/tool/call",
+      "account/chatgptAuthTokens/refresh",
+      "attestation/generate",
+      "applyPatchApproval",
+      "execCommandApproval",
     ]) {
       this.transport.onServerRequest(method, (_id, params) =>
         this.handleServerRequest(method, params),
@@ -1121,6 +1762,7 @@ export class CodexPersistentQueryManager {
   }
 
   private handleNotification(method: string, params: unknown): void {
+    this.debug("notification.received", summarizeNotification(method, params));
     if (method === "turn/started") {
       const record = asRecord(params);
       const turn = asRecord(record?.turn);
@@ -1185,11 +1827,23 @@ export class CodexPersistentQueryManager {
         break;
       case "error": {
         const error = asRecord(asRecord(params)?.error);
+        const message =
+          textValue(error?.message, error?.codexErrorInfo) ||
+          "Codex request failed.";
+        const reconnect = parseCodexReconnectStatus(message);
+        if (reconnect) {
+          this.enqueue({
+            type: "connection_status",
+            status: "reconnecting",
+            attempt: reconnect.attempt,
+            maxAttempts: reconnect.maxAttempts,
+          });
+          break;
+        }
+        this.contextCompactionActive = false;
         this.enqueue({
           type: "error",
-          error:
-            textValue(error?.message, error?.codexErrorInfo) ||
-            "Codex request failed.",
+          error: message,
         });
         this.finishTurn();
         break;
@@ -1206,17 +1860,46 @@ export class CodexPersistentQueryManager {
         ? textValue(asRecord(record.turn)?.id)
         : textValue(record.turnId, record.turn_id);
     if (!threadId || !turnId) return true;
-    if (threadId !== this.currentThreadId) return false;
-    if (!this.currentTurnId) {
-      this.pendingNotifications.push({ method, params });
+    if (threadId !== this.currentThreadId) {
+      this.debug(
+        "notification.ignored_thread",
+        {
+          method,
+          threadId,
+          currentThreadId: this.currentThreadId || undefined,
+          turnId,
+        },
+        "warning",
+      );
       return false;
     }
-    return turnId === this.currentTurnId;
+    if (!this.currentTurnId) {
+      this.pendingNotifications.push({ method, params });
+      this.debug("notification.pending_before_turn_id", {
+        method,
+        threadId,
+        turnId,
+        pendingCount: this.pendingNotifications.length,
+      });
+      return false;
+    }
+    const accepted = turnId === this.currentTurnId;
+    if (!accepted) {
+      this.debug(
+        "notification.ignored_turn",
+        { method, threadId, turnId, currentTurnId: this.currentTurnId },
+        "warning",
+      );
+    }
+    return accepted;
   }
 
   private flushPendingNotifications(): void {
     const pending = this.pendingNotifications;
     this.pendingNotifications = [];
+    if (pending.length) {
+      this.debug("notification.flush_pending", { count: pending.length });
+    }
     for (const entry of pending)
       this.handleNotification(entry.method, entry.params);
   }
@@ -1250,7 +1933,39 @@ export class CodexPersistentQueryManager {
     const type = textValue(item.type);
     const id = textValue(item.id) || `codex-tool-${Date.now()}`;
     if (this.startedToolIds.has(id)) return;
-    if (type === "commandExecution") {
+    const policyToolName =
+      type === "commandExecution"
+        ? "commandExecution"
+        : type === "webSearch"
+          ? "webSearch"
+          : type === "mcpToolCall"
+            ? `mcp__${textValue(item.server)}__${textValue(item.tool)}`
+            : "";
+    const policyDenial = policyToolName
+      ? this.permissionManager.getToolPolicyDenial(policyToolName)
+      : null;
+    if (policyDenial) {
+      this.startedToolIds.add(id);
+      this.enqueue({
+        type: "tool_use",
+        tool: { id, name: policyToolName, input: item },
+      });
+      this.enqueue({
+        type: "tool_result",
+        result: { id, content: policyDenial, isError: true },
+      });
+      this.enqueue({ type: "error", error: policyDenial });
+      this.cancelActiveTurn();
+      return;
+    }
+    if (type === "contextCompaction") {
+      this.startedToolIds.add(id);
+      this.contextCompactionActive = true;
+      this.enqueue({
+        type: "context_compaction",
+        phase: "started",
+      });
+    } else if (type === "commandExecution") {
       this.emitToolUse(id, "commandExecution", {
         command: textValue(
           item.command,
@@ -1283,6 +1998,11 @@ export class CodexPersistentQueryManager {
     if (!item) return;
     const type = textValue(item.type);
     const id = textValue(item.id);
+    if (type === "contextCompaction") {
+      this.contextCompactionActive = false;
+      this.enqueue({ type: "context_compaction", phase: "completed" });
+      return;
+    }
     if (type === "agentMessage") {
       const text = textValue(item.text);
       if (this.agentMessageDeltaIds.has(textValue(item.id))) {
@@ -1346,12 +2066,16 @@ export class CodexPersistentQueryManager {
       });
     } else if (type === "mcpToolCall") {
       const result = asRecord(item.result);
+      const error = asRecord(item.error);
+      const errorText =
+        textValue(item.error, error?.message, error?.error, error?.Err) ||
+        (item.error ? stringified(item.error) : "");
       const content = Array.isArray(result?.content)
         ? result!.content
             .map((part) => textValue(asRecord(part)?.text))
             .filter(Boolean)
             .join("\n")
-        : textValue(item.error) || "Completed";
+        : errorText || textValue(item.status) || "Completed";
       this.enqueue({
         type: "tool_result",
         result: {
@@ -1518,20 +2242,40 @@ export class CodexPersistentQueryManager {
     method: string,
     params: unknown,
   ): Promise<unknown> {
+    this.debug("server_request.handle", {
+      method,
+      params: summarizeNotification(method, params),
+    });
     if (method === "item/tool/requestUserInput") {
       return this.handleUserInputRequest(asRecord(params));
     }
-    if (!this.config) return {};
-    const mode = this.config.permissionMode;
-    if (mode === "bypassPermissions") return this.allowDecision(method, true);
-    if (mode === "dontAsk") return this.denyDecision(method);
-    if (
-      mode === "acceptEdits" &&
-      method === "item/fileChange/requestApproval"
-    ) {
-      return this.allowDecision(method, false);
+    if (method === "account/chatgptAuthTokens/refresh") {
+      return this.handleChatgptAuthTokensRefresh(asRecord(params));
     }
-
+    if (method === "mcpServer/elicitation/request") {
+      return { action: "cancel", content: null, _meta: null };
+    }
+    if (method === "item/tool/call") {
+      return {
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: "Dynamic app tools are not available in Claudero.",
+          },
+        ],
+      };
+    }
+    if (method === "attestation/generate") {
+      return { token: "" };
+    }
+    if (method === "execCommandApproval") {
+      return this.handleLegacyExecApproval(asRecord(params));
+    }
+    if (method === "applyPatchApproval") {
+      return this.handleLegacyPatchApproval(asRecord(params));
+    }
+    if (!this.config) return {};
     const request = asRecord(params) || {};
     const toolName =
       method === "item/fileChange/requestApproval"
@@ -1549,12 +2293,23 @@ export class CodexPersistentQueryManager {
             additionalPermissions: request.additionalPermissions,
           }
         : request;
+    const policyDenial = this.permissionManager.getToolPolicyDenial(toolName);
+    if (policyDenial) return this.denyDecision(method);
+    const mode = this.config.permissionMode;
+    if (mode === "bypassPermissions") return this.allowDecision(method, true);
+    if (mode === "dontAsk") return this.denyDecision(method);
+    if (
+      mode === "acceptEdits" &&
+      method === "item/fileChange/requestApproval"
+    ) {
+      return this.allowDecision(method, false);
+    }
     if (!(await this.ensurePlanApprovedBeforeExecution(method, input))) {
       return this.denyDecision(method);
     }
     const decision = await this.requestPermission(toolName, input);
     if (!decision.allowed) return this.denyDecision(method);
-    if (decision.remember) this.permissionManager.remember(toolName);
+    if (decision.remember) this.permissionManager.remember(toolName, input);
     return this.allowDecision(method, decision.remember === true);
   }
 
@@ -1562,7 +2317,7 @@ export class CodexPersistentQueryManager {
     toolName: string,
     input: unknown,
   ): Promise<PermissionDecision> {
-    if (this.permissionManager.isRemembered(toolName)) {
+    if (this.permissionManager.isRemembered(toolName, input)) {
       return Promise.resolve({ allowed: true, remember: true });
     }
     const id = Math.random().toString(36).slice(2, 11);
@@ -1693,6 +2448,114 @@ export class CodexPersistentQueryManager {
     });
   }
 
+  private async handleChatgptAuthTokensRefresh(
+    params: JsonRecord | null,
+  ): Promise<unknown> {
+    const authPath = path.join(os.homedir(), ".codex", "auth.json");
+    this.debug("auth.refresh.request", {
+      reason: textValue(params?.reason),
+      previousAccountId: textValue(params?.previousAccountId) || undefined,
+      authPath,
+    });
+    try {
+      const auth = JSON.parse(await readFile(authPath, "utf8")) as JsonRecord;
+      const tokens = asRecord(auth.tokens);
+      const accessToken = textValue(tokens?.access_token);
+      const accountId =
+        textValue(tokens?.account_id) ||
+        textValue(params?.previousAccountId) ||
+        "default";
+      if (!accessToken) {
+        throw new Error("No access_token found in ~/.codex/auth.json");
+      }
+      this.debug("auth.refresh.ready", {
+        authMode: textValue(auth.auth_mode),
+        accountId,
+        lastRefresh: textValue(auth.last_refresh),
+        hasAccessToken: true,
+      });
+      return {
+        accessToken,
+        chatgptAccountId: accountId,
+        chatgptPlanType: null,
+      };
+    } catch (error) {
+      this.debug(
+        "auth.refresh.failed",
+        { error: diagnosticError(error) },
+        "error",
+      );
+      throw error;
+    }
+  }
+
+  private async handleLegacyExecApproval(
+    params: JsonRecord | null,
+  ): Promise<unknown> {
+    if (!this.config) return { decision: "denied" };
+    const input = {
+      command: Array.isArray(params?.command)
+        ? (params!.command as unknown[]).map(String).join(" ")
+        : "",
+      cwd: textValue(params?.cwd),
+      reason: textValue(params?.reason),
+      parsedCmd: params?.parsedCmd,
+    };
+    if (
+      !(await this.ensurePlanApprovedBeforeExecution(
+        "execCommandApproval",
+        input,
+      ))
+    ) {
+      return { decision: "denied" };
+    }
+    const mode = this.config.permissionMode;
+    if (this.permissionManager.getToolPolicyDenial("Bash")) {
+      return { decision: "denied" };
+    }
+    if (mode === "bypassPermissions")
+      return { decision: "approved_for_session" };
+    if (mode === "dontAsk") return { decision: "denied" };
+    const decision = await this.requestPermission("Bash", input);
+    if (!decision.allowed) return { decision: "denied" };
+    if (decision.remember) this.permissionManager.remember("Bash", input);
+    return {
+      decision: decision.remember ? "approved_for_session" : "approved",
+    };
+  }
+
+  private async handleLegacyPatchApproval(
+    params: JsonRecord | null,
+  ): Promise<unknown> {
+    if (!this.config) return { decision: "denied" };
+    const input = {
+      changes: params?.fileChanges || {},
+      reason: textValue(params?.reason),
+      grantRoot: textValue(params?.grantRoot),
+    };
+    if (
+      !(await this.ensurePlanApprovedBeforeExecution(
+        "applyPatchApproval",
+        input,
+      ))
+    ) {
+      return { decision: "denied" };
+    }
+    const mode = this.config.permissionMode;
+    if (mode === "bypassPermissions" || mode === "acceptEdits") {
+      return { decision: "approved_for_session" };
+    }
+    if (mode === "dontAsk") return { decision: "denied" };
+    const decision = await this.requestPermission("apply_patch", input);
+    if (!decision.allowed) return { decision: "denied" };
+    if (decision.remember) {
+      this.permissionManager.remember("apply_patch", input);
+    }
+    return {
+      decision: decision.remember ? "approved_for_session" : "approved",
+    };
+  }
+
   private enqueue(item: QueueItem): void {
     this.queue.push(item);
     if (this.queueResolve) {
@@ -1701,25 +2564,42 @@ export class CodexPersistentQueryManager {
     }
   }
 
-  private async nextQueueItem(
-    timeoutMs = CODEX_TURN_IDLE_TIMEOUT_MS,
-  ): Promise<QueueItem> {
+  private async nextQueueItem(timeoutMs?: number): Promise<QueueItem> {
     while (this.queue.length === 0) {
       let timer: NodeJS.Timeout | null = null;
+      const effectiveTimeoutMs =
+        timeoutMs ?? codexTurnIdleTimeoutMs(this.contextCompactionActive);
       await new Promise<void>((resolve) => {
         this.queueResolve = resolve;
         timer = setTimeout(() => {
           const stderr = this.transport?.getStderrTail();
+          const userStderr = userFacingCodexStderr(stderr || "");
+          this.runtimeUnhealthyReason = hasModelsCacheSchemaError(stderr || "")
+            ? "incompatible_models_cache"
+            : "turn_idle_timeout";
           this.queueResolve = null;
+          this.debug(
+            "turn.idle_timeout",
+            {
+              timeoutMs: effectiveTimeoutMs,
+              threadId: this.currentThreadId || this.threadId || undefined,
+              turnId: this.currentTurnId || undefined,
+              pendingRequests: this.transport?.getPendingRequests() || [],
+              stderrTail: truncateDiagnosticText(stderr),
+            },
+            "error",
+          );
           this.enqueue({
             type: "error",
             error:
-              "Codex did not produce any events after starting the turn. The Codex app-server may be stuck; try sending again or restarting Claudero helper." +
-              (stderr ? `\n\nApp-server stderr:\n${stderr}` : ""),
+              "Codex did not produce any events after starting the turn. Claudero has discarded this app-server and will start a fresh one on the next message." +
+              (userStderr ? `\n\nApp-server stderr:\n${userStderr}` : ""),
           });
           this.finishTurn();
+          const proc = this.proc;
+          if (proc && isProcessAlive(proc)) proc.kill("SIGTERM");
           resolve();
-        }, timeoutMs);
+        }, effectiveTimeoutMs);
       });
       if (timer) clearTimeout(timer);
     }
@@ -1728,6 +2608,10 @@ export class CodexPersistentQueryManager {
 
   private finishTurn(): void {
     if (this.finished) return;
+    this.debug("turn.finish", {
+      threadId: this.currentThreadId || this.threadId || undefined,
+      turnId: this.currentTurnId || undefined,
+    });
     this.finished = true;
     this.enqueue({ type: "__done" });
   }
@@ -1745,6 +2629,7 @@ export class CodexPersistentQueryManager {
     this.startedToolIds.clear();
     this.agentMessageDeltaIds.clear();
     this.rawToolNamesById.clear();
+    this.contextCompactionActive = false;
     this.rawToolInputsById.clear();
     this.streamedAssistantText = "";
   }

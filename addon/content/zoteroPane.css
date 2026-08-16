@@ -1,4 +1,5 @@
 @import url("chrome://claudero/content/katex/katex.min.css");
+@namespace html url("http://www.w3.org/1999/xhtml");
 
 #claudero-side-panel {
   width: 360px;
@@ -340,6 +341,45 @@ toolbarbutton.claudero-history-action-btn.is-danger:hover {
     #2e7cd6 60%,
     var(--material-mix-quarternary)
   );
+}
+
+.claudero-history-footer {
+  position: sticky;
+  bottom: -4px;
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 4px 4px;
+  background: var(--material-background);
+  border-top: 1px solid var(--material-mix-quarternary);
+}
+
+.claudero-history-delete-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--fill-secondary);
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.claudero-history-delete-all svg {
+  width: 13px;
+  height: 13px;
+}
+
+.claudero-history-delete-all:hover {
+  color: var(--fill-primary);
+  background: var(--material-mix-quarternary);
+}
+
+.claudero-history-delete-all:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .claudero-header-tools {
@@ -956,7 +996,7 @@ toolbarbutton.claudero-header-action:hover {
   padding: 3px 2px 7px;
   font-size: 13px;
   font-style: italic;
-  color: #be4246;
+  color: var(--accent-red);
 }
 
 .claudero-thinking-word {
@@ -995,7 +1035,7 @@ toolbarbutton.claudero-header-action:hover {
   font: inherit;
   font-size: calc(13px * var(--claudero-font-scale, 1));
   font-weight: 600;
-  color: #be4246;
+  color: var(--accent-red);
   cursor: pointer;
   text-align: left;
 }
@@ -1043,6 +1083,16 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-thinking-card.collapsed .claudero-thinking-body {
+  display: none;
+}
+
+.claudero-thinking-card.summary-only .claudero-thinking-header {
+  margin-bottom: 0;
+  cursor: default;
+}
+
+.claudero-thinking-card.summary-only .claudero-thinking-chevron,
+.claudero-thinking-card.summary-only .claudero-thinking-body {
   display: none;
 }
 
@@ -1157,25 +1207,30 @@ toolbarbutton.claudero-header-action:hover {
 .claudero-message-body .claudero-evidence-chip {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  min-width: 1.35em;
+  height: 1.35em;
   max-width: 100%;
-  margin: 0 2px;
-  padding: 1px 6px;
-  border: 1px solid color-mix(in srgb, var(--accent-blue) 36%, transparent);
+  margin: 0 1px;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 24%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+  background: color-mix(in srgb, var(--accent-blue) 6%, transparent);
   color: var(--accent-blue);
   font-family:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     monospace;
-  font-size: 0.86em;
-  line-height: 1.35;
+  font-size: 0.68em;
+  font-weight: 650;
+  line-height: 1;
   text-decoration: none;
-  vertical-align: baseline;
+  vertical-align: super;
   white-space: nowrap;
 }
 
 .claudero-message-body a.claudero-evidence-chip:hover {
-  background: color-mix(in srgb, var(--accent-blue) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent-blue) 42%, transparent);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
   text-decoration: none;
 }
 
@@ -1195,9 +1250,15 @@ toolbarbutton.claudero-header-action:hover {
   background: var(--material-background);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
   color: var(--fill-primary);
+  cursor: pointer;
   font-size: 12px;
   line-height: 1.42;
-  pointer-events: none;
+  pointer-events: auto;
+}
+
+.claudero-evidence-popover:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-blue) 55%, transparent);
+  outline-offset: 2px;
 }
 
 .claudero-evidence-popover-label {
@@ -1212,10 +1273,10 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-evidence-popover-title {
   margin-top: 6px;
-  overflow: hidden;
+  max-height: 82px;
+  overflow: auto;
   color: var(--fill-primary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .claudero-evidence-popover-hint {
@@ -1355,6 +1416,12 @@ toolbarbutton.claudero-header-action:hover {
 .claudero-message-body .katex-display > .katex {
   display: inline-block;
   white-space: nowrap;
+}
+
+.claudero-message-body .katex-display > .katex > .katex-html > .tag {
+  position: static;
+  display: inline-block;
+  margin-left: 1.5em;
 }
 
 .claudero-message-body .katex .mord,
@@ -1670,6 +1737,8 @@ toolbarbutton.claudero-header-action:hover {
 .claudero-notice-body {
   white-space: pre-wrap;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .claudero-undo-card {
@@ -2514,16 +2583,21 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-input {
+  appearance: none !important;
+  -moz-appearance: none !important;
+  display: block;
   width: 100%;
   min-height: 40px;
   max-height: 120px;
   resize: none;
-  padding: 0;
-  border: 0;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
   outline: none !important;
   box-shadow: none !important;
   color: var(--fill-primary);
-  background: transparent;
+  background: transparent !important;
   font: inherit;
   /* 1em = the inherited composer size; multiply by the pane zoom factor */
   font-size: calc(1em * var(--claudero-font-scale, 1));
@@ -2532,6 +2606,7 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-input:focus,
 .claudero-input:focus-visible {
+  border: 0 !important;
   outline: none !important;
   box-shadow: none !important;
 }
@@ -2940,9 +3015,13 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-tabs {
-  display: flex;
+  display: flex !important;
   position: relative;
-  align-items: stretch;
+  flex-flow: row nowrap !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  width: 100%;
+  min-width: 0;
   border-bottom: 1px solid var(--material-panedivider);
   background: var(--material-mix-quarternary, #f5f5f5);
   overflow-x: auto;
@@ -2952,7 +3031,12 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-tab {
   appearance: none !important;
-  flex: 0 0 auto;
+  -moz-appearance: none !important;
+  display: block !important;
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
   border: none !important;
   border-radius: 0 !important;
   max-height: none !important;
@@ -3085,6 +3169,38 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-status.error {
   color: #b42318;
+}
+
+.claudero-pref-setup-panel {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--material-border-quinary);
+  background: var(--material-background-quinary);
+}
+
+.claudero-pref-setup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.claudero-pref-setup-details {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 0.9em;
+}
+
+.claudero-pref-setup-row {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+}
+
+.claudero-pref-setup-row.success > span:first-child,
+.claudero-pref-setup-row.error > span:first-child {
+  font-weight: 700;
 }
 
 .claudero-pref-mcp-actions {
@@ -3280,7 +3396,7 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-skills-table th:nth-child(2),
 .claudero-pref-skills-table td:nth-child(2) {
-  width: 13%;
+  width: 15%;
 }
 
 .claudero-pref-skills-table th:nth-child(3),
@@ -3290,7 +3406,7 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-skills-table th:nth-child(4),
 .claudero-pref-skills-table td:nth-child(4) {
-  width: 22%;
+  width: 20%;
 }
 
 .claudero-pref-skills-table th:nth-child(5),
@@ -3410,16 +3526,30 @@ toolbarbutton.claudero-header-action:hover {
   text-transform: lowercase;
 }
 
+.claudero-pref-skill-status-cell {
+  line-height: normal;
+}
+
 .claudero-pref-skill-badge {
-  display: inline-flex;
-  flex: 0 0 auto;
+  appearance: none !important;
+  -moz-appearance: none !important;
+  display: inline-flex !important;
+  flex: 0 0 auto !important;
   align-items: center;
+  width: auto !important;
+  max-width: 100%;
+  min-width: 0 !important;
+  min-height: 0 !important;
   margin: 0 3px 3px 0;
   padding: 1px 6px;
+  box-sizing: border-box;
   border-radius: 999px;
   background: color-mix(in srgb, currentColor 10%, transparent);
   color: var(--fill-secondary);
   font-size: 11px;
+  line-height: 1.2;
+  vertical-align: top;
+  white-space: nowrap;
 }
 
 .claudero-pref-skill-badge.enabled {

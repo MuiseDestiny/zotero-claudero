@@ -67,11 +67,7 @@ function normalizeTools(value: unknown, disabled: Set<string>): McpToolInfo[] {
 }
 
 function frame(message: unknown): Buffer {
-  const body = Buffer.from(JSON.stringify(message), "utf8");
-  return Buffer.concat([
-    Buffer.from(`Content-Length: ${body.byteLength}\r\n\r\n`, "utf8"),
-    body,
-  ]);
+  return Buffer.from(`${JSON.stringify(message)}\n`, "utf8");
 }
 
 function extractFrames(buffer: Buffer<ArrayBufferLike>): {
@@ -81,22 +77,42 @@ function extractFrames(buffer: Buffer<ArrayBufferLike>): {
   const messages: JsonRpcResponse[] = [];
   let rest = buffer;
   while (rest.length > 0) {
-    const headerEnd = rest.indexOf("\r\n\r\n");
-    if (headerEnd < 0) break;
-    const header = rest.slice(0, headerEnd).toString("utf8");
-    const match = header.match(/content-length:\s*(\d+)/i);
-    if (!match) break;
-    const length = Number(match[1]);
-    const bodyStart = headerEnd + 4;
-    const bodyEnd = bodyStart + length;
-    if (rest.length < bodyEnd) break;
-    try {
-      messages.push(JSON.parse(rest.slice(bodyStart, bodyEnd).toString("utf8")));
-    } catch {
-      // Skip malformed frames.
+    if (/^content-length:/i.test(rest.slice(0, 32).toString("utf8"))) {
+      const headerEnd = rest.indexOf("\r\n\r\n");
+      if (headerEnd < 0) break;
+      const header = rest.slice(0, headerEnd).toString("utf8");
+      const match = header.match(/content-length:\s*(\d+)/i);
+      if (!match) break;
+      const length = Number(match[1]);
+      if (!Number.isSafeInteger(length) || length < 0 || length > 8_388_608) {
+        return { messages, rest: Buffer.alloc(0) };
+      }
+      const bodyStart = headerEnd + 4;
+      const bodyEnd = bodyStart + length;
+      if (rest.length < bodyEnd) break;
+      try {
+        messages.push(
+          JSON.parse(rest.slice(bodyStart, bodyEnd).toString("utf8")),
+        );
+      } catch {
+        // Skip malformed frames.
+      }
+      rest = rest.slice(bodyEnd);
+      continue;
     }
-    rest = rest.slice(bodyEnd);
+
+    const newline = rest.indexOf("\n");
+    if (newline < 0) break;
+    const line = rest.slice(0, newline).toString("utf8").trim();
+    rest = rest.slice(newline + 1);
+    if (!line) continue;
+    try {
+      messages.push(JSON.parse(line));
+    } catch {
+      // Some MCP servers write diagnostics to stdout; ignore non-JSON lines.
+    }
   }
+  if (rest.length > 8_388_608) rest = Buffer.alloc(0);
   return { messages, rest };
 }
 
@@ -165,7 +181,9 @@ async function testStdioMcpServer(
       capabilities: {},
       clientInfo: { name: "claudero-mcp-tester", version: "0.1.0" },
     });
-    proc.stdin.write(frame({ jsonrpc: "2.0", method: "notifications/initialized" }));
+    proc.stdin.write(
+      frame({ jsonrpc: "2.0", method: "notifications/initialized" }),
+    );
     const tools = await request("tools/list");
     const serverInfo = asRecord(asRecord(init.result)?.serverInfo);
     return {
@@ -205,6 +223,7 @@ async function postJsonRpc(
   headers: Record<string, string> | undefined,
   message: unknown,
   timeoutMs: number,
+  session: { id?: string },
 ): Promise<JsonRpcResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -216,10 +235,13 @@ async function postJsonRpc(
         Accept: "application/json, text/event-stream",
         "Content-Type": "application/json",
         ...(headers || {}),
+        ...(session.id ? { "Mcp-Session-Id": session.id } : {}),
       },
       body: JSON.stringify(message),
     });
     const text = await response.text();
+    const sessionId = response.headers.get("Mcp-Session-Id");
+    if (sessionId) session.id = sessionId;
     if (!response.ok) {
       throw new Error(text || `HTTP ${response.status}`);
     }
@@ -240,6 +262,7 @@ async function testHttpMcpServer(
   const url = typeof config.url === "string" ? config.url.trim() : "";
   if (!url) return { success: false, tools: [], error: "Missing MCP URL" };
   const disabled = disabledToolSet(config);
+  const session: { id?: string } = {};
   try {
     const init = await postJsonRpc(
       url,
@@ -255,18 +278,21 @@ async function testHttpMcpServer(
         },
       },
       timeoutMs,
+      session,
     );
     await postJsonRpc(
       url,
       config.headers,
       { jsonrpc: "2.0", method: "notifications/initialized" },
       timeoutMs,
+      session,
     ).catch(() => {});
     const tools = await postJsonRpc(
       url,
       config.headers,
       { jsonrpc: "2.0", id: 2, method: "tools/list" },
       timeoutMs,
+      session,
     );
     const serverInfo = asRecord(asRecord(init.result)?.serverInfo);
     return {

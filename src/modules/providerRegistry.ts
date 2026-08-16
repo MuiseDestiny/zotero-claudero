@@ -1,6 +1,6 @@
 import { getPref, setPref } from "../utils/prefs";
 
-export type AiProvider = "claude" | "codex";
+export type AiProvider = "claude" | "codex" | "deepseek";
 export type CodexInstallationMethod = "native" | "wsl";
 export type CodexSafeMode = "workspace-write" | "read-only";
 
@@ -38,7 +38,7 @@ export interface ProviderRegistration {
   defaultModel: string;
   defaultEffort: string;
   executableName: string;
-  settingsPanel: "claude" | "codex";
+  settingsPanel: "claude" | "codex" | "deepseek";
   environmentKeyHints: string[];
 }
 
@@ -59,6 +59,7 @@ export interface CodexProviderConfig extends HostScopedProviderConfig {
 export interface ProviderConfigs {
   claude?: HostScopedProviderConfig;
   codex?: CodexProviderConfig;
+  deepseek?: HostScopedProviderConfig;
 }
 
 export interface ProviderRuntimePrefs {
@@ -81,6 +82,11 @@ export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
 export const CODEX_MODEL_OPTIONS: ModelOption[] = [
   { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
   { value: "gpt-5.5", label: "GPT-5.5" },
+];
+
+export const DEEPSEEK_MODEL_OPTIONS: ModelOption[] = [
+  { value: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
+  { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
 ];
 
 export const PROVIDER_REGISTRY: Record<AiProvider, ProviderRegistration> = {
@@ -132,10 +138,36 @@ export const PROVIDER_REGISTRY: Record<AiProvider, ProviderRegistration> = {
     defaultEffort: "medium",
     executableName: "codex",
     settingsPanel: "codex",
+    environmentKeyHints: ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"],
+  },
+  deepseek: {
+    provider: "deepseek",
+    label: "DeepSeek Harness",
+    blankOrder: 30,
+    capabilities: {
+      provider: "deepseek",
+      supportsPersistentRuntime: true,
+      supportsNativeHistory: false,
+      supportsPlanMode: false,
+      supportsFork: false,
+      supportsRollback: false,
+      supportsCompact: false,
+      supportsProviderCommands: false,
+      supportsImageAttachments: false,
+      supportsMcpTools: false,
+      supportsInteractivePlanApproval: false,
+      reasoningControl: "none",
+    },
+    modelOptions: DEEPSEEK_MODEL_OPTIONS,
+    defaultModel: "deepseek-v4-flash",
+    defaultEffort: "none",
+    executableName: "dsh",
+    settingsPanel: "deepseek",
     environmentKeyHints: [
-      "OPENAI_API_KEY",
-      "OPENAI_BASE_URL",
-      "OPENAI_MODEL",
+      "DEEPSEEK_API_KEY",
+      "DEEPSEEK_BASE_URL",
+      "DSH_MODEL",
+      "DSH_HOME",
     ],
   },
 };
@@ -162,7 +194,10 @@ function hashText(value: string): string {
 }
 
 export function normalizeProvider(value: unknown): AiProvider {
-  return String(value) === "codex" ? "codex" : "claude";
+  const normalized = String(value);
+  return normalized === "codex" || normalized === "deepseek"
+    ? normalized
+    : "claude";
 }
 
 export function providerLabel(provider: AiProvider): string {
@@ -235,9 +270,13 @@ export function getProviderCliPath(
   hostKey = getHostKey(),
 ): string {
   const configs = parseProviderConfigs();
-  return provider === "codex"
-    ? hostScopedPath(configs.codex, getPref("codexPath"), hostKey)
-    : hostScopedPath(configs.claude, getPref("claudePath"), hostKey);
+  if (provider === "codex") {
+    return hostScopedPath(configs.codex, getPref("codexPath"), hostKey);
+  }
+  if (provider === "deepseek") {
+    return hostScopedPath(configs.deepseek, getPref("deepseekPath"), hostKey);
+  }
+  return hostScopedPath(configs.claude, getPref("claudePath"), hostKey);
 }
 
 export function setProviderCliPath(
@@ -247,7 +286,7 @@ export function setProviderCliPath(
 ): void {
   const configs = parseProviderConfigs();
   const next = { ...configs };
-  const key = provider === "codex" ? "codex" : "claude";
+  const key = provider === "codex" ? "codex" : provider;
   const current = { ...(next[key] || {}) } as HostScopedProviderConfig;
   const cliPathsByHost = { ...(current.cliPathsByHost || {}) };
   const trimmed = value.trim();
@@ -257,7 +296,14 @@ export function setProviderCliPath(
   current.cliPath = trimmed || current.cliPath || "";
   next[key] = current as never;
   saveProviderConfigs(next);
-  setPref(provider === "codex" ? "codexPath" : "claudePath", trimmed);
+  setPref(
+    provider === "codex"
+      ? "codexPath"
+      : provider === "deepseek"
+        ? "deepseekPath"
+        : "claudePath",
+    trimmed,
+  );
 }
 
 export function getProviderEnvironment(provider: AiProvider): string {
@@ -265,7 +311,9 @@ export function getProviderEnvironment(provider: AiProvider): string {
   const scoped =
     provider === "codex"
       ? configs.codex?.environmentVariables
-      : configs.claude?.environmentVariables;
+      : provider === "deepseek"
+        ? configs.deepseek?.environmentVariables
+        : configs.claude?.environmentVariables;
   return scoped ?? "";
 }
 
@@ -276,6 +324,11 @@ export function setProviderEnvironment(
   const configs = parseProviderConfigs();
   if (provider === "codex") {
     configs.codex = { ...(configs.codex || {}), environmentVariables: value };
+  } else if (provider === "deepseek") {
+    configs.deepseek = {
+      ...(configs.deepseek || {}),
+      environmentVariables: value,
+    };
   } else {
     configs.claude = { ...(configs.claude || {}), environmentVariables: value };
   }
@@ -346,10 +399,17 @@ export function setCodexSafeMode(value: string): void {
 export function defaultModelForProvider(provider: AiProvider): string {
   const fallback = PROVIDER_REGISTRY[provider].defaultModel;
   const value = String(
-    getPref(provider === "codex" ? "codexModel" : "claudeModel") ||
+    getPref(
+      provider === "codex"
+        ? "codexModel"
+        : provider === "deepseek"
+          ? "deepseekModel"
+          : "claudeModel",
+    ) ||
       getPref("model") ||
       fallback,
   );
+  if (provider !== "claude") return value.trim() || fallback;
   return modelOptionsForProvider(provider).some(
     (option) => option.value === value,
   )
@@ -359,7 +419,13 @@ export function defaultModelForProvider(provider: AiProvider): string {
 
 export function defaultEffortForProvider(provider: AiProvider): string {
   return String(
-    getPref(provider === "codex" ? "codexEffort" : "claudeEffort") ||
+    getPref(
+      provider === "codex"
+        ? "codexEffort"
+        : provider === "deepseek"
+          ? "deepseekEffort"
+          : "claudeEffort",
+    ) ||
       getPref("effort") ||
       PROVIDER_REGISTRY[provider].defaultEffort,
   );
