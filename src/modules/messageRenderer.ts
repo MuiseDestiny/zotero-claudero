@@ -1,6 +1,6 @@
 import hljs from "highlight.js/lib/common";
 import MarkdownIt from "markdown-it";
-import markdownItKatex from "markdown-it-katex";
+import { markdownItKatex } from "../shared/markdownKatexPlugin";
 import {
   decodeEvidenceReference,
   hydrateEvidenceMarkers,
@@ -10,7 +10,7 @@ import { getString } from "../utils/locale";
 
 const escapeHtml = new MarkdownIt().utils.escapeHtml;
 
-const markdownRenderer: MarkdownIt = new MarkdownIt({
+const markdownRenderer = new MarkdownIt({
   breaks: true,
   html: false,
   linkify: true,
@@ -34,7 +34,6 @@ const markdownRenderer: MarkdownIt = new MarkdownIt({
   },
 }).use(markdownItKatex, {
   throwOnError: false,
-  errorColor: "#be4246",
 });
 
 const evidenceScheme = "claudero-evidence:";

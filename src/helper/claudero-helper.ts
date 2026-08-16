@@ -46,15 +46,21 @@ import {
   bundledCodexCandidates,
   modelsCacheRequiresNewerCodex,
 } from "./runtime/codexCompatibility";
+import {
+  hasValidBearerAuthorization,
+  validateHelperServerConfig,
+  type HelperServerConfig,
+} from "./runtime/helperServerSecurity";
 import type { AcademicToolPolicy } from "../shared/academicToolPolicy";
+import {
+  isSensitiveDiagnosticKey,
+  redactSensitiveText,
+  summarizeAgentEventForDiagnostics,
+} from "../shared/diagnosticPrivacy";
 
 type HelperProvider = "claude" | "codex" | "deepseek";
 
-interface HelperConfig {
-  host: string;
-  port: number;
-  token: string;
-}
+type HelperConfig = HelperServerConfig;
 
 interface ImageInput {
   media_type: string;
@@ -166,11 +172,11 @@ function parseArgs(argv: string[]): HelperConfig {
     return index >= 0 ? argv[index + 1] || fallback : fallback;
   };
 
-  return {
+  return validateHelperServerConfig({
     host: getArg("--host", "127.0.0.1"),
     port: Number(getArg("--port", "38660")),
     token: getArg("--token"),
-  };
+  });
 }
 
 function normalizeProvider(value: string | undefined): HelperProvider {
@@ -186,7 +192,7 @@ function sendJson(res: ServerResponse, status: number, data: unknown): void {
 }
 
 function isAuthorized(req: IncomingMessage, token: string): boolean {
-  return req.headers.authorization === `Bearer ${token}`;
+  return hasValidBearerAuthorization(req.headers.authorization, token);
 }
 
 async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
@@ -839,11 +845,14 @@ async function restartRuntimeAdapters(): Promise<Record<string, boolean>> {
 }
 
 function redactHelperValue(key: string, value: unknown): unknown {
-  if (/key|token|secret|password/i.test(key)) {
-    return typeof value === "string" && value ? "[redacted]" : value;
+  if (isSensitiveDiagnosticKey(key)) {
+    return value === undefined || value === null || value === ""
+      ? value
+      : "[redacted]";
   }
   if (typeof value === "string") {
-    return value.length > 700 ? `${value.slice(0, 700)}...` : value;
+    const safeValue = redactSensitiveText(value);
+    return safeValue.length > 700 ? `${safeValue.slice(0, 700)}...` : safeValue;
   }
   if (Array.isArray(value)) {
     return value.slice(0, 40).map((entry) => redactHelperValue(key, entry));
@@ -939,7 +948,8 @@ function traceSummary(trace: AgentEventTrace | null): unknown {
       (event): event is { type: "error"; error: string } =>
         event.type === "error",
     )
-    .map((event) => event.error);
+    .map((event) => redactSensitiveText(event.error).slice(0, 700));
+  const lastEnvelope = trace.events.at(-1);
   return {
     traceId: trace.traceId,
     startedAt: trace.startedAt,
@@ -947,13 +957,21 @@ function traceSummary(trace: AgentEventTrace | null): unknown {
     eventCount: trace.events.length,
     eventCounts,
     errors,
-    lastEvent: trace.events.at(-1) || null,
+    lastEvent: lastEnvelope
+      ? {
+          id: lastEnvelope.id,
+          sequence: lastEnvelope.sequence,
+          timestamp: lastEnvelope.timestamp,
+          source: lastEnvelope.source,
+          event: summarizeAgentEventForDiagnostics(lastEnvelope.event),
+        }
+      : null,
   };
 }
 
 function diagnosticsPayload(): unknown {
   const activeRuntime = activeQueryManager();
-  return {
+  return redactHelperValue("diagnostics", {
     helper: {
       version: HELPER_VERSION,
       activeProvider,
@@ -967,7 +985,7 @@ function diagnosticsPayload(): unknown {
     },
     trace: traceSummary(latestAgentTrace),
     debugLog: helperDebugLog.slice(-180),
-  };
+  });
 }
 
 function runtimeRestartConfig(
@@ -2018,9 +2036,6 @@ function main(): void {
     throw new Error("Claudero helper must be started with --server");
   }
   const config = parseArgs(process.argv.slice(2));
-  if (!config.token) {
-    throw new Error("Missing --token");
-  }
 
   const server = createServer((req, res) => {
     route(req, res, config).catch((error) => {

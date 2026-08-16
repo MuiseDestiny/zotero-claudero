@@ -8,6 +8,9 @@ Initial public preview of Claudero for Zotero 7 through 10.
 - Zotero-aware conversations with PDF, annotation, evidence, and citation tools.
 - Persistent conversation history, provider session state, permissions, MCP, and academic skills.
 - macOS, Windows, and Linux executable discovery, including Codex WSL support.
+- Loopback-only helper networking with capability-token authentication.
+- Privacy-safe diagnostic summaries without raw prompts or tool-result previews.
+- Automated release metadata, XPI checksum, tracked-secret, and dependency security gates.
 
 This release requires a local Node.js 20+ runtime and the provider CLI selected
 in Preferences. DeepSeek Harness support remains a developer-preview feature

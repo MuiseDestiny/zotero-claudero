@@ -213,6 +213,9 @@ Skills 面板用于管理内置和导入的学术 skill。Diagnostics 面板可�
 安全设置约束。学术工作流默认只读；修改 Zotero 的工具需要用户批准，支持的修改会
 记录到 undo 栈。回答会先显示在面板中，用户再决定是否插入为笔记。
 
+漏洞报告和安全边界参见 [SECURITY.md](../SECURITY.md)，Provider 数据流、本地存储和
+诊断导出说明参见 [PRIVACY.md](../PRIVACY.md)。
+
 ## 故障排查
 
 ### 找不到 Provider CLI
@@ -239,9 +242,10 @@ Skills 面板用于管理内置和导入的学术 skill。Diagnostics 面板可�
 
 ```bash
 npm install
-npm run build
+npm run check:release
 npm test
 npm run lint:check
+npm run audit:all
 npm run test:runtime
 npm run test:helper:mock
 npm run test:evidence:ci
@@ -258,6 +262,9 @@ npm run test:helper -- --providers deepseek
 `npm test` 会运行 Zotero 浏览器测试，因此需要本机的 Zotero 程序和测试 profile。
 mock helper 测试不需要 provider 登录。正式发布前应完整运行 CI，并在干净的 Zotero
 profile 中安装生成的 XPI 做一次启动和对话验收。
+
+完整的自动与人工发布门槛见
+[docs/release-checklist.md](../docs/release-checklist.md)。
 
 更多架构信息请阅读
 [doc/agent-architecture.md](agent-architecture.md)，其中介绍 provider 适配器、

@@ -234,6 +234,10 @@ Academic workflows are read-only by default. Zotero write tools require user
 approval, and supported writes are tracked for undo. The assistant response is
 shown in the pane before the user chooses to insert it as a note.
 
+See [SECURITY.md](SECURITY.md) for vulnerability reporting and security
+boundaries, and [PRIVACY.md](PRIVACY.md) for provider data flow, local storage,
+and diagnostic-export details.
+
 ## Troubleshooting
 
 ### Provider CLI not found
@@ -263,9 +267,10 @@ figure/table inspection, keep the PDF open so page rendering is available.
 
 ```bash
 npm install
-npm run build
+npm run check:release
 npm test
 npm run lint:check
+npm run audit:all
 npm run test:runtime
 npm run test:helper:mock
 npm run test:evidence:ci
@@ -283,6 +288,9 @@ npm run test:helper -- --providers deepseek
 binary/profile. The mock helper test does not require a provider login. Before
 publishing a release, run the complete CI workflow and install the generated
 XPI in a clean Zotero profile.
+
+The complete manual and automated release gate is documented in
+[docs/release-checklist.md](docs/release-checklist.md).
 
 See [doc/agent-architecture.md](doc/agent-architecture.md) for the provider
 adapter, helper protocol, event trace, academic skills, and MCP architecture.

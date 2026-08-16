@@ -27,10 +27,13 @@
     "start": "zotero-plugin serve",
     "restart": "zotero-plugin serve",
     "build": "zotero-plugin build && tsc --noEmit",
+    "check:release": "npm run build && node scripts/verify-release.mjs",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "audit:all": "npm audit --audit-level=high",
     "test:helper": "npm run build && node scripts/smoke-helper-communication.mjs --full",
     "test:helper:quick": "npm run build && node scripts/smoke-helper-communication.mjs",
     "test:helper:mock": "npm run build && node scripts/smoke-helper-mock.mjs",
-    "test:runtime": "node scripts/run-node-tests.mjs test/deepseekRuntime.node.ts test/codexMcpConfig.test.ts test/windowsExecutablePaths.test.ts",
+    "test:runtime": "node scripts/run-node-tests.mjs test/deepseekRuntime.node.ts test/codexMcpConfig.test.ts test/windowsExecutablePaths.test.ts test/helperServerSecurity.test.ts test/diagnosticPrivacy.test.ts test/markdownSecurity.test.ts",
     "diagnose:codex-latency": "npm run build && node scripts/diagnose-codex-latency.mjs",
     "test:evidence": "npm run build && node scripts/smoke-evidence-contract.mjs && node scripts/smoke-evidence-golden.mjs && node scripts/smoke-pdf-visual-audit.mjs",
     "test:evidence:ci": "node scripts/smoke-evidence-contract.mjs && node scripts/smoke-evidence-golden.mjs && node scripts/smoke-pdf-visual-audit.mjs",
@@ -47,20 +50,19 @@
     "update-deps": "npm update --save"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.186",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.233",
     "@iconify-json/lucide": "^1.2.114",
     "@iconify-json/tabler": "^1.2.35",
+    "@vscode/markdown-it-katex": "^1.1.2",
     "highlight.js": "^11.11.1",
     "iconify-icon": "^3.0.2",
     "katex": "0.16.25",
-    "markdown-it": "^14.2.0",
-    "markdown-it-katex": "^2.0.3",
+    "markdown-it": "^15.0.0",
     "zod": "^4.0.0",
     "zotero-plugin-toolkit": "^5.1.0-beta.13"
   },
   "devDependencies": {
     "@types/chai": "^5.2.3",
-    "@types/markdown-it": "^14.1.2",
     "@types/mocha": "^10.0.10",
     "@types/node": "^24.10.0",
     "@zotero-plugin/eslint-config": "^0.6.7",
@@ -88,8 +90,8 @@
     ]
   },
   "overrides": {
-    "markdown-it-katex": {
-      "katex": "0.16.25"
-    }
+    "adm-zip": "0.6.0",
+    "diff": "8.0.4",
+    "serialize-javascript": "7.0.5"
   }
 }

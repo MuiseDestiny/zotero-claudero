@@ -1,5 +1,12 @@
 name: CI
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches:
@@ -12,6 +19,7 @@ jobs:
   cross-platform:
     name: ${{ matrix.os }} quality and runtime
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -30,8 +38,11 @@ jobs:
           node-version: 24
       - name: Run Lint
         run: npm run lint:check
-      - name: Run Build
-        run: npm run build
+      - name: Build and verify release package
+        run: npm run check:release
+      - name: Audit all dependencies
+        if: runner.os == 'Linux'
+        run: npm run audit:all
       - name: Run provider runtime and platform tests
         run: npm run test:runtime
       - name: Run mock helper and CLI smoke
@@ -44,10 +55,12 @@ jobs:
         with:
           name: build-result
           path: .scaffold/build
+          retention-days: 14
 
   zotero-browser:
     name: Zotero browser tests (Ubuntu)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs:
       - cross-platform
     env:

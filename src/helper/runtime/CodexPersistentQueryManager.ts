@@ -39,6 +39,7 @@ import {
   parseCodexReconnectStatus,
 } from "./codexTurnPolicy";
 import type { AcademicToolPolicy } from "../../shared/academicToolPolicy";
+import { redactSensitiveText } from "../../shared/diagnosticPrivacy";
 
 export interface CodexConfig {
   workspacePath: string;
@@ -526,7 +527,7 @@ function truncateDiagnosticText(
   value: unknown,
   limit = 600,
 ): string | undefined {
-  const text = String(value ?? "")
+  const text = redactSensitiveText(String(value ?? ""))
     .replace(/\s+/g, " ")
     .trim();
   if (!text) return undefined;

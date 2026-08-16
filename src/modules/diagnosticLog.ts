@@ -1,6 +1,10 @@
 import { getPref } from "../utils/prefs";
 import { isZoteroMcpEnabled } from "./mcpSettings";
 import type { ClauderoSelectionContext } from "./zoteroContext";
+import {
+  sanitizeDiagnosticData,
+  stableDiagnosticHash,
+} from "../shared/diagnosticPrivacy";
 
 type DiagnosticLevel = "info" | "warning" | "error";
 
@@ -24,7 +28,6 @@ export interface DiagnosticTurnContext {
 }
 
 const MAX_ENTRIES = 500;
-const PREVIEW_LIMIT = 120;
 const entries: DiagnosticLogEntry[] = [];
 
 const EVIDENCE_TOOL_NAMES = new Set([
@@ -40,24 +43,6 @@ const EVIDENCE_TOOL_NAMES = new Set([
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function preview(value: unknown, limit = PREVIEW_LIMIT): string | undefined {
-  const text = String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return undefined;
-  return text.length > limit ? `${text.slice(0, limit)}...` : text;
-}
-
-function stableHash(value: unknown): string {
-  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
-  let hash = 2166136261;
-  for (let i = 0; i < text.length; i += 1) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function compactObject(value: unknown): Record<string, unknown> | undefined {
@@ -85,11 +70,10 @@ function compactObject(value: unknown): Record<string, unknown> | undefined {
     const raw = record[key];
     if (typeof raw === "string") {
       compact[`${key}Length`] = raw.length;
-      compact[`${key}Hash`] = stableHash(raw);
-      compact[`${key}Preview`] = preview(raw);
+      compact[`${key}Hash`] = stableDiagnosticHash(raw);
     } else if (Array.isArray(raw)) {
       compact[`${key}Count`] = raw.length;
-      compact[`${key}Hash`] = stableHash(raw);
+      compact[`${key}Hash`] = stableDiagnosticHash(raw);
     } else if (raw !== undefined) {
       compact[key] = raw;
     }
@@ -114,7 +98,9 @@ function contextSummary(context: ClauderoSelectionContext | null | undefined) {
         }
       : null,
     selectedTextLength: selectedText.length,
-    selectedTextHash: selectedText ? stableHash(selectedText) : undefined,
+    selectedTextHash: selectedText
+      ? stableDiagnosticHash(selectedText)
+      : undefined,
     annotations: context?.selectedAnnotations?.length || 0,
     selectedItemIds: (context?.items || []).slice(0, 12).map((item) => item.id),
     attachmentIds: (context?.items || [])
@@ -138,7 +124,7 @@ export function logDiagnostic(
     ts: nowIso(),
     level,
     event,
-    data,
+    data: sanitizeDiagnosticData(data) as Record<string, unknown>,
   });
 }
 
@@ -184,8 +170,7 @@ export function logToolResult(result: {
       id: result.id,
       isError: !!result.isError,
       contentLength: content.length,
-      contentHash: content ? stableHash(content) : undefined,
-      contentPreview: preview(content),
+      contentHash: content ? stableDiagnosticHash(content) : undefined,
     },
     result.isError ? "warning" : "info",
   );
@@ -207,6 +192,7 @@ export function logTurnEnd(data: {
 }
 
 export function snapshotDiagnosticLog(extra: Record<string, unknown> = {}) {
+  const safeExtra = sanitizeDiagnosticData(extra) as Record<string, unknown>;
   return {
     version: 1,
     createdAt: nowIso(),
@@ -229,7 +215,7 @@ export function snapshotDiagnosticLog(extra: Record<string, unknown> = {}) {
       permissionMode: getPref("permissionMode"),
       enableZoteroMcp: isZoteroMcpEnabled(),
     },
-    ...extra,
+    ...safeExtra,
     entries: entries.slice(),
   };
 }
