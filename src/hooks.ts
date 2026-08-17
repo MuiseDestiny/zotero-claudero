@@ -5,10 +5,7 @@ import {
   registerClauderoToolbarButton,
   unregisterClauderoPane,
 } from "./modules/clauderoPane";
-import {
-  prewarmClaudeHelper,
-  shutdownClaudeHelper,
-} from "./modules/claudeHelperClient";
+import { shutdownClaudeHelper } from "./modules/claudeHelperClient";
 import { registerPrefsScripts } from "./modules/preferenceScript";
 import {
   registerZoteroEndpoint,
@@ -39,7 +36,6 @@ async function onStartup() {
 
   addon.data.initialized = true;
   registerZoteroEndpoint();
-  void prewarmClaudeHelper();
 }
 
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
