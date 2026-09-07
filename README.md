@@ -72,6 +72,11 @@ Open **Zotero Preferences -> Claudero** and select a default provider. Each
 provider has its own CLI path and environment-variable panel. Leave a path
 empty to use auto-detection, or enter an absolute path.
 
+Environment fields accept `NAME=value` lines, optional `export`, and comments.
+General values apply to all providers; provider values override them. Variables
+such as `$PATH` and `${PATH}` expand in unquoted or double-quoted values. Use
+single quotes for literal credentials containing dollar signs: `KEY='secret$value'`.
+
 ### Claude Code
 
 Install and authenticate the official Claude Code CLI using its normal setup,
@@ -209,7 +214,9 @@ The General tab contains settings shared by providers:
 - **Workspace path**: working directory for provider processes. Empty uses
   `<Zotero profile>/claudero/workspace`.
 - **Helper port**: local HTTP port used by the Node helper, default `38660`.
-- **Proxy**: optional HTTP/HTTPS proxy for provider network requests.
+- **Proxy**: optional HTTP/HTTPS proxy for provider network requests. An explicit
+  proxy is always passed to the provider; connection failures do not silently
+  switch to a direct connection.
 - **Environment variables**: one `KEY=VALUE` per line. Provider-specific
   variables should normally be entered in that provider's panel.
 

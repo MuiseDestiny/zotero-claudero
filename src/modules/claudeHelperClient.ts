@@ -26,6 +26,10 @@ import type { AcademicToolPolicy } from "../shared/academicToolPolicy";
 import { windowsClaudeCandidates } from "../shared/windowsExecutablePaths";
 import { getOrCreateHelperToken } from "./helperToken";
 import { autoDetectSettings } from "./settingsAutoDetect";
+import {
+  buildRuntimeEnvironment,
+  parseEnvironmentVariables,
+} from "../shared/runtimeEnvironment";
 
 export type ClauderoQueryEvent = AgentEventPayload;
 
@@ -99,101 +103,13 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
-function parseEnvironmentVariables(
-  raw: string,
-  inherited: Record<string, string> = {},
-): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const normalized = trimmed.startsWith("export ")
-      ? trimmed.slice("export ".length).trim()
-      : trimmed;
-    const equals = normalized.indexOf("=");
-    if (equals <= 0) continue;
-    const key = normalized.slice(0, equals).trim();
-    const value = normalized
-      .slice(equals + 1)
-      .trim()
-      .replace(/^["']|["']$/g, "")
-      .replace(
-        /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
-        (_match, braced, plain) => {
-          const name = String(braced || plain || "");
-          return env[name] ?? inherited[name] ?? Services.env.get(name) ?? "";
-        },
-      );
-    if (key) env[key] = value;
-  }
-  return env;
-}
-
-let proxyProbeCache:
-  | { proxy: string; reachable: boolean; checkedAt: number }
-  | undefined;
-
-async function isProxyReachable(proxy: string): Promise<boolean> {
-  const now = Date.now();
-  if (
-    proxyProbeCache?.proxy === proxy &&
-    now - proxyProbeCache.checkedAt < 30_000
-  ) {
-    return proxyProbeCache.reachable;
-  }
-  let url: URL;
-  try {
-    url = new URL(proxy);
-    if (!/^https?:$/.test(url.protocol)) return false;
-  } catch {
-    return false;
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 900);
-  let reachable = false;
-  try {
-    await fetch(url.href, {
-      method: "HEAD",
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    reachable = true;
-  } catch {
-    reachable = false;
-  } finally {
-    clearTimeout(timer);
-  }
-  proxyProbeCache = { proxy, reachable, checkedAt: now };
-  helperLog(
-    `proxy probe ${reachable ? "reachable" : "unreachable"}: ${url.protocol}//${url.host}`,
-  );
-  return reachable;
-}
-
 async function getClauderoEnvironment(): Promise<Record<string, string>> {
-  const env: Record<string, string> = {};
-
-  // Direct connections to the Anthropic API are geo-blocked in some regions
-  // (the CLI returns "403 Request not allowed"). The proxy preference routes
-  // the Claude Code subprocess through a local/HTTP proxy. localhost is always
-  // excluded so the helper's own loopback traffic is never proxied.
-  const proxy = String(getPref("proxy") || "").trim();
-  if (proxy && (await isProxyReachable(proxy))) {
-    env.HTTPS_PROXY = proxy;
-    env.HTTP_PROXY = proxy;
-    env.NO_PROXY = "localhost,127.0.0.1";
-  }
-
-  // User-supplied variables (e.g. ANTHROPIC_API_KEY, a custom NO_PROXY)
-  // override the proxy defaults above.
-  return {
-    ...env,
-    ...parseEnvironmentVariables(
-      String(getPref("environmentVariables") || ""),
-      env,
-    ),
-  };
+  return buildRuntimeEnvironment(
+    String(getPref("proxy") || ""),
+    String(getPref("environmentVariables") || ""),
+    "",
+    (name) => Services.env.get(name),
+  );
 }
 
 async function getProviderEnvironment(
@@ -203,7 +119,9 @@ async function getProviderEnvironment(
   const base = await getClauderoEnvironment();
   return {
     ...base,
-    ...parseEnvironmentVariables(runtime.environmentVariables, base),
+    ...parseEnvironmentVariables(runtime.environmentVariables, base, (name) =>
+      Services.env.get(name),
+    ),
   };
 }
 
