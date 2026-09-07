@@ -258,8 +258,11 @@ function hostScopedPath(
   legacyPath: unknown,
   hostKey = getHostKey(),
 ): string {
-  const fromHost = config?.cliPathsByHost?.[hostKey]?.trim();
-  if (fromHost) return fromHost;
+  // Once device-scoped paths exist, an empty or unknown device must use
+  // auto-detection instead of another device's legacy fallback path.
+  if (config?.cliPathsByHost && Object.keys(config.cliPathsByHost).length) {
+    return String(config.cliPathsByHost[hostKey] || "").trim();
+  }
   const direct = config?.cliPath?.trim();
   if (direct) return direct;
   return String(legacyPath || "").trim();
@@ -290,10 +293,9 @@ export function setProviderCliPath(
   const current = { ...(next[key] || {}) } as HostScopedProviderConfig;
   const cliPathsByHost = { ...(current.cliPathsByHost || {}) };
   const trimmed = value.trim();
-  if (trimmed) cliPathsByHost[hostKey] = trimmed;
-  else delete cliPathsByHost[hostKey];
+  cliPathsByHost[hostKey] = trimmed;
   current.cliPathsByHost = cliPathsByHost;
-  current.cliPath = trimmed || current.cliPath || "";
+  current.cliPath = trimmed;
   next[key] = current as never;
   saveProviderConfigs(next);
   setPref(
@@ -339,11 +341,12 @@ export function getCodexInstallationMethod(
   hostKey = getHostKey(),
 ): CodexInstallationMethod {
   const codex = parseProviderConfigs().codex || {};
-  return (
-    codex.installationMethodsByHost?.[hostKey] ||
-    codex.installationMethod ||
-    "native"
-  );
+  const value =
+    codex.installationMethodsByHost &&
+    Object.keys(codex.installationMethodsByHost).length
+      ? codex.installationMethodsByHost[hostKey]
+      : codex.installationMethod;
+  return value === "wsl" ? "wsl" : "native";
 }
 
 export function setCodexInstallationMethod(
@@ -364,6 +367,12 @@ export function setCodexInstallationMethod(
 
 export function getCodexWslDistro(hostKey = getHostKey()): string {
   const codex = parseProviderConfigs().codex || {};
+  if (
+    codex.wslDistroOverridesByHost &&
+    Object.keys(codex.wslDistroOverridesByHost).length
+  ) {
+    return codex.wslDistroOverridesByHost[hostKey] || "";
+  }
   return (
     codex.wslDistroOverridesByHost?.[hostKey] || codex.wslDistroOverride || ""
   );
@@ -374,8 +383,7 @@ export function setCodexWslDistro(value: string, hostKey = getHostKey()): void {
   const codex = { ...(configs.codex || {}) };
   const overrides = { ...(codex.wslDistroOverridesByHost || {}) };
   const trimmed = value.trim();
-  if (trimmed) overrides[hostKey] = trimmed;
-  else delete overrides[hostKey];
+  overrides[hostKey] = trimmed;
   codex.wslDistroOverride = trimmed;
   codex.wslDistroOverridesByHost = overrides;
   configs.codex = codex;
