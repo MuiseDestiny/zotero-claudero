@@ -33,7 +33,7 @@
     "test:helper": "npm run build && node scripts/smoke-helper-communication.mjs --full",
     "test:helper:quick": "npm run build && node scripts/smoke-helper-communication.mjs",
     "test:helper:mock": "npm run build && node scripts/smoke-helper-mock.mjs",
-    "test:runtime": "node scripts/run-node-tests.mjs test/deepseekRuntime.node.ts test/codexMcpConfig.test.ts test/windowsExecutablePaths.test.ts test/helperServerSecurity.test.ts test/diagnosticPrivacy.test.ts test/markdownSecurity.test.ts test/mcpTester.node.ts test/runtimeEnvironment.test.ts test/providerSettings.node.ts",
+    "test:runtime": "node scripts/run-node-tests.mjs test/deepseekRuntime.node.ts test/codexMcpConfig.test.ts test/windowsExecutablePaths.test.ts test/helperServerSecurity.test.ts test/diagnosticPrivacy.test.ts test/markdownSecurity.test.ts test/mcpTester.node.ts test/runtimeEnvironment.test.ts test/providerSettings.node.ts test/settingsAutoDetect.node.ts",
     "diagnose:codex-latency": "npm run build && node scripts/diagnose-codex-latency.mjs",
     "test:evidence": "npm run build && node scripts/smoke-evidence-contract.mjs && node scripts/smoke-evidence-golden.mjs && node scripts/smoke-pdf-visual-audit.mjs",
     "test:evidence:ci": "node scripts/smoke-evidence-contract.mjs && node scripts/smoke-evidence-golden.mjs && node scripts/smoke-pdf-visual-audit.mjs",

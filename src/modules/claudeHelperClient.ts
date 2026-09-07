@@ -204,11 +204,10 @@ function getHomePath(): string {
   }
 
   const profilePath = getProfilePath();
-  if (Zotero.isWin) return profilePath.split("\\AppData\\")[0] || "";
   return (
-    profilePath.split("/Library/Application Support/")[0] ||
-    profilePath.split("/.zotero/")[0] ||
-    ""
+    profilePath.split(
+      /\/Library\/Application Support\/|\/\.zotero\/|\\AppData\\/,
+    )[0] || ""
   );
 }
 

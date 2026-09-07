@@ -1,4 +1,5 @@
 import {
+  getCodexInstallationMethod,
   getProviderCliPath,
   setProviderCliPath,
   type AiProvider,
@@ -54,10 +55,9 @@ function getHomePath(): string {
 
   const profilePath = getProfilePath();
   return (
-    profilePath.split("/Library/Application Support/")[0] ||
-    profilePath.split("/.zotero/")[0] ||
-    profilePath.split("\\AppData\\")[0] ||
-    ""
+    profilePath.split(
+      /\/Library\/Application Support\/|\/\.zotero\/|\\AppData\\/,
+    )[0] || ""
   );
 }
 
@@ -147,10 +147,17 @@ async function nvmNodeCandidates(): Promise<string[]> {
 }
 
 async function findExecutable(executableName: string): Promise<string> {
+  const nodePath = String(getPref("nodePath") || "").trim();
+  const nodeBin = nodePath.replace(/[\\/][^\\/]+$/, "");
   const candidates =
     executableName === "node"
       ? unique([...(await nvmNodeCandidates()), ...pathCandidates("node")])
-      : pathCandidates(executableName);
+      : unique([
+          ...(nodeBin && !Zotero.isWin
+            ? [PathUtils.join(nodeBin, executableName)]
+            : []),
+          ...pathCandidates(executableName),
+        ]);
   return candidates.find(fileExists) || "";
 }
 
@@ -159,7 +166,7 @@ export async function autoDetectSettings(): Promise<SettingsAutoDetectResult> {
 
   if (!String(getPref("nodePath") || "").trim()) {
     const nodePath = await findExecutable("node");
-    if (nodePath) {
+    if (nodePath && !String(getPref("nodePath") || "").trim()) {
       setPref("nodePath", nodePath);
       result.nodePath = nodePath;
     }
@@ -167,11 +174,13 @@ export async function autoDetectSettings(): Promise<SettingsAutoDetectResult> {
 
   const providers: AiProvider[] = ["claude", "codex", "deepseek"];
   for (const provider of providers) {
+    if (provider === "codex" && getCodexInstallationMethod() === "wsl")
+      continue;
     if (getProviderCliPath(provider)) continue;
     const cliPath = await findExecutable(
       provider === "deepseek" ? "dsh" : provider,
     );
-    if (!cliPath) continue;
+    if (!cliPath || getProviderCliPath(provider)) continue;
     setProviderCliPath(provider, cliPath);
     if (provider === "claude") result.claudePath = cliPath;
     else if (provider === "codex") result.codexPath = cliPath;
