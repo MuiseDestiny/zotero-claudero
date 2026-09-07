@@ -41,6 +41,9 @@ import { exportDiagnosticLog } from "./diagnosticLog";
 import { autoDetectSettings } from "./settingsAutoDetect";
 import { getPref, setPref } from "../utils/prefs";
 import { getString } from "../utils/locale";
+import { initializePreferenceTabs } from "./preferenceTabs";
+
+const initializedPreferenceRoots = new WeakSet<HTMLElement>();
 
 type XulValueElement = HTMLElement & {
   value: string;
@@ -58,7 +61,9 @@ type MonacoWindow = Window & {
 
 export async function registerPrefsScripts(window: Window) {
   const doc = window.document;
-  await autoDetectSettings();
+  const root = doc.querySelector<HTMLElement>(".claudero-pref-stack");
+  if (!root || initializedPreferenceRoots.has(root)) return;
+  initializedPreferenceRoots.add(root);
 
   const hostKey = getHostKey();
   doc.querySelector<HTMLElement>("#claudero-pref-host-key")!.textContent =
@@ -68,84 +73,6 @@ export async function registerPrefsScripts(window: Window) {
   doc.querySelector<HTMLElement>(
     "#claudero-pref-host-key-deepseek",
   )!.textContent = hostKey;
-
-  const tabs = Array.from(
-    doc.querySelectorAll(".claudero-pref-tab"),
-  ) as HTMLElement[];
-  const panels = Array.from(
-    doc.querySelectorAll(".claudero-pref-panel"),
-  ) as HTMLElement[];
-  const tabNav = doc.querySelector<HTMLElement>("#claudero-pref-tabs-nav");
-  const tabIndicator = doc.querySelector<HTMLElement>(
-    "#claudero-pref-tab-indicator",
-  );
-  const getActiveTab = () => tabs.find((tab) => tab.dataset.active === "true");
-  const moveTabIndicator = (tab: HTMLElement) => {
-    if (!tabIndicator) return;
-    tabIndicator.style.left = `${tab.offsetLeft}px`;
-    tabIndicator.style.width = `${tab.offsetWidth}px`;
-  };
-  const setTabIndicatorReady = (tab: HTMLElement) => {
-    if (!tabNav) return false;
-    const ready = tab.offsetWidth > 0;
-    if (ready) {
-      tabNav.dataset.indicatorReady = "true";
-    } else {
-      delete tabNav.dataset.indicatorReady;
-    }
-    return ready;
-  };
-  const syncTabIndicator = (
-    tab: HTMLElement | undefined = getActiveTab(),
-    attempts = 0,
-  ) => {
-    if (!tabNav || !tabIndicator) return;
-    if (!tab || tab.dataset.active !== "true") {
-      delete tabNav.dataset.indicatorReady;
-      return;
-    }
-    tabIndicator.style.transition = "none";
-    moveTabIndicator(tab);
-    tabIndicator.getBoundingClientRect();
-    const ready = setTabIndicatorReady(tab);
-    tabIndicator.style.transition = "";
-    if (!ready && attempts < 20) {
-      window.setTimeout(() => syncTabIndicator(tab, attempts + 1), 50);
-    }
-  };
-  const showPanel = (name: string) => {
-    const normalized = [
-      "general",
-      "claude",
-      "codex",
-      "deepseek",
-      "mcp",
-      "skills",
-      "diagnostics",
-    ].includes(name)
-      ? name
-      : "general";
-    setPref("settingsProvider", normalized);
-    tabs.forEach((tab) => {
-      const active = tab.dataset.panel === normalized;
-      tab.dataset.active = active ? "true" : "false";
-    });
-    panels.forEach((panel) => {
-      panel.hidden = panel.id !== `claudero-pref-panel-${normalized}`;
-    });
-    const activeTab = getActiveTab();
-    if (!activeTab) return;
-    moveTabIndicator(activeTab);
-    if (!setTabIndicatorReady(activeTab)) {
-      window.setTimeout(() => syncTabIndicator(activeTab), 50);
-    }
-  };
-  tabs.forEach((tab) => {
-    tab.addEventListener("click", () =>
-      showPanel(tab.dataset.panel || "general"),
-    );
-  });
-  window.addEventListener("resize", () => syncTabIndicator());
 
   bindProviderPath(doc, "claude");
   bindProviderPath(doc, "codex");
@@ -158,8 +85,35 @@ export async function registerPrefsScripts(window: Window) {
   bindAcademicSkills(doc);
   bindSetupWizard(doc);
   bindDiagnostics(doc);
-  showPanel(String(getPref("settingsProvider") || "general"));
-  window.setTimeout(() => syncTabIndicator(), 50);
+  initializePreferenceTabs(
+    root,
+    window,
+    String(getPref("settingsProvider") || "general"),
+    (panel) => setPref("settingsProvider", panel),
+  );
+  // Keep navigation and manual configuration available when detection fails.
+  void autoDetectSettings()
+    .then(() => syncDetectedPaths(doc))
+    .catch((error) => {
+      ztoolkit.log("[Claudero] Settings auto-detection failed", error);
+    });
+}
+
+function syncDetectedPaths(doc: Document): void {
+  for (const provider of ["claude", "codex", "deepseek"] as AiProvider[]) {
+    const input = doc.querySelector<HTMLInputElement>(
+      `#claudero-pref-${provider}-path`,
+    );
+    if (input && !input.value.trim() && doc.activeElement !== input) {
+      input.value = getProviderCliPath(provider);
+    }
+  }
+  const node = doc.querySelector<HTMLInputElement>(
+    "#zotero-prefpane-claudero-nodePath",
+  );
+  if (node && !node.value.trim() && doc.activeElement !== node) {
+    node.value = String(getPref("nodePath") || "");
+  }
 }
 
 function setupFileExists(value: string): boolean {
@@ -230,6 +184,7 @@ function bindSetupWizard(doc: Document): void {
     details.replaceChildren();
     try {
       const detected = await autoDetectSettings();
+      syncDetectedPaths(doc);
       const provider = String(getPref("provider") || "claude") as AiProvider;
       const nodePath = String(getPref("nodePath") || "");
       const cliPath = getProviderCliPath(provider);
@@ -1259,5 +1214,8 @@ function bindDiagnostics(doc: Document): void {
         }
       });
   });
-  void load();
+  const root = doc.querySelector<HTMLElement>(".claudero-pref-stack");
+  root?.addEventListener("claudero-preference-panel-selected", (event) => {
+    if ((event as CustomEvent<string>).detail === "diagnostics") void load();
+  });
 }

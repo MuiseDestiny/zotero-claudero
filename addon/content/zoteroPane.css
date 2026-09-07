@@ -2995,26 +2995,35 @@ toolbarbutton.claudero-header-action:hover {
 /* ── Preferences ─────────────────────────────────────────────────────────── */
 
 .claudero-pref-stack {
+  min-width: 0;
   gap: 8px;
   width: min(72em, 100%);
 }
 
 .claudero-pref-card {
+  container-type: inline-size;
+  min-width: 0;
+  box-sizing: border-box;
   width: min(68em, 100%);
   max-width: 100%;
   border: var(--material-panedivider);
   border-radius: 8px;
   overflow: hidden;
-  background: var(--material-mix-quinary, #f3f3f3);
+  background: var(--material-background);
 }
 
 .claudero-pref-tabs-wrapper {
+  display: grid;
+  grid-template-columns: 0 minmax(0, 1fr) 0;
+  background: var(--material-mix-quarternary);
   position: relative;
   border-radius: 8px 8px 0 0;
   overflow: hidden;
 }
 
 .claudero-pref-tabs {
+  grid-column: 2;
+  grid-row: 1;
   display: flex !important;
   position: relative;
   flex-flow: row nowrap !important;
@@ -3022,8 +3031,8 @@ toolbarbutton.claudero-header-action:hover {
   justify-content: flex-start !important;
   width: 100%;
   min-width: 0;
-  border-bottom: 1px solid var(--material-panedivider);
-  background: var(--material-mix-quarternary, #f5f5f5);
+  border-bottom: var(--material-panedivider);
+  background: var(--material-mix-quarternary);
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -3043,7 +3052,7 @@ toolbarbutton.claudero-header-action:hover {
   margin: 0 !important;
   padding: 11px 12px !important;
   background: transparent !important;
-  color: var(--fill-secondary, #666) !important;
+  color: var(--fill-secondary) !important;
   cursor: pointer !important;
   font-size: 13px !important;
   line-height: 1.4 !important;
@@ -3051,17 +3060,17 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-tab:hover {
-  color: var(--fill-primary, #333) !important;
+  color: var(--fill-primary) !important;
 }
 
 .claudero-pref-tab[data-active="true"] {
-  color: var(--toolbarbutton-active-color, #1a6eb5) !important;
+  color: var(--accent-blue) !important;
   font-weight: 500 !important;
 }
 
 .claudero-pref-tabs:not([data-indicator-ready="true"])
   .claudero-pref-tab[data-active="true"] {
-  box-shadow: inset 0 -3px 0 var(--toolbarbutton-active-color, #1a6eb5) !important;
+  box-shadow: inset 0 -3px 0 var(--accent-blue) !important;
 }
 
 #claudero-pref-tab-indicator {
@@ -3071,7 +3080,7 @@ toolbarbutton.claudero-header-action:hover {
   width: 0;
   height: 3px;
   border-radius: 9999px;
-  background: var(--toolbarbutton-active-color, #1a6eb5);
+  background: var(--accent-blue);
   pointer-events: none;
   transition:
     left 0.22s cubic-bezier(0.4, 0, 0.2, 1),
@@ -3080,7 +3089,7 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-tab-content {
   padding: 1.1em 1.25em;
-  background: var(--material-mix-quinary, #f3f3f3);
+  background: var(--material-background);
 }
 
 .claudero-pref-panel {
@@ -3103,7 +3112,7 @@ toolbarbutton.claudero-header-action:hover {
   flex: 0 0 9.5em;
   width: 9.5em;
   min-width: 0;
-  color: var(--fill-primary, #222);
+  color: var(--fill-primary);
   overflow-wrap: anywhere;
 }
 
@@ -3164,18 +3173,18 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-status.success {
-  color: #267246;
+  color: var(--accent-green);
 }
 
 .claudero-pref-status.error {
-  color: #b42318;
+  color: var(--accent-red);
 }
 
 .claudero-pref-setup-panel {
   margin-top: 12px;
   padding: 10px 12px;
-  border: 1px solid var(--material-border-quinary);
-  background: var(--material-background-quinary);
+  border: var(--material-border-quinary);
+  background: var(--material-mix-quinary);
 }
 
 .claudero-pref-setup-head {
@@ -3284,7 +3293,7 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-mcp-tools.error {
-  color: #b42318;
+  color: var(--accent-red);
 }
 
 .claudero-pref-mcp-tools-head {
@@ -3357,8 +3366,8 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-skills-table-header {
-  background: var(--material-mix-quarternary, #f5f5f5);
-  box-shadow: inset 0 -1px 0 var(--material-panedivider);
+  background: var(--material-mix-quarternary);
+  box-shadow: inset 0 -1px 0 var(--color-panedivider);
 }
 
 .claudero-pref-skills-table-body {
@@ -3366,14 +3375,14 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-skills-table-header th {
-  border-bottom: 1px solid var(--material-panedivider);
-  box-shadow: inset 0 -1px 0 var(--material-panedivider);
+  border-bottom: var(--material-panedivider);
+  box-shadow: inset 0 -1px 0 var(--color-panedivider);
 }
 
 .claudero-pref-skills-table th {
-  background: var(--material-mix-quarternary, #f5f5f5);
+  background: var(--material-mix-quarternary);
   padding: 8px 8px;
-  color: var(--fill-secondary, #666);
+  color: var(--fill-secondary);
   font-weight: 600;
   text-align: left;
   white-space: nowrap;
@@ -3383,7 +3392,7 @@ toolbarbutton.claudero-header-action:hover {
   min-width: 0;
   padding: 7px 8px;
   border-bottom: 1px solid color-mix(in srgb, currentColor 9%, transparent);
-  color: var(--fill-primary, #222);
+  color: var(--fill-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   vertical-align: top;
@@ -3456,12 +3465,8 @@ toolbarbutton.claudero-header-action:hover {
 .claudero-pref-skill-import-formats > * {
   padding: 2px 7px;
   border-radius: 999px;
-  background: color-mix(
-    in srgb,
-    var(--toolbarbutton-active-color, #1a6eb5) 9%,
-    transparent
-  );
-  color: var(--fill-secondary, #666);
+  background: color-mix(in srgb, var(--accent-blue) 9%, transparent);
+  color: var(--fill-secondary);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -3481,11 +3486,7 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-skill-row:hover td,
 .claudero-pref-skill-row:hover + .claudero-pref-skill-detail-row td {
-  background: color-mix(
-    in srgb,
-    var(--toolbarbutton-active-color, #1a6eb5) 5%,
-    transparent
-  );
+  background: color-mix(in srgb, var(--accent-blue) 5%, transparent);
 }
 
 .claudero-pref-skill-row.disabled,
@@ -3553,23 +3554,23 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-skill-badge.enabled {
-  color: #267246;
-  background: color-mix(in srgb, #267246 13%, transparent);
+  color: var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 13%, transparent);
 }
 
 .claudero-pref-skill-badge.update-available {
-  color: #9a3412;
-  background: #ffedd5;
+  color: var(--accent-orange);
+  background: var(--fill-quinary);
 }
 
 .claudero-pref-skill-badge.modified {
-  color: #1d4ed8;
-  background: #dbeafe;
+  color: var(--accent-blue);
+  background: var(--accent-blue10);
 }
 
 .claudero-pref-skill-badge.disabled {
-  color: #6b7280;
-  background: #f3f4f6;
+  color: var(--fill-secondary);
+  background: var(--fill-quinary);
 }
 
 .claudero-pref-skill-desc,
@@ -3606,11 +3607,11 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-pref-skill-actions html|button.claudero-pref-danger-button {
-  color: #b42318;
+  color: var(--accent-red);
 }
 
 .claudero-pref-skill-actions html|button.claudero-pref-danger-button:hover {
-  background: color-mix(in srgb, #b42318 10%, transparent);
+  background: color-mix(in srgb, var(--accent-red) 10%, transparent);
 }
 
 .claudero-pref-diagnostics-actions {
@@ -3682,6 +3683,109 @@ toolbarbutton.claudero-header-action:hover {
 @media (max-width: 380px) {
   #claudero-side-panel {
     min-width: 280px;
+  }
+}
+
+.claudero-pref-heading h2 {
+  margin: 4px 0;
+  font-size: 20px;
+  color: var(--fill-primary);
+}
+.claudero-pref-heading p {
+  margin: 4px 0 12px;
+  color: var(--fill-secondary);
+  line-height: 1.5;
+}
+.claudero-pref-intro {
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border: var(--material-border);
+  border-radius: 8px;
+  background: var(--material-mix-quinary);
+}
+.claudero-pref-intro strong {
+  color: var(--fill-primary);
+  font-size: 13px;
+}
+.claudero-pref-intro p {
+  margin: 5px 0 0;
+  color: var(--fill-secondary);
+  line-height: 1.6;
+}
+.claudero-pref-panel[hidden] {
+  display: none !important;
+}
+.claudero-pref-tabs-wrapper[data-overflow="true"] {
+  grid-template-columns: 30px minmax(0, 1fr) 30px;
+}
+.claudero-pref-tab-arrow {
+  appearance: none !important;
+  grid-row: 1;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  min-width: 0 !important;
+  width: 0;
+  visibility: hidden;
+  border: 0 !important;
+  border-radius: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  color: var(--fill-primary) !important;
+  font-size: 20px;
+  cursor: pointer;
+}
+.claudero-pref-tabs-wrapper[data-overflow="true"] .claudero-pref-tab-arrow {
+  width: 30px;
+  visibility: visible;
+}
+#claudero-pref-tab-prev {
+  grid-column: 1;
+}
+#claudero-pref-tab-next {
+  grid-column: 3;
+}
+.claudero-pref-tab-arrow:disabled {
+  color: var(--fill-tertiary) !important;
+  cursor: default;
+}
+.claudero-pref-tab-arrow:not(:disabled):hover {
+  background: var(--fill-quinary) !important;
+}
+.claudero-pref-tab:focus-visible,
+.claudero-pref-tab-arrow:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -3px;
+}
+.claudero-pref-setup-row {
+  overflow-wrap: anywhere;
+}
+.claudero-pref-setup-head,
+.claudero-pref-mcp-actions {
+  flex-wrap: wrap;
+}
+@container (max-width: 480px) {
+  .claudero-pref-row {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 5px !important;
+  }
+  .claudero-pref-row-label {
+    flex: 0 0 auto;
+    width: auto;
+    padding-top: 0 !important;
+  }
+  .claudero-pref-mcp-card-row {
+    flex-wrap: wrap;
+  }
+  .claudero-pref-tab-content {
+    padding: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #claudero-pref-tab-indicator {
+    transition: none;
   }
 }
 
