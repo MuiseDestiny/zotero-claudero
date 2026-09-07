@@ -685,6 +685,35 @@ export async function prewarmClaudeHelper(): Promise<void> {
   }
 }
 
+/** Settings requests must resolve the port and token after helper startup. */
+export async function requestHelperJson<T>(
+  endpoint: "/test-mcp" | "/diagnostics" | "/restart-runtimes",
+  init: RequestInit = {},
+): Promise<T> {
+  await ensureClaudeHelper();
+  const port = Number(getPref("helperPort") || 38660);
+  const token = await getOrCreateHelperToken();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...init.headers,
+        Authorization: `Bearer ${token}`,
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Helper returned ${response.status}`);
+    }
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function fetchProviderModels(
   provider: AiProvider,
 ): Promise<ProviderModelDescriptor[]> {

@@ -42,6 +42,9 @@ export default defineConfig({
         platform: "node",
         target: "node20",
         format: "esm",
+        banner: {
+          js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
+        },
         outfile: `.scaffold/build/addon/content/helper/claudero-helper.mjs`,
       },
     ],

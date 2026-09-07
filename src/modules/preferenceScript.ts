@@ -32,7 +32,11 @@ import {
   type AcademicSkill,
   type AcademicSkillRecord,
 } from "./academicSkills";
-import { ensureClaudeHelper, fetchProviderModels } from "./claudeHelperClient";
+import {
+  ensureClaudeHelper,
+  fetchProviderModels,
+  requestHelperJson,
+} from "./claudeHelperClient";
 import { exportDiagnosticLog } from "./diagnosticLog";
 import { autoDetectSettings } from "./settingsAutoDetect";
 import { getPref, setPref } from "../utils/prefs";
@@ -320,17 +324,6 @@ function bindSetupWizard(doc: Document): void {
   if (getPref("setupChecked") !== true) void run();
 }
 
-async function readHelperToken(): Promise<string> {
-  const tokenPath = [Zotero.Profile.dir, "claudero", "helper", ".token"].join(
-    "/",
-  );
-  try {
-    return (await (IOUtils as any).readUTF8(tokenPath)).trim();
-  } catch {
-    return "";
-  }
-}
-
 function bindProviderPath(doc: Document, provider: AiProvider): void {
   const input = doc.querySelector<HTMLInputElement>(
     `#claudero-pref-${provider}-path`,
@@ -437,31 +430,10 @@ function bindMcpSettings(doc: Document): void {
     }>;
     error?: string;
   }> => {
-    const port = Number(getPref("helperPort") || 38660);
-    const token = await readHelperToken();
-    const response = await fetch(`http://127.0.0.1:${port}/test-mcp`, {
+    return requestHelperJson("/test-mcp", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify({ config }),
     });
-    if (!response.ok) {
-      throw new Error(`Helper returned ${response.status}`);
-    }
-    return (await response.json()) as unknown as {
-      success: boolean;
-      serverName?: string;
-      serverVersion?: string;
-      tools?: Array<{
-        name: string;
-        description?: string;
-        inputSchema?: Record<string, unknown>;
-        enabled: boolean;
-      }>;
-      error?: string;
-    };
   };
 
   const renderStatus = (raw: string) => {
@@ -1177,15 +1149,7 @@ function bindDiagnostics(doc: Document): void {
       status.textContent = getString("diagnostics-loading");
     }
     try {
-      const port = Number(getPref("helperPort") || 38660);
-      const token = await readHelperToken();
-      const response = await fetch(`http://127.0.0.1:${port}/diagnostics`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) {
-        throw new Error(`Helper returned ${response.status}`);
-      }
-      const data = (await response.json()) as DiagnosticsPayload;
+      const data = await requestHelperJson<DiagnosticsPayload>("/diagnostics");
       summary?.replaceChildren(
         renderCard("Helper", [
           ["Version", data.helper?.version],
@@ -1256,32 +1220,7 @@ function bindDiagnostics(doc: Document): void {
       status.textContent = getString("diagnostics-restarting");
     }
     const restart = async () => {
-      const port = Number(getPref("helperPort") || 38660);
-      const token = await readHelperToken();
-      const response = await fetch(
-        `http://127.0.0.1:${port}/restart-runtimes`,
-        {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
-      if (response.status === 404) {
-        await fetch(`http://127.0.0.1:${port}/shutdown`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-        }).catch(() => {});
-        await Zotero.Promise.delay(500);
-        await ensureClaudeHelper();
-        if (status) {
-          status.textContent = getString("diagnostics-old-restarted");
-          status.classList.add("success");
-        }
-        await load();
-        return;
-      }
-      if (!response.ok) {
-        throw new Error(`Helper returned ${response.status}`);
-      }
+      await requestHelperJson("/restart-runtimes", { method: "POST" });
       if (status) {
         status.textContent = getString("diagnostics-restarted");
         status.classList.add("success");

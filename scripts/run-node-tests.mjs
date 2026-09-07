@@ -25,6 +25,9 @@ try {
       bundle: true,
       platform: "node",
       format: "esm",
+      banner: {
+        js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
+      },
       target: "node20",
       sourcemap: "inline",
       logLevel: "warning",
