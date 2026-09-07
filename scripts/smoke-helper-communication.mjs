@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -431,6 +431,34 @@ async function runProvider(baseUrl, provider) {
   );
 
   if (!full) return;
+
+  if (args["mock-workspace"]) {
+    log(`${provider}: switch workspace for the next /send`);
+    const nextWorkspace = path.resolve(String(args["mock-workspace"]));
+    const events = await postNdjson(baseUrl, "/send", {
+      ...config,
+      workspacePath: nextWorkspace,
+      prompt: "CLAUDERO_MOCK_REPORT_CWD",
+      permissionMode: "dontAsk",
+    });
+    assertTextEvents(
+      provider,
+      "workspace switch",
+      events,
+      realpathSync(nextWorkspace),
+    );
+    const updated = await getJson(baseUrl, "/diagnostics");
+    assert(
+      updated.runtimes?.[provider]?.workspacePath === nextWorkspace,
+      "Runtime diagnostics retained the previous workspace",
+    );
+    log(`${provider}: failed MCP test keeps helper alive`);
+    const failed = await postJson(baseUrl, "/test-mcp", {
+      config: { command: "claudero-nonexistent-mcp-executable" },
+    });
+    assert(failed.success === false, "Missing MCP command must fail");
+    await getJson(baseUrl, "/health");
+  }
 
   const queryToken = `${provider.toUpperCase()}_QUERY_OK`;
   log(`${provider}: legacy /query message`);

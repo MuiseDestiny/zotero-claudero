@@ -69,6 +69,7 @@ interface ImageInput {
 
 interface SendPayload {
   prompt: string;
+  workspacePath?: string;
   sessionId?: string;
   conversationId?: string;
   provider?: HelperProvider;
@@ -1107,6 +1108,7 @@ async function initializeProviderNow(
   );
   const manager = queryManagerFor(provider);
   try {
+    await mkdir(workspacePath, { recursive: true });
     if (provider === "codex") {
       const codexPath = resolveCodexPath(
         payload.codexPath,
@@ -1312,7 +1314,13 @@ async function handleSendWithPayload(
   const provider = normalizeProvider(payload.provider);
   const manager = queryManagerFor(provider);
   activeProvider = provider;
-  const currentWorkspacePath = currentWorkspacePathFor(provider);
+  const requestedWorkspacePath = payload.workspacePath?.trim();
+  if (requestedWorkspacePath && !path.isAbsolute(requestedWorkspacePath)) {
+    sendJson(res, 400, { error: "Workspace path must be absolute." });
+    return;
+  }
+  const currentWorkspacePath =
+    requestedWorkspacePath || currentWorkspacePathFor(provider);
   recordHelperDebug("http", "/send request", {
     provider,
     promptChars: payload.prompt?.length || 0,
@@ -1391,12 +1399,16 @@ async function handleSendWithPayload(
     payload.mcpDisabledTools ||
     payload.conversationId ||
     payload.providerState;
-  const needsRestart = hasConfigUpdate
-    ? manager.requiresRestart(runtimeRestartConfig(provider, payload))
-    : false;
+  const needsRestart =
+    (!!requestedWorkspacePath &&
+      requestedWorkspacePath !== manager.workspacePath) ||
+    (hasConfigUpdate
+      ? manager.requiresRestart(runtimeRestartConfig(provider, payload))
+      : false);
 
   if (needsRestart && manager.workspacePath) {
-    const restartWorkspacePath = manager.workspacePath;
+    const restartWorkspacePath =
+      requestedWorkspacePath || manager.workspacePath;
     try {
       recordHelperDebug("http", "/send restarting runtime", {
         provider,

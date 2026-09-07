@@ -17,7 +17,7 @@ try {
     [
       'const prompt = process.argv.at(-1) || "";',
       "const match = prompt.match(/Reply with exactly this token and nothing else:\\s*([A-Z0-9_]+)/);",
-      'process.stdout.write(match?.[1] || "MOCK_DSH_OK");',
+      'process.stdout.write(prompt === "CLAUDERO_MOCK_REPORT_CWD" ? process.cwd() : match?.[1] || "MOCK_DSH_OK");',
     ].join("\n"),
     "utf8",
   );
@@ -36,6 +36,8 @@ try {
       "deepseek",
       "--deepseek-path",
       deepseekEntrypoint,
+      "--mock-workspace",
+      path.join(fixtureDir, "new workspace"),
     ],
     {
       cwd: root,

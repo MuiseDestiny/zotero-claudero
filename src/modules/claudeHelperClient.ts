@@ -724,12 +724,13 @@ export async function installDeepSeekHarness(): Promise<DeepSeekInstallResult> {
   return result;
 }
 
-async function initializePersistentQuery(): Promise<void> {
+async function initializePersistentQuery(
+  provider: AiProvider = normalizeProviderPref(),
+): Promise<void> {
   if (persistentQueryInitialized) return;
 
   const port = Number(getPref("helperPort") || 38660);
   const token = await getOrCreateHelperToken();
-  const provider = normalizeProviderPref();
   const startedAt = Date.now();
   logDiagnostic("helper.init.start", {
     provider,
@@ -785,12 +786,13 @@ export async function* queryClaudeHelper(
 ): AsyncGenerator<ClauderoQueryEvent> {
   const requestId = `query-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const startedAt = Date.now();
+  const provider = options.provider || normalizeProviderPref();
   await ensureClaudeHelper();
 
   // Try to use persistent query (new fast path)
   if (!persistentQueryInitialized) {
     try {
-      await initializePersistentQuery();
+      await initializePersistentQuery(provider);
     } catch (error) {
       // Fall back to legacy /query endpoint if initialization fails
       ztoolkit.log(
@@ -802,7 +804,6 @@ export async function* queryClaudeHelper(
 
   const port = Number(getPref("helperPort") || 38660);
   const token = await getOrCreateHelperToken();
-  const provider = options.provider || normalizeProviderPref();
   const providerCapabilities = getProviderCapabilities(provider);
   const images = providerCapabilities.supportsImageAttachments
     ? options.images
@@ -832,6 +833,7 @@ export async function* queryClaudeHelper(
       },
       body: JSON.stringify({
         prompt,
+        workspacePath: getWorkspacePath(),
         ...(await buildProviderPayload(provider)),
         model: options.model,
         effort: options.effort,
