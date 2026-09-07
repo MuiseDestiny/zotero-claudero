@@ -15,6 +15,7 @@ import {
 import {
   getCustomMcpServersRaw,
   parseManagedMcpServers,
+  parseMcpArguments,
   parseCustomMcpServers,
   serializeManagedMcpServers,
   setCustomMcpServersRaw,
@@ -42,6 +43,7 @@ import { autoDetectSettings } from "./settingsAutoDetect";
 import { getPref, setPref } from "../utils/prefs";
 import { getString } from "../utils/locale";
 import { initializePreferenceTabs } from "./preferenceTabs";
+import { buildRuntimeEnvironment } from "../shared/runtimeEnvironment";
 
 const initializedPreferenceRoots = new WeakSet<HTMLElement>();
 
@@ -130,17 +132,6 @@ function setupFileExists(value: string): boolean {
   }
 }
 
-function setupEnvironmentKeys(value: string): string[] {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/^export\s+/, ""))
-    .map((line) => {
-      const equals = line.indexOf("=");
-      return equals > 0 ? line.slice(0, equals).trim() : "";
-    })
-    .filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
-}
-
 function bindSetupWizard(doc: Document): void {
   const runButton = doc.querySelector<HTMLButtonElement>(
     "#claudero-pref-setup-run",
@@ -188,7 +179,16 @@ function bindSetupWizard(doc: Document): void {
       const provider = String(getPref("provider") || "claude") as AiProvider;
       const nodePath = String(getPref("nodePath") || "");
       const cliPath = getProviderCliPath(provider);
-      const envKeys = setupEnvironmentKeys(getProviderEnvironment(provider));
+      const envKeys = Object.keys(
+        buildRuntimeEnvironment(
+          String(getPref("proxy") || ""),
+          String(getPref("environmentVariables") || ""),
+          getProviderEnvironment(provider),
+          (name) => Services.env.get(name),
+        ),
+      );
+      const usesWsl =
+        provider === "codex" && getCodexInstallationMethod() === "wsl";
       let helperReady = false;
       let helperError = "";
       try {
@@ -198,7 +198,7 @@ function bindSetupWizard(doc: Document): void {
         helperError = error instanceof Error ? error.message : String(error);
       }
       const nodeOk = setupFileExists(nodePath);
-      const cliOk = setupFileExists(cliPath);
+      const cliOk = usesWsl || setupFileExists(cliPath);
       let runtimeState: SetupRowState = "info";
       let runtimeDetail = getString("pref-setup-runtime-not-checked");
       if (provider === "deepseek") {
@@ -224,8 +224,12 @@ function bindSetupWizard(doc: Document): void {
         ),
         createRow(
           getString("pref-setup-cli", { args: { provider } }),
-          cliOk ? "success" : "error",
-          cliOk ? cliPath : getString("pref-setup-missing"),
+          usesWsl ? "info" : cliOk ? "success" : "error",
+          usesWsl
+            ? getString("pref-setup-wsl-cli")
+            : cliOk
+              ? cliPath
+              : getString("pref-setup-missing"),
         ),
         createRow(
           getString("pref-setup-env"),
@@ -357,6 +361,9 @@ function bindMcpSettings(doc: Document): void {
   const addHttp = doc.querySelector<HTMLButtonElement>(
     "#claudero-pref-mcp-add-http",
   );
+  const addSse = doc.querySelector<HTMLButtonElement>(
+    "#claudero-pref-mcp-add-sse",
+  );
   const status = doc.querySelector<HTMLElement>("#claudero-pref-mcp-status");
   const win = doc.defaultView;
   const createHtml = <K extends keyof HTMLElementTagNameMap>(
@@ -412,11 +419,11 @@ function bindMcpSettings(doc: Document): void {
     }
   };
 
-  const readManaged = (): Record<string, ManagedMcpServerConfig> => {
+  const readManaged = (): Record<string, ManagedMcpServerConfig> | null => {
     try {
       return parseManagedMcpServers(servers?.value || "");
     } catch {
-      return {};
+      return null;
     }
   };
 
@@ -447,6 +454,7 @@ function bindMcpSettings(doc: Document): void {
     if (!list) return;
     list.replaceChildren();
     const managed = readManaged();
+    if (!managed) return;
     const entries = Object.entries(managed);
     if (entries.length === 0) {
       const empty = doc.createElementNS("http://www.w3.org/1999/xhtml", "div");
@@ -489,7 +497,7 @@ function bindMcpSettings(doc: Document): void {
         return button;
       };
       actions.append(
-        makeButton("Verify", () => {
+        makeButton(getString("mcp-test-connection"), () => {
           toolsPanel.textContent = getString("mcp-testing");
           void testMcpServer(config)
             .then((result) => {
@@ -532,6 +540,7 @@ function bindMcpSettings(doc: Document): void {
                     : getString("ui-enable"),
                   () => {
                     const next = readManaged();
+                    if (!next) return;
                     const current = next[name] || {};
                     const disabled = new Set(current.disabledTools || []);
                     if (disabled.has(tool.name)) disabled.delete(tool.name);
@@ -553,17 +562,24 @@ function bindMcpSettings(doc: Document): void {
               toolsPanel.classList.add("error");
             });
         }),
-        makeButton(config.enabled === false ? "Enable" : "Disable", () => {
-          const next = readManaged();
-          next[name] = { ...next[name], enabled: config.enabled === false };
-          saveManaged(next);
-        }),
+        makeButton(
+          config.enabled === false
+            ? getString("ui-enable")
+            : getString("ui-disable"),
+          () => {
+            const next = readManaged();
+            if (!next) return;
+            next[name] = { ...next[name], enabled: config.enabled === false };
+            saveManaged(next);
+          },
+        ),
         makeButton(config.contextSaving ? "Always" : "@", () => {
           const next = readManaged();
+          if (!next) return;
           next[name] = { ...next[name], contextSaving: !config.contextSaving };
           saveManaged(next);
         }),
-        makeButton("Edit", () => {
+        makeButton(getString("ui-edit"), () => {
           const raw = win?.prompt(
             getString("mcp-edit-json", { args: { name } }),
             JSON.stringify(config, null, 2),
@@ -572,6 +588,7 @@ function bindMcpSettings(doc: Document): void {
           try {
             const parsed = JSON.parse(raw) as ManagedMcpServerConfig;
             const next = readManaged();
+            if (!next) return;
             next[name] = parsed;
             saveManaged(next);
           } catch (error) {
@@ -580,12 +597,13 @@ function bindMcpSettings(doc: Document): void {
             );
           }
         }),
-        makeButton("Delete", () => {
+        makeButton(getString("ui-delete"), () => {
           if (
             !win?.confirm(getString("mcp-delete-confirm", { args: { name } }))
           )
             return;
           const next = readManaged();
+          if (!next) return;
           delete next[name];
           saveManaged(next);
         }),
@@ -632,25 +650,56 @@ function bindMcpSettings(doc: Document): void {
         "-y @modelcontextprotocol/server-filesystem /tmp",
       ) || "";
     const next = readManaged();
-    next[name] = {
-      enabled: true,
-      command,
-      args: argsText.split(/\s+/).filter(Boolean),
-    };
-    saveManaged(next);
+    if (!next) return;
+    try {
+      if (Object.prototype.hasOwnProperty.call(next, name))
+        throw new Error(getString("mcp-name-exists"));
+      Object.defineProperty(next, name, {
+        value: { enabled: true, command, args: parseMcpArguments(argsText) },
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+      saveManaged(next);
+    } catch (error) {
+      win?.alert(
+        error instanceof Error ? error.message : getString("mcp-invalid"),
+      );
+    }
   });
 
-  addHttp?.addEventListener("click", () => {
+  const addRemote = (type: "http" | "sse") => {
     const name = win?.prompt(getString("mcp-server-name"), "remote")?.trim();
     if (!name) return;
     const url = win
-      ?.prompt(getString("mcp-http-url"), "http://127.0.0.1:3000/sse")
+      ?.prompt(
+        getString("mcp-http-url"),
+        `http://127.0.0.1:3000/${type === "sse" ? "sse" : "mcp"}`,
+      )
       ?.trim();
     if (!url) return;
     const next = readManaged();
-    next[name] = { enabled: true, type: "sse", url };
-    saveManaged(next);
-  });
+    if (!next) return;
+    try {
+      if (Object.prototype.hasOwnProperty.call(next, name))
+        throw new Error(getString("mcp-name-exists"));
+      if (!/^https?:$/.test(new URL(url).protocol))
+        throw new Error(getString("mcp-http-url-invalid"));
+      Object.defineProperty(next, name, {
+        value: { enabled: true, type, url },
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+      saveManaged(next);
+    } catch (error) {
+      win?.alert(
+        error instanceof Error ? error.message : getString("mcp-invalid"),
+      );
+    }
+  };
+  addHttp?.addEventListener("click", () => addRemote("http"));
+  addSse?.addEventListener("click", () => addRemote("sse"));
 }
 
 function bindAcademicSkills(doc: Document): void {
@@ -863,7 +912,7 @@ function bindAcademicSkills(doc: Document): void {
           setAcademicSkillEnabled(record.id, !record.enabled);
           renderList();
         }),
-        makeButton("Edit", () => editSkill(record)),
+        makeButton(getString("ui-edit"), () => editSkill(record)),
       );
       if (record.stored) {
         actions.append(
@@ -893,7 +942,7 @@ function bindAcademicSkills(doc: Document): void {
         );
       }
       if (!record.builtin) {
-        const deleteButton = makeButton("Delete", () => {
+        const deleteButton = makeButton(getString("ui-delete"), () => {
           if (!win?.confirm(`Delete imported skill "${record.skill.title}"?`)) {
             return;
           }

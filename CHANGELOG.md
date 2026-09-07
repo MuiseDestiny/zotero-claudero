@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Stabilize MCP connection tests with the official SDK, including process failures,
+  Streamable HTTP, legacy SSE, timeouts, and paginated tool lists.
+- Start and authenticate the local helper before settings requests.
+- Preserve explicit proxies and correctly parse quoted environment variables.
+- Fix cleared CLI paths, device-specific configuration, NVM discovery, Linux home
+  detection, and WSL detection without overwriting manual edits.
+- Apply workspace changes to the next persistent request.
+- Improve preferences with accessible scrolling tabs, responsive fields, Reader
+  theme colors, setup guidance, and complete localization.
+- Separate HTTP and SSE configuration, preserve quoted command arguments, and
+  protect existing MCP settings from malformed JSON and duplicate names.
+
 ## 0.1.0
 
 Initial public preview of Claudero for Zotero 7 through 10.

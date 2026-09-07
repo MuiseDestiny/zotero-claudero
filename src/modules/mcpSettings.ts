@@ -34,26 +34,19 @@ export function parseCustomMcpServers(
   raw = getCustomMcpServersRaw(),
   mentionedServers?: Set<string>,
 ): Record<string, ManagedMcpServerConfig> {
-  if (!raw) return {};
-  const parsed = JSON.parse(raw) as unknown;
-  const root =
-    parsed &&
-    typeof parsed === "object" &&
-    "mcpServers" in parsed &&
-    (parsed as Record<string, unknown>).mcpServers &&
-    typeof (parsed as Record<string, unknown>).mcpServers === "object"
-      ? ((parsed as Record<string, unknown>).mcpServers as Record<
-          string,
-          unknown
-        >)
-      : (parsed as Record<string, unknown>);
+  const root = parseManagedMcpServers(raw);
   const servers: Record<string, ManagedMcpServerConfig> = {};
   for (const [name, config] of Object.entries(root || {})) {
     if (!name.trim() || !config || typeof config !== "object") continue;
     const managed = config as ManagedMcpServerConfig;
     if (managed.enabled === false) continue;
     if (managed.contextSaving && !mentionedServers?.has(name.trim())) continue;
-    servers[name.trim()] = toRuntimeMcpConfig(managed);
+    Object.defineProperty(servers, name.trim(), {
+      value: toRuntimeMcpConfig(managed),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return servers;
 }
@@ -94,25 +87,68 @@ export function getDisabledMcpTools(
 export function parseManagedMcpServers(
   raw = getCustomMcpServersRaw(),
 ): Record<string, ManagedMcpServerConfig> {
-  if (!raw) return {};
-  const parsed = JSON.parse(raw) as unknown;
-  const root =
-    parsed &&
-    typeof parsed === "object" &&
-    "mcpServers" in parsed &&
-    (parsed as Record<string, unknown>).mcpServers &&
-    typeof (parsed as Record<string, unknown>).mcpServers === "object"
-      ? ((parsed as Record<string, unknown>).mcpServers as Record<
-          string,
-          unknown
-        >)
-      : (parsed as Record<string, unknown>);
-  const servers: Record<string, ManagedMcpServerConfig> = {};
-  for (const [name, config] of Object.entries(root || {})) {
-    if (!name.trim() || !config || typeof config !== "object") continue;
-    servers[name.trim()] = config as ManagedMcpServerConfig;
+  if (!raw.trim()) return {};
+  const parsed: unknown = JSON.parse(raw);
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object" && !Array.isArray(value);
+  if (!isRecord(parsed))
+    throw new Error("MCP configuration must be a JSON object.");
+  const root = "mcpServers" in parsed ? parsed.mcpServers : parsed;
+  if (!isRecord(root)) throw new Error("mcpServers must be a JSON object.");
+  const entries: Array<[string, ManagedMcpServerConfig]> = [];
+  for (const [name, config] of Object.entries(root)) {
+    if (!name.trim() || !isRecord(config)) {
+      throw new Error(
+        "Each MCP server needs a name and a configuration object.",
+      );
+    }
+    for (const key of ["args", "disabledTools"]) {
+      if (
+        config[key] !== undefined &&
+        (!Array.isArray(config[key]) ||
+          !config[key].every((value: unknown) => typeof value === "string"))
+      ) {
+        throw new Error(`MCP ${key} must be an array of strings.`);
+      }
+    }
+    entries.push([name.trim(), config as ManagedMcpServerConfig]);
   }
-  return servers;
+  return Object.fromEntries(entries);
+}
+
+/** Parse CLI arguments without invoking a shell, preserving quoted paths. */
+export function parseMcpArguments(text: string): string[] {
+  const args: string[] = [];
+  let value = "";
+  let quote = "";
+  let started = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (
+      char === "\\" &&
+      ((quote && text[i + 1] === quote) ||
+        (!quote && /[\s"']/.test(text[i + 1] || "")))
+    ) {
+      value += text[++i];
+      started = true;
+    } else if (quote) {
+      if (char === quote) quote = "";
+      else value += char;
+    } else if (char === "'" || char === '"') {
+      quote = char;
+      started = true;
+    } else if (/\s/.test(char)) {
+      if (started) args.push(value);
+      value = "";
+      started = false;
+    } else {
+      value += char;
+      started = true;
+    }
+  }
+  if (quote) throw new Error("Close the quote in the MCP arguments.");
+  if (started) args.push(value);
+  return args;
 }
 
 export function serializeManagedMcpServers(

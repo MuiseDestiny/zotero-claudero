@@ -220,15 +220,13 @@ describe("MCP connection tests", function () {
           return;
         }
         assert.equal(message.method, "initialize");
-        res
-          .writeHead(200, { "Content-Type": "application/json" })
-          .end(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              id: message.id,
-              result: { ...initResult, capabilities: { resources: {} } },
-            }),
-          );
+        res.writeHead(200, { "Content-Type": "application/json" }).end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: message.id,
+            result: { ...initResult, capabilities: { resources: {} } },
+          }),
+        );
       },
       async (url) => {
         const result = await testMcpServer({ url }, 1500);
