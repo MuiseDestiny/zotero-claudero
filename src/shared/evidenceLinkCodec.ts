@@ -10,6 +10,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function trimReferenceCache(cache: Map<string, unknown>): void {
+  while (cache.size > MAX_REFERENCES) {
+    const oldest = cache.keys().next().value;
+    if (!oldest) break;
+    cache.delete(oldest);
+  }
+}
+
+function rememberReference(
+  cache: Map<string, unknown>,
+  key: string,
+  value: unknown,
+): void {
+  cache.set(key, value);
+  trimReferenceCache(cache);
+}
+
 function evidenceMarkerNames(text: string): string[] {
   return Array.from(text.matchAll(/\[(E[A-Za-z0-9]+)\]/g), (match) => match[1]);
 }
@@ -113,12 +130,7 @@ export function encodeEvidenceReference(
     referenceNumber(value.paragraphIndex),
     referenceHash(serialized),
   ].join(".");
-  evidenceReferences.set(reference, value);
-  while (evidenceReferences.size > MAX_REFERENCES) {
-    const oldest = evidenceReferences.keys().next().value;
-    if (!oldest) break;
-    evidenceReferences.delete(oldest);
-  }
+  rememberReference(evidenceReferences, reference, value);
   return reference;
 }
 
@@ -145,7 +157,7 @@ export function decodeEvidenceReference(value: string): unknown {
 
 export function encodeEvidenceMarker(value: Record<string, unknown>): string {
   const marker = `E${referenceHash(JSON.stringify(value))}`;
-  evidenceMarkers.set(marker, value);
+  rememberReference(evidenceMarkers, marker, value);
   while (evidenceMarkers.size > MAX_REFERENCES) {
     const oldest = evidenceMarkers.keys().next().value;
     if (!oldest) break;
@@ -296,14 +308,11 @@ export function restoreEvidenceReferences(
   for (const [key, locator] of Object.entries(references)) {
     if (!locator) continue;
     if (key.startsWith(REFERENCE_PREFIX)) {
-      evidenceReferences.set(key, locator);
+      rememberReference(evidenceReferences, key, locator);
     } else if (/^E[A-Za-z0-9]+$/.test(key)) {
-      evidenceMarkers.set(key, locator);
+      rememberReference(evidenceMarkers, key, locator);
     }
   }
-  while (evidenceReferences.size > MAX_REFERENCES) {
-    const oldest = evidenceReferences.keys().next().value;
-    if (!oldest) break;
-    evidenceReferences.delete(oldest);
-  }
+  trimReferenceCache(evidenceReferences);
+  trimReferenceCache(evidenceMarkers);
 }

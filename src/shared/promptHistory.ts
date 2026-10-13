@@ -1,3 +1,7 @@
+import {
+  planFreshReplay,
+  type RecoveryManifest,
+} from "../modules/conversationRecovery";
 import type { ConversationTurn } from "../modules/conversationStore";
 
 export interface PromptProviderState {
@@ -36,7 +40,24 @@ function truncateTurnText(value: string): string {
  */
 export function buildConversationHistorySection(
   turns: readonly ConversationTurn[],
+  recovery?: RecoveryManifest,
 ): string {
+  if (recovery && recovery.mode !== "native") {
+    const replay = planFreshReplay(
+      turns,
+      recovery.mode === "fresh-limited",
+      recovery.maxChars,
+    );
+    if (
+      !recovery.confirmed &&
+      (replay.manifest.overLimit || replay.manifest.missingMaterials.length)
+    ) {
+      throw new Error(
+        "Context recovery needs explicit confirmation before replay.",
+      );
+    }
+    return replay.section;
+  }
   const candidates = turns
     .map((turn) => ({ ...turn, text: truncateTurnText(turn.text.trim()) }))
     .filter((turn) => turn.text.length > 0)
@@ -78,8 +99,9 @@ export function buildConversationHistorySection(
 export function buildPromptWithConversationHistory(
   prompt: string,
   turns: readonly ConversationTurn[],
+  recovery?: RecoveryManifest,
 ): string {
-  const history = buildConversationHistorySection(turns);
+  const history = buildConversationHistorySection(turns, recovery);
   if (!history) return prompt;
   return [
     history,

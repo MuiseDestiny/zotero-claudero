@@ -1,121 +1,124 @@
+import { buildAuthenticatedZoteroPayload } from "../shared/zoteroEndpointAuth";
+import { getString } from "../utils/locale";
+import { getPref, setPref } from "../utils/prefs";
 import {
-  fetchProviderModels,
+  cancelHelperRequest,
   fetchSlashCommands,
-  isClaudeAuthError,
-  isClaudeLimitError,
-  isDeepSeekCliMissingError,
-  installDeepSeekHarness,
-  queryClaudeHelper,
-  reloadSlashCommands,
+  requestHelperJson,
   runAuxClaudeQuery,
-  runProviderAuthLogin,
 } from "./claudeHelperClient";
-import type { ProviderModelDescriptor } from "../shared/providerModels";
+import { createComposerView } from "./composerView";
+import { clearConversationState } from "./conversationController";
+import { showConversationHistoryPopup } from "./conversationHistoryView";
 import {
-  getZoteroApiSystemPrompt,
-  getZoteroEndpointBaseUrl,
-} from "./zoteroEndpoint";
+  deleteAllConversations,
+  deleteConversation,
+  exportConversationToFile,
+  getConversationTitle,
+  getDefaultPrompts,
+  loadConversationById,
+  loadCustomPrompts,
+  newConversationId,
+  renameConversation,
+  type ConversationIndexEntry,
+  type CustomPrompt,
+} from "./conversationStore";
+import { logDiagnostic } from "./diagnosticLog";
+import { onElementRemoved } from "./elementLifecycle";
+import { getOrCreateHelperToken } from "./helperToken";
+import { renderPromptIcon } from "./iconPickerView";
+import { cancelImageReads, replaceImageDraft } from "./imageDraft";
 import {
-  buildPromptWithZoteroContext,
+  closeContextDetailPopup,
+  midTruncate,
+  populateContextToken,
+} from "./paneContextView";
+import { createPaneConversationActions } from "./paneConversationActions";
+import {
+  CHECK_ICON_SVG,
+  createEl,
+  createToolbarLikeButton,
+  isAtBottom,
+  makeChipRemoveBtn,
+  scrollTranscript,
+  setStatusDot,
+  smoothScrollToBottom,
+  updateScrollToBottomBtn,
+} from "./paneDom";
+import { addPastedImageFiles, renderPendingImages } from "./paneImageView";
+import { createPaneMessageView } from "./paneMessageView";
+import {
+  applyModelEfforts,
+  effortOptionsForProvider,
+  getSelectedEffort,
+  normalizePermissionMode,
+  permissionOptionsForProvider,
+  refreshProviderModels,
+} from "./paneModelControls";
+import { createPanePromptRequest } from "./panePromptRequest";
+import type { PaneRequestHost } from "./paneRequestHost";
+import { appendNoticeCard } from "./paneServiceNotices";
+import { createPaneSlashRequest } from "./paneSlashRequest";
+import type { PaneState, SlashCommand } from "./paneState";
+import { createPaneStreamingView } from "./paneStreamingView";
+import {
+  hidePermissionDialog,
+  hideQuestionDialog,
+  showExitPlanDialog,
+  showPermissionDialog,
+  showQuestionDialog,
+  type PendingExitPlan,
+  type PendingQuestion,
+  type PermissionRequestView,
+} from "./permissionDialog";
+import { showPromptPopup } from "./promptPopupView";
+import {
+  defaultEffortForProvider,
+  defaultModelForProvider,
+  modelOptionsForProvider,
+  normalizeProvider,
+  PROVIDER_OPTIONS,
+} from "./providerRegistry";
+import {
   getCurrentReaderFilePath,
   getCurrentReaderItem,
   getSelectedReaderAnnotations,
   getSelectedReaderText,
-  getSelectedZoteroContext,
-  type ClauderoAnnotationContext,
-  type ClauderoSelectionContext,
 } from "./zoteroContext";
-import {
-  compileAcademicSkillPrompt,
-  getEnabledAcademicSkills,
-  matchAcademicSkillIntent,
-  resolveAcademicSkillContextStatus,
-} from "./academicSkills";
-import { getPref, setPref } from "../utils/prefs";
-import { getString } from "../utils/locale";
-import {
-  newConversationId,
-  type ConversationProviderState,
-  type ConversationTurn,
-  type ConversationBlock,
-  type ConversationImage,
-  type MessageRole,
-  type SavedConversation,
-  type CustomPrompt,
-  loadCustomPrompts,
-  getDefaultPrompts,
-  getConversationTitle,
-  renameConversation,
-  deleteConversation,
-  deleteAllConversations,
-  exportConversationToFile,
-} from "./conversationStore";
-import {
-  appendToolCard,
-  appendToolResult,
-  createToolIconSvg,
-  getToolActivityDescription,
-  type ToolCardState,
-} from "./toolCallRenderer";
-import {
-  applyConversation,
-  clearConversationState,
-  loadLatestConversation,
-  saveCurrentConversation,
-} from "./conversationController";
-import { applyProviderSessionEvent } from "./providerSessionState";
-import { renderMarkdown } from "./messageRenderer";
-import {
-  buildPromptWithConversationHistory,
-  shouldReplayConversationHistory,
-} from "../shared/promptHistory";
-import { thinkingPresentation } from "../shared/thinkingPresentation";
-import {
-  evidenceReferencesFromToolResultContent,
-  evidenceReferencesForText,
-  restoreEvidenceReferences,
-} from "../shared/evidenceLinkCodec";
-import { renderPromptIcon } from "./iconPickerView";
-import { showConversationHistoryPopup } from "./conversationHistoryView";
-import { showPromptPopup } from "./promptPopupView";
-import { createComposerView, type DivSelect } from "./composerView";
-import {
-  defaultEffortForProvider,
-  defaultModelForProvider,
-  getProviderCapabilities,
-  modelOptionsForProvider,
-  normalizeProvider,
-  providerLabel,
-  PROVIDER_OPTIONS,
-  type AiProvider,
-} from "./providerRegistry";
-import {
-  hidePermissionDialog,
-  showPermissionDialog,
-  hideQuestionDialog,
-  showQuestionDialog,
-  showExitPlanDialog,
-  type PermissionRequestView,
-  type PendingQuestion,
-  type PendingExitPlan,
-  type QuestionDialogState,
-} from "./permissionDialog";
-import {
-  logDiagnostic,
-  logToolResult,
-  logToolUse,
-  logTurnEnd,
-  logTurnStart,
-} from "./diagnosticLog";
+import { getZoteroEndpointBaseUrl } from "./zoteroEndpoint";
 
-type NoticeKind = "info" | "warning" | "auth" | "success";
+// Resolve cross-boundary callbacks on demand, never during construction.
+// Views, conversation actions and request executors never import this controller.
+const messageView = createPaneMessageView({
+  retryAssistantTurn: (...args) => retryAssistantTurn(...args),
+  forkConversationAtTurn: (...args) => forkConversationAtTurn(...args),
+  editLastUserTurn: (...args) => editLastUserTurn(...args),
+  createThinkingChevron: (...args) => createThinkingChevron(...args),
+});
+const {
+  renderConversationTurns,
+  getLastEditableUserTurnIndex,
+  appendMessageCard,
+} = messageView;
 
-interface SlashCommand {
-  name: string;
-  description: string;
-  isBuiltin: boolean; // true = client-side action only (e.g. clear)
-  argumentHint?: string;
-}
+const conversationActions = createPaneConversationActions({
+  renderConversationTurns: (...args) => renderConversationTurns(...args),
+  getLastEditableUserTurnIndex: (...args) =>
+    getLastEditableUserTurnIndex(...args),
+  sendPrompt: (...args) => sendPrompt(...args),
+  updateSendButton: (...args) => updateSendButton(...args),
+  appendWelcomeCard: (...args) => appendWelcomeCard(...args),
+  pushAssistantBlock: (...args) => pushAssistantBlock(...args),
+});
+const {
+  retryAssistantTurn,
+  forkConversationAtTurn,
+  editLastUserTurn,
+  saveConversation,
+  restoreConversation,
+  startNewConversation,
+  restoreLatestConversation,
+} = conversationActions;
 
 // Client-side built-in slash commands (not sent to the SDK)
 const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
@@ -133,236 +136,37 @@ function builtinSlashCommands(): SlashCommand[] {
 let _sdkCommandsCache: SlashCommand[] | null = null;
 let _sdkCommandsFetching = false;
 
-interface PendingImage extends ConversationImage {
-  data: string; // base64 (no data: prefix)
-}
+const streamingView = createPaneStreamingView({
+  appendMessageCard,
+  getSelectedEffort,
+});
+const {
+  pushAssistantBlock,
+  stopThinkingAnimation,
+  createThinkingChevron,
+  finalizeThinkingCard,
+} = streamingView;
 
-interface InputHistoryEntry {
-  text: string;
-  images: PendingImage[];
-}
-
-type PermissionMode =
-  | "auto"
-  | "default"
-  | "acceptEdits"
-  | "bypassPermissions"
-  | "plan"
-  | "dontAsk";
-
-function normalizePermissionMode(value: unknown): PermissionMode {
-  return [
-    "auto",
-    "default",
-    "acceptEdits",
-    "bypassPermissions",
-    "plan",
-    "dontAsk",
-  ].includes(String(value))
-    ? (String(value) as PermissionMode)
-    : "auto";
-}
-
-type ActivityMode =
-  | "requesting"
-  | "responding"
-  | "thinking"
-  | "compacting"
-  | "tool"
-  | "waiting";
-
-function permissionModeDescription(mode: PermissionMode): string {
-  const provider = normalizeProvider(getPref("provider"));
-  const capabilities = getProviderCapabilities(provider);
-  const agent = providerLabel(provider);
-  switch (mode) {
-    case "auto":
-      return getString("permission-mode-auto-description", { args: { agent } });
-    case "default":
-      return getString("permission-mode-default-description", {
-        args: { agent },
-      });
-    case "acceptEdits":
-      return getString("permission-mode-edits-description");
-    case "plan":
-      return capabilities.supportsInteractivePlanApproval
-        ? getString("permission-mode-plan-description", { args: { agent } })
-        : getString("permission-mode-plan-updates-description", {
-            args: { agent },
-          });
-    case "dontAsk":
-      return getString("permission-mode-dont-ask-description");
-    case "bypassPermissions":
-      return getString("permission-mode-bypass-description", {
-        args: { agent },
-      });
-  }
-}
-
-function permissionOptionsForProvider(provider: AiProvider) {
-  const capabilities = getProviderCapabilities(provider);
-  const planLabel = capabilities.supportsInteractivePlanApproval
-    ? getString("permission-mode-plan-approval")
-    : getString("permission-mode-plan-first");
-  return [
-    {
-      value: "auto",
-      label: getString("permission-mode-auto"),
-      description: permissionModeDescription("auto"),
+const requestHost: PaneRequestHost = {
+  messages: messageView,
+  streaming: streamingView,
+  conversation: conversationActions,
+  interactions: { startInteractionPolling, stopInteractionPolling },
+  ui: {
+    updateContext,
+    setRunning,
+    maybeAppendUndoCard,
+    generateConversationTitle,
+    setSdkCommands: (commands) => {
+      _sdkCommandsCache = commands;
     },
-    {
-      value: "default",
-      label: getString("permission-mode-default"),
-      description: permissionModeDescription("default"),
-    },
-    {
-      value: "acceptEdits",
-      label: getString("permission-mode-edits"),
-      description: permissionModeDescription("acceptEdits"),
-    },
-    ...(capabilities.supportsPlanMode
-      ? [
-          {
-            value: "plan",
-            label: planLabel,
-            description: permissionModeDescription("plan"),
-          },
-        ]
-      : []),
-    {
-      value: "dontAsk",
-      label: getString("permission-mode-dont-ask"),
-      description: permissionModeDescription("dontAsk"),
-    },
-    {
-      value: "bypassPermissions",
-      label: getString("permission-mode-bypass"),
-      description: permissionModeDescription("bypassPermissions"),
-      danger: true,
-    },
-  ];
-}
-
-interface PaneState {
-  root: HTMLElement;
-  transcript: HTMLElement;
-  input: HTMLTextAreaElement;
-  sendButton: HTMLButtonElement;
-  providerSelect: DivSelect;
-  modelSelect: DivSelect;
-  effortSelect: DivSelect;
-  codexModels: ProviderModelDescriptor[];
-  contextChips: HTMLElement;
-  itemChip: HTMLElement;
-  readerChip: HTMLElement;
-  textChip: HTMLElement;
-  annotationChip: HTMLElement;
-  selectedAnnotations: ClauderoAnnotationContext[];
-  dismissedAnnotations: boolean;
-  statusDot: HTMLElement;
-  permissionSelect: DivSelect;
-  customPromptsBar: HTMLElement;
-  currentAssistantBody: HTMLElement | null;
-  currentAssistantCard: HTMLElement | null;
-  currentItem: Zotero.Item | null;
-  currentItems: Zotero.Item[];
-  readerFilePath: string;
-  selectedText: string;
-  dismissedReader: boolean;
-  dismissedText: boolean;
-  manualItems: Zotero.Item[];
-  pickerEl: HTMLElement | null;
-  toolCards: Map<string, ToolCardState>;
-  lastAssistantText: string;
-  currentSegmentText: string;
-  lastStreamingRenderTs: number;
-  thinkingEl: HTMLElement | null;
-  thinkingMetaEl: HTMLElement | null;
-  thinkingTimer: number | null;
-  thinkingWordEl: HTMLElement | null;
-  thinkingTs: number;
-  turnStartedTs: number;
-  turnOutputTokens: number;
-  turnResponseChars: number;
-  thinkingTokenEstimate: number;
-  thinkingVerb: string;
-  activityMode: ActivityMode;
-  activityMessage: string;
-  activityStartedTs: number;
-  recentThoughtDurationMs: number;
-  recentThoughtUntil: number;
-  thinkingCard: {
-    el: HTMLElement;
-    header: HTMLElement;
-    labelSpan: HTMLElement;
-    durationSpan: HTMLElement;
-    body: HTMLElement;
-    startTs: number;
-    text: string;
-    timer: number;
-  } | null;
-  pendingImages: PendingImage[];
-  pendingImagesBar: HTMLElement | null;
-  conversationId: string;
-  conversationTurns: ConversationTurn[];
-  providerState?: ConversationProviderState;
-  parentConversationId?: string;
-  forkedAtTurnIndex?: number;
-  compactedAt?: number;
-  currentProviderTurnId?: string;
-  currentAssistantBlocks: ConversationBlock[];
-  currentContextSnapshot: unknown | null;
-  running: boolean;
-  cancelRequested: boolean;
-  permissionMode: PermissionMode;
-  permissionDialog: HTMLElement | null;
-  questionDialog: HTMLElement | null;
-  permissionCheckTimer: number | null;
-  questionPollingUnsupported: boolean;
-  lastContextSignature: string;
-  _savedComposerChildren: {
-    chips: HTMLElement | null;
-    inputEl: HTMLElement | null;
-    toolbar: HTMLElement | null;
-  } | null;
-  scrollToBottomBtn: HTMLElement | null;
-  inputHistory: InputHistoryEntry[];
-  inputHistoryIdx: number;
-  _inputHistorySavedText: string;
-  _inputHistorySavedImages: PendingImage[];
-  _suppressText: number; // >0 while a Skill tool is running — suppresses skill output text
-  _activeSkillToolId: string | null;
-  providerPrefObserverID: symbol | null;
-}
-
-// SVG icon constants - defined as template strings to avoid XML errors
-const COPY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-  <path d="M12.668 10.667c0-.71 0-1.204-.031-1.588a2.4 2.4 0 0 0-.113-.615l-.055-.13a1.84 1.84 0 0 0-.676-.731l-.127-.072c-.158-.08-.37-.137-.745-.168-.384-.031-.877-.031-1.588-.031H6.5c-.711 0-1.204 0-1.588.031a2.4 2.4 0 0 0-.615.113l-.13.055a1.84 1.84 0 0 0-.731.676l-.07.127c-.081.158-.138.37-.169.745-.031.384-.032.877-.032 1.588V13.5c0 .711 0 1.204.032 1.588.031.376.088.587.168.745l.07.126c.177.288.43.522.732.676l.13.056c.144.052.333.089.615.112.384.031.877.032 1.588.032h2.833c.71 0 1.204 0 1.588-.032.376-.031.587-.088.745-.168l.127-.07c.287-.177.522-.43.676-.732l.055-.13c.052-.144.09-.333.113-.615.031-.384.031-.877.031-1.588zm1.33 1.998c.455-.002.803-.005 1.09-.028.376-.031.587-.088.745-.168l.126-.071c.288-.177.522-.43.676-.732l.056-.13a2.4 2.4 0 0 0 .112-.615c.031-.384.032-.877.032-1.588V6.5c0-.711 0-1.204-.032-1.588a2.4 2.4 0 0 0-.112-.615l-.056-.13a1.84 1.84 0 0 0-.676-.731l-.126-.07c-.158-.081-.37-.138-.745-.169-.384-.031-.877-.032-1.588-.032h-2.833c-.71 0-1.204.001-1.588.032-.282.023-.471.06-.615.112l-.13.056a1.84 1.84 0 0 0-.731.676l-.072.126c-.08.158-.137.37-.168.745-.023.287-.027.635-.029 1.09h1.999c.689 0 1.246 0 1.696.036.458.038.865.117 1.242.309l.217.122c.496.304.9.74 1.165 1.26l.067.143c.144.337.21.698.242 1.099.037.45.036 1.007.036 1.696zm4.167-3.332c0 .689 0 1.246-.036 1.696-.033.401-.098.762-.242 1.099l-.067.143c-.265.52-.67.956-1.165 1.26l-.219.122c-.376.192-.782.271-1.24.309-.337.027-.734.031-1.2.033-.003.467-.007.864-.034 1.201-.033.401-.098.762-.242 1.098l-.067.142c-.265.522-.669.958-1.165 1.262l-.217.122c-.377.192-.784.271-1.242.309-.45.037-1.007.036-1.696.036H6.5c-.69 0-1.246 0-1.696-.036-.4-.033-.762-.098-1.098-.242l-.143-.067a3.17 3.17 0 0 1-1.261-1.165l-.122-.219c-.192-.376-.271-.782-.309-1.24-.037-.45-.036-1.007-.036-1.696v-2.833c0-.689 0-1.246.036-1.696.038-.458.117-.865.309-1.242l.122-.217c.304-.496.74-.9 1.261-1.165l.143-.067c.336-.144.697-.21 1.098-.242.337-.027.733-.032 1.2-.034.002-.467.007-.863.034-1.2.037-.458.117-.864.309-1.24l.122-.22c.304-.495.74-.899 1.26-1.164l.143-.067c.337-.144.698-.21 1.099-.242.45-.037 1.007-.036 1.696-.036H13.5c.69 0 1.246 0 1.696.036.458.038.864.117 1.24.309l.22.122c.495.304.899.74 1.164 1.261l.067.143c.144.336.21.697.242 1.098.037.45.036 1.007.036 1.696z"/>
-</svg>`;
-
-const RETRY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-  <path d="M3.502 16.666v-3.333c0-.367.298-.665.665-.665H7.5l.134.014a.665.665 0 0 1 0 1.303l-.134.013H5.475A6.12 6.12 0 0 0 10 16.001c3.06 0 5.586-2.29 5.955-5.25l.03-.131a.665.665 0 0 1 1.29.295l-.05.337A7.33 7.33 0 0 1 10 17.332a7.46 7.46 0 0 1-5.168-2.085v1.42a.665.665 0 0 1-1.33 0m.543-7.417a.665.665 0 0 1-1.32-.165zM10 2.67c1.994 0 3.837.797 5.178 2.093V3.333a.665.665 0 0 1 1.33 0v3.333a.665.665 0 0 1-.665.665H12.51a.665.665 0 0 1 0-1.33h2.015A6.12 6.12 0 0 0 10 3.998 6.003 6.003 0 0 0 4.045 9.25l-.66-.083-.66-.082A7.333 7.333 0 0 1 10 2.668"/>
-</svg>`;
-
-const EDIT_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
- <path d="M11.331 3.568a3.61 3.61 0 0 1 4.973.128l.128.135a3.61 3.61 0 0 1 0 4.838l-.128.135-6.292 6.29c-.324.324-.558.561-.79.752l-.235.177q-.309.21-.65.36l-.23.093c-.181.066-.369.114-.585.159l-.765.135-2.394.399c-.142.024-.294.05-.422.06-.1.007-.233.01-.378-.026l-.149-.049a1.1 1.1 0 0 1-.522-.474l-.046-.094a1.1 1.1 0 0 1-.074-.526c.01-.129.035-.28.06-.423l.398-2.394.134-.764a4 4 0 0 1 .16-.586l.093-.23q.15-.342.36-.65l.176-.235c.19-.232.429-.466.752-.79l6.291-6.292zm-5.485 7.36c-.35.35-.533.535-.66.688l-.11.147a2.7 2.7 0 0 0-.24.433l-.062.155c-.04.11-.072.225-.106.394l-.127.717-.398 2.393-.001.002h.003l2.393-.399.717-.126c.169-.034.284-.065.395-.105l.153-.062q.228-.1.433-.241l.148-.11c.153-.126.338-.31.687-.66l4.988-4.988-3.226-3.226zm9.517-6.291a2.28 2.28 0 0 0-3.053-.157l-.173.157-.364.363L15 8.226l.363-.363.157-.174a2.28 2.28 0 0 0 0-2.878z"/>
-</svg>`;
-
-const FORK_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M16 3h5v5"/>
-  <path d="M8 3H3v5"/>
-  <path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"/>
-  <path d="m15 9 6-6"/>
-</svg>`;
-
-const CHECK_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor">
-  <path d="M12.096 2.914a.7.7 0 0 1 1.134.772l-.069.125-6.25 9.166a.7.7 0 0 1-1.073.102l-3.75-3.75-.09-.11a.7.7 0 0 1 .97-.97l.11.09 3.153 3.152 5.774-8.469z"/>
-</svg>`;
-
-const REMOVE_X_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-  <line x1="18" y1="6" x2="6" y2="18"/>
-  <line x1="6" y1="6" x2="18" y2="18"/>
-</svg>`;
+  },
+};
+const sendRawSlashCommand = createPaneSlashRequest(requestHost);
+const sendPrompt = createPanePromptRequest({
+  ...requestHost,
+  sendRawSlashCommand,
+});
 
 const ANNO_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none">
   <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M2 2h12v12H2zM1 1h14v14H1V2zm12 12L8.75 3h-1.5L3 13h1.63l1.275-3h4.19l1.275 3zM8 5.07 6.33 9h3.34z"/>
@@ -377,7 +181,6 @@ const VIEW_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024
 </svg>`;
 
 // Context categories captured with a message, ordered by display priority.
-type CtxCategory = "text" | "annotations" | "items" | "reader" | "collection";
 
 const PANEL_ID = "claudero-side-panel";
 const SPLITTER_ID = "claudero-side-splitter";
@@ -387,104 +190,6 @@ const READER_ANCHOR_ID = "zotero-context-splitter";
 const paneStates = new WeakMap<HTMLElement, PaneState>();
 const mountedWindows = new WeakSet<Window>();
 const windowCleanupCallbacks = new WeakMap<Window, () => void>();
-const CLAUDE_EFFORT_OPTIONS = [
-  { value: "low" },
-  { value: "medium" },
-  { value: "high" },
-  { value: "xhigh" },
-  { value: "max" },
-];
-const DEEPSEEK_EFFORT_OPTIONS = [{ value: "none" }];
-
-function localizedEffortOptions(
-  values: Array<{ value: string }>,
-): Array<{ value: string; label: string }> {
-  return values.map((option) => ({
-    value: option.value,
-    label:
-      option.value === "none"
-        ? getString("effort-default")
-        : effortLabel(option.value),
-  }));
-}
-
-function effortOptionsForProvider(provider: AiProvider) {
-  return localizedEffortOptions(
-    provider === "deepseek" ? DEEPSEEK_EFFORT_OPTIONS : CLAUDE_EFFORT_OPTIONS,
-  );
-}
-
-function effortLabel(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "xhigh") return getString("effort-xhigh");
-  return normalized
-    .split(/[-_]/)
-    .filter(Boolean)
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function applyModelEfforts(state: PaneState, modelValue: string): void {
-  const provider = normalizeProvider(state.providerSelect.value);
-  if (provider === "deepseek") {
-    state.effortSelect.setItems?.(
-      localizedEffortOptions(DEEPSEEK_EFFORT_OPTIONS),
-      "none",
-    );
-    setPref("deepseekEffort", "none");
-    setPref("effort", "none");
-    return;
-  }
-  if (provider !== "codex") return;
-  const model = state.codexModels.find((entry) => entry.value === modelValue);
-  const supported = model?.supportedEfforts?.filter(Boolean) || [];
-  const options =
-    supported.length > 0
-      ? supported.map((value) => ({ value, label: effortLabel(value) }))
-      : localizedEffortOptions(CLAUDE_EFFORT_OPTIONS);
-  const saved = String(getPref("codexEffort") || state.effortSelect.value);
-  const preferred = options.some((option) => option.value === saved)
-    ? saved
-    : model?.defaultEffort || options[0]?.value || "medium";
-  state.effortSelect.setItems?.(options, preferred);
-  setPref("codexEffort", state.effortSelect.value);
-  setPref("effort", state.effortSelect.value);
-}
-
-async function refreshProviderModels(
-  state: PaneState,
-  provider: AiProvider,
-): Promise<void> {
-  if (provider === "claude") return;
-  try {
-    const models = await fetchProviderModels(provider);
-    if (
-      models.length === 0 ||
-      normalizeProvider(state.providerSelect.value) !== provider
-    ) {
-      return;
-    }
-    state.codexModels = models;
-    const modelPref = provider === "deepseek" ? "deepseekModel" : "codexModel";
-    const saved = String(getPref(modelPref) || state.modelSelect.value);
-    const preferred = models.some((model) => model.value === saved)
-      ? saved
-      : models.find((model) => model.isDefault)?.value || models[0].value;
-    state.modelSelect.setItems?.(
-      models.map((model) => ({
-        value: model.value,
-        label: model.label,
-        description: model.description,
-      })),
-      preferred,
-    );
-    setPref(modelPref, state.modelSelect.value);
-    setPref("model", state.modelSelect.value);
-    applyModelEfforts(state, state.modelSelect.value);
-  } catch (error) {
-    ztoolkit.log("[Claudero] Failed to refresh Codex models:", error);
-  }
-}
 // ── Font zoom (Cmd/Ctrl + - / = / 0) ───────────────────────────────────────
 // Browser-like content zoom for the pane. The percentage is persisted in the
 // `fontScale` pref and applied as a CSS multiplier on the pane root.
@@ -536,219 +241,7 @@ function adjustFontScale(state: PaneState, delta: number): void {
   setFontScale(state, getFontScale() + delta);
 }
 
-// ── Conversation persistence ───────────────────────────────────────────────
-
-const conversationSaveErrors = new WeakMap<PaneState, string>();
-
-async function saveConversation(state: PaneState): Promise<boolean> {
-  try {
-    await saveCurrentConversation(state);
-    conversationSaveErrors.delete(state);
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    ztoolkit.log(`[History] conversation save failed: ${message}`);
-    if (conversationSaveErrors.get(state) !== message) {
-      conversationSaveErrors.set(state, message);
-      appendNoticeCard(state, "warning", getString("pane-not-saved"), message);
-    }
-    setStatusDot(state, "error");
-    return false;
-  }
-}
-
-// Re-render a restored conversation's turns into the transcript.
-function renderConversationTurns(state: PaneState): void {
-  if (state.thinkingCard) {
-    (state.root.ownerDocument!.defaultView as Window).clearInterval(
-      state.thinkingCard.timer,
-    );
-  }
-  state.transcript.textContent = "";
-  state.toolCards.clear();
-  state.currentAssistantBody = null;
-  state.currentAssistantCard = null;
-  state.thinkingCard = null;
-  const lastEditableUserIndex = getLastEditableUserTurnIndex(state);
-  state.conversationTurns.forEach((turn, index) => {
-    if (turn.role === "user") {
-      appendUserMessage(state, turn.text, cloneImages(turn.images), {
-        ts: turn.ts,
-        turnIndex: index,
-        editable: index === lastEditableUserIndex,
-        contextSnapshot: turn.contextSnapshot,
-      });
-      return;
-    }
-    renderAssistantTurn(state, turn, index);
-  });
-  forceScrollToBottom(state);
-}
-
-function renderRestoredThinkingBlock(
-  state: PaneState,
-  block: Extract<ConversationBlock, { type: "thinking" }>,
-): void {
-  if (!block.text.trim()) return;
-  const doc = state.root.ownerDocument!;
-  const el = createEl(doc, "div", "claudero-thinking-card done collapsed");
-  const header = createEl(doc, "button", "claudero-thinking-header");
-  header.setAttribute("tabindex", "-1");
-  const labelSpan = createEl(doc, "span", "claudero-thinking-label");
-  const sec = Math.max(0, Math.round((block.durationMs || 0) / 1000));
-  const presentation = thinkingPresentation(block.text);
-  labelSpan.textContent =
-    presentation.title ||
-    getString("activity-thought-for", { args: { seconds: sec } });
-  const durationSpan = createEl(doc, "span", "claudero-thinking-duration");
-  durationSpan.textContent = presentation.title ? `(${sec}s)` : "";
-  const chevron = createThinkingChevron(doc);
-  header.append(labelSpan, durationSpan, chevron);
-  const body = createEl(doc, "div", "claudero-thinking-body");
-  body.textContent = presentation.body;
-  el.classList.toggle("summary-only", !presentation.body);
-  header.addEventListener("click", () => {
-    if (!el.classList.contains("summary-only")) {
-      el.classList.toggle("collapsed");
-    }
-  });
-  el.append(header, body);
-  state.transcript.appendChild(el);
-}
-
-function renderAssistantTurn(
-  state: PaneState,
-  turn: ConversationTurn,
-  index: number,
-): void {
-  restoreEvidenceReferences(turn.evidenceReferences);
-  const blocks = Array.isArray(turn.blocks) ? turn.blocks : [];
-  for (const block of blocks) {
-    if (block.type !== "tool_result") continue;
-    restoreEvidenceReferences(
-      evidenceReferencesFromToolResultContent(block.content),
-    );
-  }
-  const hasStructuredText = blocks.some(
-    (block) => block.type === "text" && block.text.trim(),
-  );
-  for (const block of blocks) {
-    if (block.type === "thinking") {
-      renderRestoredThinkingBlock(state, block);
-    } else if (block.type === "tool_use") {
-      appendToolCard(state, {
-        id: block.id,
-        name: block.name,
-        input: block.input,
-        partialInput: block.partialInput,
-      });
-    } else if (block.type === "tool_result") {
-      appendToolResult(state, {
-        id: block.id,
-        content: block.content,
-        isError: block.isError === true,
-      });
-    } else if (block.type === "notice") {
-      appendNoticeCard(
-        state,
-        (block.kind as NoticeKind) || "info",
-        block.title,
-        block.text,
-      );
-    } else if (block.type === "text" && block.text.trim()) {
-      appendMessageCard(state, "assistant", block.text, {
-        ts: turn.ts,
-        turnIndex: index,
-        skipStreaming: true,
-      });
-    }
-  }
-  if (!hasStructuredText && turn.text.trim()) {
-    appendMessageCard(state, "assistant", turn.text, {
-      ts: turn.ts,
-      turnIndex: index,
-      skipStreaming: true,
-    });
-  }
-}
-
-function pushAssistantBlock(state: PaneState, block: ConversationBlock): void {
-  state.currentAssistantBlocks.push(block);
-}
-
-function commitCurrentAssistantTextBlock(state: PaneState): void {
-  if (!state.currentSegmentText) return;
-  pushAssistantBlock(state, {
-    type: "text",
-    text: state.currentSegmentText,
-  });
-}
-
-function appendAssistantThinkingBlock(state: PaneState, text: string): void {
-  const last =
-    state.currentAssistantBlocks[state.currentAssistantBlocks.length - 1];
-  if (last?.type === "thinking") {
-    last.text += text;
-    return;
-  }
-  pushAssistantBlock(state, { type: "thinking", text, durationMs: 0 });
-}
-
-function finalizeAssistantThinkingBlock(
-  state: PaneState,
-  durationMs: number,
-): void {
-  for (let i = state.currentAssistantBlocks.length - 1; i >= 0; i--) {
-    const block = state.currentAssistantBlocks[i];
-    if (block?.type === "thinking" && !block.durationMs) {
-      block.durationMs = durationMs;
-      return;
-    }
-  }
-}
-
-function restoreConversation(state: PaneState, conv: SavedConversation): void {
-  void (async () => {
-    if (
-      state.conversationTurns.length > 0 &&
-      !(await saveConversation(state))
-    ) {
-      return;
-    }
-    applyConversation(state, conv);
-    renderConversationTurns(state);
-    setStatusDot(state, "ready");
-  })();
-}
-
-async function restoreLatestConversation(state: PaneState): Promise<void> {
-  const initialConversationId = state.conversationId;
-  const latest = await loadLatestConversation();
-  if (
-    latest &&
-    state.root.isConnected &&
-    !state.running &&
-    state.conversationId === initialConversationId &&
-    state.conversationTurns.length === 0
-  ) {
-    restoreConversation(state, latest);
-  }
-}
-
 // ── DOM helpers ────────────────────────────────────────────────────────────
-
-function createEl<K extends keyof HTMLElementTagNameMap>(
-  doc: Document,
-  tag: K,
-  className?: string,
-): HTMLElementTagNameMap[K] {
-  const el = doc.createElementNS(
-    "http://www.w3.org/1999/xhtml",
-    tag,
-  ) as HTMLElementTagNameMap[K];
-  if (className) el.className = className;
-  return el;
-}
 
 function createSendArrowSvg(doc: Document): SVGSVGElement {
   const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -956,81 +449,9 @@ function rebuildItemChip(state: PaneState): void {
   }
 }
 
-function isAtBottom(state: PaneState): boolean {
-  const t = state.transcript;
-  return t.scrollHeight - t.scrollTop - t.clientHeight < 80;
-}
-
-function updateScrollToBottomBtn(state: PaneState): void {
-  if (!state.scrollToBottomBtn) return;
-  state.scrollToBottomBtn.style.display = isAtBottom(state) ? "none" : "flex";
-}
-
-function forceScrollToBottom(state: PaneState): void {
-  state.transcript.scrollTop = state.transcript.scrollHeight;
-  updateScrollToBottomBtn(state);
-}
-
-function smoothScrollToBottom(state: PaneState): void {
-  const el = state.transcript;
-  const target = el.scrollHeight - el.clientHeight;
-  const start = el.scrollTop;
-  const distance = target - start;
-  if (distance <= 0) return;
-
-  const duration = Math.min(400, Math.max(200, distance * 0.5));
-  const win = el.ownerDocument!.defaultView!;
-  const startTime = win.performance.now();
-
-  function easeOutCubic(t: number): number {
-    return 1 - Math.pow(1 - t, 3);
-  }
-
-  function step(now: number): void {
-    const elapsed = now - startTime;
-    const progress = Math.min(elapsed / duration, 1);
-    el.scrollTop = start + distance * easeOutCubic(progress);
-    if (progress < 1) {
-      win.requestAnimationFrame(step);
-    } else {
-      updateScrollToBottomBtn(state);
-    }
-  }
-
-  win.requestAnimationFrame(step);
-}
-
-function scrollTranscript(state: PaneState): void {
-  if (isAtBottom(state)) {
-    state.transcript.scrollTop = state.transcript.scrollHeight;
-  }
-  updateScrollToBottomBtn(state);
-}
-
-function setStatusDot(
-  state: PaneState,
-  mode: "ready" | "streaming" | "error",
-): void {
-  state.statusDot.className =
-    `claudero-status-dot ${mode === "ready" ? "" : mode}`.trim();
-  const label =
-    mode === "ready"
-      ? getString("pane-status-ready")
-      : mode === "streaming"
-        ? getString("pane-status-responding", {
-            args: {
-              agent: providerLabel(
-                normalizeProvider(state.providerSelect.value),
-              ),
-            },
-          })
-        : getString("pane-status-failed");
-  state.statusDot.setAttribute("title", label);
-  state.statusDot.setAttribute("aria-label", label);
-}
-
 function setRunning(state: PaneState, running: boolean): void {
   state.running = running;
+  if (state.disposed) return;
   // Conversation no longer requires a Zotero context — the input and send
   // button stay enabled so the user can chat freely.
   state.sendButton.disabled = false;
@@ -1043,9 +464,8 @@ function setRunning(state: PaneState, running: boolean): void {
   updateSendButton(state, running);
 
   // Clear pending-interaction polling when not running.
-  if (!running && state.permissionCheckTimer) {
-    clearInterval(state.permissionCheckTimer);
-    state.permissionCheckTimer = null;
+  if (!running) {
+    stopInteractionPolling(state);
     hidePermissionDialog(state);
     hideQuestionDialog(state);
   }
@@ -1055,23 +475,6 @@ function setRunning(state: PaneState, running: boolean): void {
       setPaneProvider(state, preferredProvider);
     }
   }
-}
-
-function makeChipRemoveBtn(doc: Document, onClick: () => void): HTMLElement {
-  const btn = createEl(doc, "button", "claudero-chip-remove");
-  btn.setAttribute("tabindex", "-1");
-  const wrapper = doc.createElement("div");
-  wrapper.innerHTML = REMOVE_X_ICON_SVG.trim();
-  const svg = wrapper.firstElementChild as SVGSVGElement;
-  svg.setAttribute("width", "10");
-  svg.setAttribute("height", "10");
-  btn.appendChild(svg);
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    doc.querySelectorAll(".claudero-chip-tooltip").forEach((t) => t.remove());
-    onClick();
-  });
-  return btn;
 }
 
 function updateContext(state: PaneState): void {
@@ -1272,35 +675,6 @@ function rebuildManualChips(state: PaneState): void {
   }
 }
 
-function dirname(path: string): string {
-  const normalized = path.replace(/\/+$/, "");
-  const index = normalized.lastIndexOf("/");
-  return index > 0 ? normalized.slice(0, index) : normalized;
-}
-
-function getAttachmentDirectories(
-  context: Awaited<ReturnType<typeof getSelectedZoteroContext>>,
-): string[] {
-  const directories = new Set<string>();
-  for (const item of context.items) {
-    for (const attachment of item.attachments) {
-      if (attachment.path) directories.add(dirname(attachment.path));
-    }
-  }
-  if (context.reader?.path) directories.add(dirname(context.reader.path));
-  return [...directories];
-}
-
-function getSelectedModel(state: PaneState): string {
-  const provider = normalizeProvider(state.providerSelect.value);
-  return state.modelSelect.value || defaultModelForProvider(provider);
-}
-
-function getSelectedEffort(state: PaneState): string {
-  const provider = normalizeProvider(state.providerSelect.value);
-  return state.effortSelect.value || defaultEffortForProvider(provider);
-}
-
 function stringifyValue(value: unknown): string {
   if (typeof value === "string") return value;
   if (value === undefined || value === null) return "";
@@ -1314,33 +688,6 @@ function stringifyValue(value: unknown): string {
 function compactValue(value: unknown, max = 140): string {
   const raw = stringifyValue(value).replace(/\s+/g, " ").trim();
   return raw.length > max ? `${raw.slice(0, max - 1)}…` : raw;
-}
-
-const COMPLETION_FLAVOR_WORDS = [
-  "Baked",
-  "Brewed",
-  "Crafted",
-  "Forged",
-  "Conjured",
-  "Simmered",
-  "Distilled",
-  "Percolated",
-  "Roasted",
-  "Cogitated",
-  "Steeped",
-] as const;
-
-function pickFlavorWord(): string {
-  return COMPLETION_FLAVOR_WORDS[
-    Math.floor(Math.random() * COMPLETION_FLAVOR_WORDS.length)
-  ];
-}
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 // Build a short human label for a reversible write result returned by the
@@ -1364,12 +711,15 @@ function describeWriteResult(result: Record<string, unknown>): string | null {
 }
 
 async function callZoteroEndpoint(
-  payload: Record<string, unknown>,
+  action: string,
+  args: Record<string, unknown>,
 ): Promise<{ success?: boolean; error?: string; result?: unknown }> {
+  // The endpoint rejects every request without the helper capability token.
+  const token = await getOrCreateHelperToken();
   const res = await fetch(getZoteroEndpointBaseUrl(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(buildAuthenticatedZoteroPayload(action, args, token)),
   });
   return res.json() as Promise<{ success?: boolean; error?: string }>;
 }
@@ -1470,7 +820,7 @@ function appendUndoCard(
   undoBtn.addEventListener("click", () => {
     undoBtn.disabled = true;
     logDiagnostic("write.undo.requested", { operationId, label, itemId });
-    void callZoteroEndpoint({ action: "undo_last", operationId })
+    void callZoteroEndpoint("undo_last", { operationId })
       .then((res) => {
         if (res?.success) {
           logDiagnostic("write.undo.success", { operationId, label, itemId });
@@ -1518,1391 +868,88 @@ function appendUndoCard(
   scrollTranscript(state);
 }
 
-// ── Image paste / preview ──────────────────────────────────────────────────
-
-function readFileAsDataURL(win: Window, file: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new (
-      win as unknown as { FileReader: typeof FileReader }
-    ).FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
+function stopInteractionPolling(state: PaneState): void {
+  if (state.permissionCheckTimer !== null)
+    clearTimeout(state.permissionCheckTimer);
+  state.permissionCheckTimer = null;
+  state.permissionPollController?.abort();
+  state.permissionPollController = undefined;
+  state.permissionPollInFlight = false;
 }
 
-async function addPastedImageFiles(
+function startInteractionPolling(
   state: PaneState,
-  files: Blob[],
-): Promise<void> {
-  const win = state.root.ownerDocument!.defaultView as Window;
-  const supportedTypes = new Set([
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "image/webp",
-  ]);
-  const maxImages = 8;
-  const maxImageBytes = 10 * 1024 * 1024;
-  const maxTotalBytes = 24 * 1024 * 1024;
-  let totalBytes = state.pendingImages.reduce(
-    (sum, image) => sum + Math.ceil((image.data.length * 3) / 4),
-    0,
-  );
-  for (const file of files) {
-    const type = (file as { type?: string }).type || "image/png";
-    if (!supportedTypes.has(type)) continue;
-    if (state.pendingImages.length >= maxImages) {
-      appendNoticeCard(
-        state,
-        "warning",
-        getString("pane-image-limit-title"),
-        getString("pane-image-limit-description", {
-          args: { count: maxImages },
-        }),
-      );
-      break;
-    }
-    if (file.size > maxImageBytes || totalBytes + file.size > maxTotalBytes) {
-      appendNoticeCard(
-        state,
-        "warning",
-        getString("pane-image-size-title"),
-        getString("pane-image-size-description"),
-      );
-      continue;
-    }
-    try {
-      const dataUrl = await readFileAsDataURL(win, file);
-      const comma = dataUrl.indexOf(",");
-      const data = comma >= 0 ? dataUrl.slice(comma + 1) : "";
-      if (!data) continue;
-      state.pendingImages.push({
-        id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        mediaType: type,
-        data,
-      });
-      totalBytes += file.size;
-    } catch {
-      /* ignore unreadable image */
-    }
-  }
-  renderPendingImages(state);
-}
-
-function imageDataUrl(image: ConversationImage): string {
-  return image.dataUrl || `data:${image.mediaType};base64,${image.data}`;
-}
-
-// Remove any orphaned hover previews. Needed because removing a thumbnail mid-
-// hover (clicking its ×) detaches the element before mouseleave can fire.
-function removeAllImagePreviews(state: PaneState): void {
-  state.root
-    .querySelectorAll(".claudero-img-preview")
-    .forEach((el) => el.remove());
-}
-
-// Floating large preview shown beside the hovered thumbnail.
-function attachImagePreview(
-  state: PaneState,
-  el: HTMLElement,
-  dataUrl: string,
+  current: () => boolean,
 ): void {
-  const doc = state.root.ownerDocument!;
-  let preview: HTMLElement | null = null;
-  const hide = () => {
-    preview?.remove();
-    preview = null;
+  stopInteractionPolling(state);
+  const poll = async () => {
+    if (!current() || state.cancelRequested || !state.running) return;
+    await checkPendingInteractions(state, current);
+    if (current() && !state.cancelRequested && state.running)
+      state.permissionCheckTimer = setTimeout(
+        () => void poll(),
+        800,
+      ) as unknown as number;
   };
-  el.addEventListener("mouseenter", () => {
-    hide();
-    const win = doc.defaultView as Window;
-    preview = createEl(doc, "div", "claudero-img-preview");
-    const big = doc.createElement("img") as HTMLImageElement;
-    big.src = dataUrl;
-    preview.appendChild(big);
-    preview.style.position = "fixed";
-    preview.style.visibility = "hidden";
-    state.root.appendChild(preview);
-
-    const place = () => {
-      if (!preview) return;
-      const thumb = el.getBoundingClientRect();
-      const pw = preview.offsetWidth;
-      const ph = preview.offsetHeight;
-      const gap = 8;
-      // Prefer to the left of the thumb (the pane hugs the right screen edge);
-      // fall back to the right, then clamp inside the viewport.
-      let left = thumb.left - pw - gap;
-      if (left < gap) left = thumb.right + gap;
-      left = Math.min(left, win.innerWidth - pw - gap);
-      left = Math.max(gap, left);
-      let top = thumb.top + thumb.height / 2 - ph / 2;
-      top = Math.max(gap, Math.min(top, win.innerHeight - ph - gap));
-      preview.style.left = `${left}px`;
-      preview.style.top = `${top}px`;
-      preview.style.visibility = "visible";
-    };
-
-    if (big.complete) place();
-    else big.addEventListener("load", place, { once: true });
-    place();
-  });
-  el.addEventListener("mouseleave", hide);
+  void poll();
 }
 
-function ensurePendingImagesBar(state: PaneState): HTMLElement {
-  if (state.pendingImagesBar && state.pendingImagesBar.isConnected) {
-    return state.pendingImagesBar;
-  }
-  const doc = state.root.ownerDocument!;
-  const composer = state.root.querySelector(
-    ".claudero-composer",
-  ) as HTMLElement;
-  const bar = createEl(doc, "div", "claudero-pending-images");
-  composer.insertBefore(bar, state.input);
-  state.pendingImagesBar = bar;
-  return bar;
-}
-
-function renderPendingImages(state: PaneState): void {
-  const bar = ensurePendingImagesBar(state);
-  removeAllImagePreviews(state);
-  bar.textContent = "";
-  if (state.pendingImages.length === 0) {
-    bar.style.display = "none";
+async function checkPendingInteractions(
+  state: PaneState,
+  current: () => boolean,
+): Promise<void> {
+  if (!current() || state.cancelRequested || state.permissionPollInFlight)
     return;
-  }
-  bar.style.display = "flex";
-  const doc = state.root.ownerDocument!;
-  for (const img of state.pendingImages) {
-    const thumb = createEl(doc, "div", "claudero-img-thumb");
-    const imgEl = doc.createElement("img") as HTMLImageElement;
-    const dataUrl = imageDataUrl(img);
-    imgEl.src = dataUrl;
-    thumb.appendChild(imgEl);
-    attachImagePreview(state, thumb, dataUrl);
-    thumb.appendChild(
-      makeChipRemoveBtn(doc, () => {
-        state.pendingImages = state.pendingImages.filter(
-          (i) => i.id !== img.id,
-        );
-        renderPendingImages(state);
-      }),
+  const ownerRequestId = state.activeRequestId!;
+  const controller = new AbortController();
+  state.permissionPollController = controller;
+  state.permissionPollInFlight = true;
+  const timer = setTimeout(() => controller.abort(), 8_000);
+  const valid = () =>
+    current() &&
+    !controller.signal.aborted &&
+    !state.cancelRequested &&
+    state.running;
+  const pending = <T>(kind: string) =>
+    requestHelperJson<T | null>(
+      `/pending-${kind}?ownerRequestId=${encodeURIComponent(ownerRequestId)}`,
+      { signal: controller.signal },
     );
-    bar.appendChild(thumb);
-  }
-}
-
-interface MessageRenderOptions {
-  ts?: number;
-  turnIndex?: number;
-  editable?: boolean;
-  contextSnapshot?: unknown;
-  skipStreaming?: boolean; // If true, don't add streaming class even for assistant messages
-}
-
-function cloneImages(images?: ConversationImage[]): PendingImage[] {
-  return (images || []).map((img) => ({ ...img }));
-}
-
-function getLastEditableUserTurnIndex(state: PaneState): number {
-  for (let i = state.conversationTurns.length - 1; i >= 0; i--) {
-    if (state.conversationTurns[i]?.role === "user") return i;
-  }
-  return -1;
-}
-
-function asSelectionContext(value: unknown): ClauderoSelectionContext | null {
-  if (!value || typeof value !== "object") return null;
-  const context = value as Partial<ClauderoSelectionContext>;
-  if (!Array.isArray(context.items)) return null;
-  return context as ClauderoSelectionContext;
-}
-
-function compactText(value: string, max = 34): string {
-  const text = value.replace(/\s+/g, " ").trim();
-  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
-}
-
-function midTruncate(value: string, max = 120): string {
-  const text = value.replace(/\s+/g, " ").trim();
-  if (text.length <= max) return text;
-  const head = Math.ceil(max / 2);
-  const tail = Math.floor(max / 2);
-  return text.slice(0, head) + "…" + text.slice(text.length - tail);
-}
-
-function makeStoredItemIconEl(doc: Document, itemType: string): HTMLElement {
-  const span = createEl(
-    doc,
-    "span",
-    "claudero-chip-icon icon icon-css icon-item-type cell-icon item-icon",
-  );
-  if (itemType) span.setAttribute("data-item-type", itemType);
-  return span;
-}
-
-// Resolve the Zotero item-type icon name for a reader attachment.  Live
-// contexts carry `_item` directly; stored (imported) contexts need to re-fetch
-// the attachment via Zotero.Items.
-function resolveReaderIconType(reader: {
-  key: string;
-  _item?: Zotero.Item;
-}): string {
-  const liveIcon =
-    reader._item?.getItemTypeIconName?.() ??
-    reader._item?.topLevelItem?.getItemTypeIconName?.();
-  if (liveIcon) return liveIcon;
-
-  const fetched = Zotero.Items.getByLibraryAndKey(1, reader.key) as
-    | (Zotero.Item & { topLevelItem?: Zotero.Item })
-    | false;
-  if (fetched) {
-    const name =
-      (fetched as any).getItemTypeIconName?.() ??
-      (fetched as any).topLevelItem?.getItemTypeIconName?.();
-    if (name) return name;
-  }
-  return "attachment";
-}
-
-// Zotero native library icon, using the same style as item-type icons
-function makeNativeLibraryIcon(doc: Document): HTMLElement {
-  return createEl(
-    doc,
-    "span",
-    "claudero-chip-icon icon icon-css icon-library cell-icon item-icon",
-  );
-}
-
-// Zotero's native annotation highlight glyph. Used everywhere we represent
-// annotations (the summary chip icon and the annotations detail header).
-function makeAnnotationIcon(doc: Document): HTMLElement {
-  const img = createEl(doc, "img", "claudero-chip-icon");
-  img.src = "chrome://zotero/skin/16/universal/annotate-highlight.svg";
-  img.setAttribute("width", "16");
-  img.setAttribute("height", "16");
-  return img;
-}
-
-function makePdfFallbackIcon(doc: Document): HTMLElement {
-  const span = createEl(doc, "span", "claudero-pdf-chip-icon");
-  span.textContent = "PDF";
-  return span;
-}
-
-function selectZoteroItemsFromHistory(ids: number[]): void {
-  const cleanIDs = ids.filter((id) => Number.isFinite(id) && id > 0);
-  if (!cleanIDs.length) return;
   try {
-    const win = Zotero.getMainWindow() as Window & {
-      Zotero_Tabs?: { select?: (id: string) => void };
-      ZoteroPane?: { selectItems?: (ids: number[]) => unknown };
-    };
-    win.Zotero_Tabs?.select?.("zotero-pane");
-    const pane = Zotero.getActiveZoteroPane?.() || win.ZoteroPane;
-    void pane?.selectItems?.(cleanIDs);
-  } catch (error) {
-    ztoolkit.log("[Claudero] Failed to select historical Zotero items:", error);
-  }
-}
-
-function attachChipTooltip(el: HTMLElement, text: string): void {
-  // Store the text as a data attribute so repeated calls (on rebuilt chips)
-  // just update the text without adding duplicate event listeners.
-  el.dataset.clauderoTooltip = text;
-  if (el.dataset.clauderoTooltipBound) return;
-  el.dataset.clauderoTooltipBound = "1";
-  const doc = el.ownerDocument!;
-  let tip: HTMLElement | null = null;
-  el.addEventListener("mouseenter", () => {
-    const tooltipText = el.dataset.clauderoTooltip || "";
-    if (!tooltipText) return;
-    tip = doc.createElementNS(
-      "http://www.w3.org/1999/xhtml",
-      "div",
-    ) as HTMLElement;
-    tip.className = "claudero-chip-tooltip";
-    tip.textContent = tooltipText;
-    // Mount hidden first so we can read its rendered size for clamping.
-    tip.style.visibility = "hidden";
-    doc.documentElement.appendChild(tip);
-    const anchorRect = el.getBoundingClientRect();
-    const tipRect = tip.getBoundingClientRect();
-    const win = doc.defaultView!;
-    const margin = 8;
-    const idealLeft =
-      anchorRect.left + anchorRect.width / 2 - tipRect.width / 2;
-    const clampedLeft = Math.max(
-      margin,
-      Math.min(idealLeft, win.innerWidth - tipRect.width - margin),
-    );
-    tip.style.left = `${clampedLeft}px`;
-    tip.style.top = `${anchorRect.top - tipRect.height - 6}px`;
-    tip.style.visibility = "";
-  });
-  el.addEventListener("mouseleave", () => {
-    tip?.remove();
-    tip = null;
-  });
-}
-
-// Shared chip content builder — used by both composer chips and message chips
-// so they render identically. The caller decides whether to add a remove button.
-function populateContextToken(
-  el: HTMLElement,
-  doc: Document,
-  options: { icon?: HTMLElement; label: string; tooltip?: string },
-): void {
-  el.textContent = "";
-  if (options.icon) el.appendChild(options.icon);
-  const span = createEl(doc, "span", "claudero-chip-label");
-  span.textContent = options.label;
-  el.appendChild(span);
-  if (options.tooltip) attachChipTooltip(el, options.tooltip);
-}
-
-// Present context categories in priority order (selected text/annotations win
-// over items/PDF, which win over the active collection).
-function presentContextCategories(
-  context: ClauderoSelectionContext,
-): CtxCategory[] {
-  const categories: CtxCategory[] = [];
-  if (context.selectedText?.trim()) categories.push("text");
-  if (
-    Array.isArray(context.selectedAnnotations) &&
-    context.selectedAnnotations.length > 0
-  ) {
-    categories.push("annotations");
-  }
-  if (Array.isArray(context.items) && context.items.length > 0)
-    categories.push("items");
-  if (context.reader?.id || context.reader?.path) categories.push("reader");
-  if (context.activeCollection?.name || context.activeCollection?.path)
-    categories.push("collection");
-  return categories;
-}
-
-// A native Zotero library/collection glyph (icon-library / icon-collection),
-// rendered by Zotero's own stylesheet in the main window.
-function makeZoteroTreeIcon(
-  doc: Document,
-  kind: "library" | "collection",
-): HTMLElement {
-  return createEl(
-    doc,
-    "span",
-    `icon icon-css ${kind === "library" ? "icon-library" : "icon-collection"}`,
-  );
-}
-
-// The "multiple items" glyph: up to three real item-type icons, overlapped —
-// the same stacked treatment the composer chip uses.
-function makeStackedItemIcons(
-  doc: Document,
-  items: ClauderoSelectionContext["items"],
-): HTMLElement {
-  const wrap = createEl(doc, "div", "claudero-item-icons");
-  for (const item of items.slice(0, 3)) {
-    const icon = makeStoredItemIconEl(doc, item.itemType || "");
-    icon.classList.add("stacked");
-    wrap.appendChild(icon);
-  }
-  return wrap;
-}
-
-// The compact icon + label shown on the summary chip for the highest-priority
-// category present in a message.
-function buildSummaryPrimary(
-  doc: Document,
-  context: ClauderoSelectionContext,
-  kind: CtxCategory,
-): { icon: HTMLElement; label: string } {
-  switch (kind) {
-    case "text":
-      return {
-        icon: createEl(doc, "div", "claudero-text-icon"),
-        label: compactText(context.selectedText.trim(), 22),
-      };
-    case "annotations":
-      return {
-        icon: makeAnnotationIcon(doc),
-        label: getString("context-annotations-section", {
-          args: { count: context.selectedAnnotations?.length || 0 },
-        }),
-      };
-    case "items": {
-      const items = context.items;
-      if (items.length === 1) {
-        const item = items[0];
-        return {
-          icon: makeStoredItemIconEl(doc, item.itemType || ""),
-          label: compactText(item.title || item.key || String(item.id), 22),
-        };
-      }
-      return {
-        icon: makeStackedItemIcons(doc, items),
-        label: getString("context-item-many", {
-          args: { count: items.length },
-        }),
-      };
-    }
-    case "reader": {
-      const reader = context.reader!;
-      return {
-        icon: makeStoredItemIconEl(doc, resolveReaderIconType(reader)),
-        label: compactText(
-          reader.title || getString("context-current-pdf-label"),
-          22,
-        ),
-      };
-    }
-    case "collection": {
-      const collection = context.activeCollection!;
-      return {
-        icon: makeNativeLibraryIcon(doc),
-        label: compactText(collection.path || collection.name || "", 22),
-      };
-    }
-  }
-  const exhaustive: never = kind;
-  return exhaustive;
-}
-
-// A single compact pill summarising a message's captured Zotero context. Shows
-// the top-priority category and a "+N" badge for the remaining categories;
-// clicking it opens a categorised detail popup.
-function buildMessageContextSummaryChip(
-  state: PaneState,
-  snapshot: unknown,
-): HTMLElement | null {
-  const context = asSelectionContext(snapshot);
-  if (!context) return null;
-  const categories = presentContextCategories(context);
-  if (!categories.length) return null;
-
-  const doc = state.root.ownerDocument!;
-  const chip = createEl(doc, "button", "claudero-message-context-summary");
-  chip.type = "button";
-  chip.setAttribute("tabindex", "-1");
-  chip.setAttribute("title", getString("context-view"));
-  chip.setAttribute("aria-label", getString("context-view"));
-
-  const { icon, label } = buildSummaryPrimary(doc, context, categories[0]);
-  chip.appendChild(icon);
-  const labelEl = createEl(doc, "span", "claudero-chip-label");
-  labelEl.textContent = label;
-  chip.appendChild(labelEl);
-
-  const extra = categories.length - 1;
-  if (extra > 0) {
-    const badge = createEl(doc, "span", "claudero-ctx-summary-badge");
-    badge.textContent = `+${extra}`;
-    chip.appendChild(badge);
-  }
-
-  chip.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    showMessageContextPopup(state, chip, context);
-  });
-  return chip;
-}
-
-// While a detail popup is open we keep its message's hover meta (the summary
-// chip + time + actions) pinned visible, and only let it fade ~1.5s after the
-// popup closes — so opening details doesn't make the chip vanish under you.
-let pinnedContextStack: HTMLElement | null = null;
-let pinUnpinTimer: number | null = null;
-
-function pinContextStack(anchor: HTMLElement): void {
-  const stack = anchor.closest(".claudero-message-stack") as HTMLElement | null;
-  const win = anchor.ownerDocument?.defaultView ?? null;
-  if (pinUnpinTimer !== null && win) win.clearTimeout(pinUnpinTimer);
-  pinUnpinTimer = null;
-  if (pinnedContextStack && pinnedContextStack !== stack) {
-    pinnedContextStack.classList.remove("claudero-context-pinned");
-  }
-  pinnedContextStack = stack;
-  stack?.classList.add("claudero-context-pinned");
-}
-
-function unpinContextStackSoon(doc: Document): void {
-  if (!pinnedContextStack) return;
-  const stack = pinnedContextStack;
-  const win = doc.defaultView;
-  if (pinUnpinTimer !== null && win) win.clearTimeout(pinUnpinTimer);
-  if (!win) {
-    stack.classList.remove("claudero-context-pinned");
-    pinnedContextStack = null;
-    pinUnpinTimer = null;
-    return;
-  }
-  pinUnpinTimer = win.setTimeout(() => {
-    stack.classList.remove("claudero-context-pinned");
-    pinnedContextStack = null;
-    pinUnpinTimer = null;
-  }, 1500);
-}
-
-function closeContextDetailPopup(doc: Document): HTMLElement | null {
-  const existing = doc.querySelector(".claudero-context-detail-popup") as
-    | (HTMLElement & { _cleanup?: () => void; _anchor?: HTMLElement })
-    | null;
-  if (existing) {
-    existing._cleanup?.();
-    existing.remove();
-    unpinContextStackSoon(doc);
-  }
-  return existing;
-}
-
-function positionContextPopup(popup: HTMLElement, anchor: HTMLElement): void {
-  const doc = anchor.ownerDocument!;
-  const win = doc.defaultView!;
-  const a = anchor.getBoundingClientRect();
-  const p = popup.getBoundingClientRect();
-  const margin = 8;
-  let left = a.right - p.width; // right-align with the chip
-  left = Math.max(margin, Math.min(left, win.innerWidth - p.width - margin));
-  let top = a.top - p.height - 6; // open upward by default
-  if (top < margin) top = a.bottom + 6; // flip below when there's no room
-  top = Math.max(margin, Math.min(top, win.innerHeight - p.height - margin));
-  popup.style.left = `${left}px`;
-  popup.style.top = `${top}px`;
-}
-
-function makeCtxSection(
-  doc: Document,
-  icon: HTMLElement,
-  title: string,
-): { section: HTMLElement; body: HTMLElement } {
-  const section = createEl(doc, "div", "claudero-ctx-section");
-  const head = createEl(doc, "div", "claudero-ctx-section-head");
-  icon.classList.add("claudero-ctx-head-icon");
-  const titleEl = createEl(doc, "span", "claudero-ctx-section-title");
-  titleEl.textContent = title;
-  head.append(icon, titleEl);
-  const body = createEl(doc, "div", "claudero-ctx-section-body");
-  section.append(head, body);
-  return { section, body };
-}
-
-// A clickable row (icon + title + optional sub-lines). Uses a div rather than a
-// native <button> so block children stack predictably instead of collapsing
-// into the button's single-line box.
-function makeClickableRow(
-  doc: Document,
-  options: {
-    icon: HTMLElement;
-    title: string;
-    subs: string[];
-    onClick: () => void;
-  },
-): HTMLElement {
-  const row = createEl(
-    doc,
-    "div",
-    "claudero-ctx-row claudero-ctx-row-clickable",
-  );
-  row.setAttribute("role", "button");
-  row.setAttribute("tabindex", "-1");
-  options.icon.classList.add("claudero-ctx-row-icon");
-  const main = createEl(doc, "div", "claudero-ctx-row-main");
-  const title = createEl(doc, "div", "claudero-ctx-row-title");
-  title.textContent = options.title;
-  main.appendChild(title);
-  for (const sub of options.subs) {
-    const subEl = createEl(doc, "div", "claudero-ctx-row-sub");
-    subEl.textContent = sub;
-    main.appendChild(subEl);
-  }
-  row.append(options.icon, main);
-  row.addEventListener("click", () => {
-    options.onClick();
-    closeContextDetailPopup(doc);
-  });
-  return row;
-}
-
-function buildContextSection(
-  doc: Document,
-  context: ClauderoSelectionContext,
-  kind: CtxCategory,
-): HTMLElement {
-  switch (kind) {
-    case "text": {
-      const { section, body } = makeCtxSection(
-        doc,
-        createEl(doc, "div", "claudero-text-icon"),
-        getString("context-selected-text-label"),
-      );
-      const text = createEl(doc, "div", "claudero-ctx-text");
-      text.textContent = context.selectedText.trim();
-      body.appendChild(text);
-      return section;
-    }
-    case "annotations": {
-      const annotations = context.selectedAnnotations || [];
-      // Annotations always use Zotero's highlight glyph.
-      const { section, body } = makeCtxSection(
-        doc,
-        makeAnnotationIcon(doc),
-        getString("context-annotations-section", {
-          args: { count: annotations.length },
-        }),
-      );
-      for (const anno of annotations) {
-        const row = createEl(doc, "div", "claudero-ctx-row claudero-ctx-anno");
-        // The annotation's own colour shows as a left accent bar; the page badge
-        // sits at the bottom-right under the text.
-        if (anno.color) row.style.borderLeftColor = anno.color;
-        const main = createEl(doc, "div", "claudero-ctx-row-main");
-        const textEl = createEl(doc, "div", "claudero-ctx-anno-text");
-        textEl.textContent =
-          anno.text || getString("context-no-annotation-text");
-        main.appendChild(textEl);
-        if (anno.comment) {
-          const comment = createEl(doc, "div", "claudero-ctx-anno-comment");
-          comment.textContent = anno.comment;
-          main.appendChild(comment);
-        }
-        if (typeof anno.pageIndex === "number") {
-          const page = createEl(doc, "span", "claudero-ctx-page");
-          page.textContent = `p.${anno.pageIndex + 1}`;
-          main.appendChild(page);
-        }
-        row.appendChild(main);
-        body.appendChild(row);
-      }
-      return section;
-    }
-    case "items": {
-      const items = context.items;
-      // Header shows the item's own icon (the single item's type icon, or
-      // stacked type icons when several are selected); rows repeat each icon.
-      const headIcon =
-        items.length === 1
-          ? makeStoredItemIconEl(doc, items[0].itemType || "")
-          : makeStackedItemIcons(doc, items);
-      const { section, body } = makeCtxSection(
-        doc,
-        headIcon,
-        items.length === 1
-          ? getString("context-item-one")
-          : getString("context-item-many", { args: { count: items.length } }),
-      );
-      for (const item of items) {
-        const subParts = [item.creators?.[0], (item.date || "").slice(0, 4)]
-          .filter(Boolean)
-          .join(" · ");
-        body.appendChild(
-          makeClickableRow(doc, {
-            icon: makeStoredItemIconEl(doc, item.itemType || ""),
-            title: item.title || item.key || String(item.id),
-            subs: subParts ? [subParts] : [],
-            onClick: () => selectZoteroItemsFromHistory([item.id]),
-          }),
-        );
-      }
-      return section;
-    }
-    case "reader": {
-      const reader = context.reader!;
-      const rowIcon = makeStoredItemIconEl(doc, resolveReaderIconType(reader));
-      const headIcon = makeStoredItemIconEl(doc, resolveReaderIconType(reader));
-      const { section, body } = makeCtxSection(
-        doc,
-        headIcon,
-        getString("context-item-one"),
-      );
-      const page =
-        reader.pageLabel ||
-        (reader.pageNumber ? String(reader.pageNumber) : "");
-      const subs: string[] = [];
-      if (page)
-        subs.push(
-          getString("context-page", {
-            args: {
-              page,
-              total: reader.pagesCount ? ` / ${reader.pagesCount}` : "",
-            },
-          }),
-        );
-      if (reader.path) subs.push(midTruncate(reader.path, 60));
-      body.appendChild(
-        makeClickableRow(doc, {
-          icon: rowIcon,
-          title: reader.title || getString("context-current-pdf-label"),
-          subs,
-          // Select the PDF attachment itself, not its parent item.
-          onClick: () => selectZoteroItemsFromHistory([reader.id]),
-        }),
-      );
-      return section;
-    }
-    case "collection": {
-      const collection = context.activeCollection!;
-      // Use Zotero native library icon style for the section header
-      const { section, body } = makeCtxSection(
-        doc,
-        makeNativeLibraryIcon(doc),
-        getString("context-collection"),
-      );
-      const tree = createEl(doc, "div", "claudero-ctx-coll-tree");
-      const levels: {
-        label: string;
-        kind: "library" | "collection";
-        current: boolean;
-      }[] = [
-        {
-          label: collection.libraryName || getString("context-library"),
-          kind: "library",
-          current: false,
-        },
-      ];
-      const names = (collection.path || collection.name || "")
-        .split("/")
-        .map((part) => part.trim())
-        .filter(Boolean);
-      names.forEach((name, index) => {
-        levels.push({
-          label: name,
-          kind: "collection",
-          current: index === names.length - 1,
-        });
-      });
-      levels.forEach((level, index) => {
-        const row = createEl(
-          doc,
-          "div",
-          `claudero-ctx-coll-row${level.current ? " current" : ""}`,
-        );
-        row.style.setProperty("--level", String(index));
-        const label = createEl(doc, "span", "claudero-ctx-coll-label");
-        label.textContent = level.label;
-        row.append(makeZoteroTreeIcon(doc, level.kind), label);
-        tree.appendChild(row);
-      });
-      body.appendChild(tree);
-      return section;
-    }
-  }
-  const exhaustive: never = kind;
-  return exhaustive;
-}
-
-function showMessageContextPopup(
-  state: PaneState,
-  anchor: HTMLElement,
-  context: ClauderoSelectionContext,
-): void {
-  const doc = anchor.ownerDocument!;
-  const closed = closeContextDetailPopup(doc) as
-    | (HTMLElement & { _anchor?: HTMLElement })
-    | null;
-  if (closed && closed._anchor === anchor) return; // clicking the open chip toggles it shut
-
-  const categories = presentContextCategories(context);
-  if (!categories.length) return;
-
-  pinContextStack(anchor); // keep the chip visible while details are open
-
-  const popup = createEl(
-    doc,
-    "div",
-    "claudero-context-detail-popup",
-  ) as HTMLElement & {
-    _cleanup?: () => void;
-    _anchor?: HTMLElement;
-  };
-  popup._anchor = anchor;
-  popup.style.visibility = "hidden"; // measure before revealing to avoid a position flash
-  for (const kind of categories) {
-    popup.appendChild(buildContextSection(doc, context, kind));
-  }
-  doc.documentElement.appendChild(popup);
-  positionContextPopup(popup, anchor);
-  popup.style.visibility = "";
-
-  const win = doc.defaultView!;
-  const onPointerDown = (event: Event) => {
-    const target = event.target as Node;
-    if (!popup.contains(target) && !anchor.contains(target))
-      closeContextDetailPopup(doc);
-  };
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") closeContextDetailPopup(doc);
-  };
-  const onReflow = () => closeContextDetailPopup(doc);
-  doc.addEventListener("mousedown", onPointerDown, true);
-  doc.addEventListener("keydown", onKeyDown, true);
-  win.addEventListener("resize", onReflow, true);
-  state.transcript.addEventListener("scroll", onReflow, true);
-  popup._cleanup = () => {
-    doc.removeEventListener("mousedown", onPointerDown, true);
-    doc.removeEventListener("keydown", onKeyDown, true);
-    win.removeEventListener("resize", onReflow, true);
-    state.transcript.removeEventListener("scroll", onReflow, true);
-  };
-}
-
-function startOfDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function startOfWeek(date: Date): Date {
-  const d = startOfDay(date);
-  const day = d.getDay() || 7;
-  d.setDate(d.getDate() - day + 1);
-  return d;
-}
-
-function pad2(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-function formatMessageTime(ts = Date.now()): string {
-  const date = new Date(ts);
-  const now = new Date();
-  const time = `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
-  if (date >= startOfDay(now)) return time;
-  if (date >= startOfWeek(now)) {
-    const weekday = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][
-      date.getDay()
-    ];
-    return `${weekday} ${time}`;
-  }
-  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${time}`;
-}
-
-function createToolbarLikeButton(
-  doc: Document,
-  className: string,
-  title: string,
-  onCommand: () => void,
-): HTMLElement {
-  const xulBtn = (
-    doc as Document & { createXULElement?: (tag: string) => HTMLElement }
-  ).createXULElement?.("toolbarbutton");
-  const btn = (xulBtn ?? doc.createElement("button")) as HTMLElement;
-  if (className) btn.className = className;
-  btn.setAttribute("tooltiptext", title);
-  btn.setAttribute("title", title);
-  btn.setAttribute("aria-label", title);
-  btn.setAttribute("tabindex", "-1");
-  btn.addEventListener("command", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    onCommand();
-  });
-  if (btn.localName !== "toolbarbutton") {
-    (btn as HTMLButtonElement).type = "button";
-    btn.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      onCommand();
-    });
-  }
-  return btn;
-}
-
-function createMessageActionButton(
-  doc: Document,
-  kind: "copy" | "retry" | "edit" | "fork",
-  title: string,
-  onClick: () => void,
-): HTMLElement {
-  const btn = createToolbarLikeButton(doc, "", title, onClick);
-  btn.setAttribute("data-claudero-message-action", kind);
-  // Parse SVG template and add to button
-  const template =
-    kind === "copy"
-      ? COPY_ICON_SVG
-      : kind === "retry"
-        ? RETRY_ICON_SVG
-        : kind === "edit"
-          ? EDIT_ICON_SVG
-          : FORK_ICON_SVG;
-  const wrapper = doc.createElement("div");
-  wrapper.innerHTML = template.trim();
-  const svg = wrapper.firstElementChild as SVGSVGElement;
-  svg.setAttribute("width", "20");
-  svg.setAttribute("height", "20");
-  btn.appendChild(svg);
-
-  // For copy button, add feedback animation
-  if (kind === "copy") {
-    const originalOnClick = onClick;
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      // Show check icon
-      btn.innerHTML = "";
-      const checkWrapper = doc.createElement("div");
-      checkWrapper.innerHTML = CHECK_ICON_SVG.trim();
-      const checkSvg = checkWrapper.firstElementChild as SVGSVGElement;
-      checkSvg.setAttribute("width", "20");
-      checkSvg.setAttribute("height", "20");
-      btn.appendChild(checkSvg);
-
-      // Restore original icon after 2 seconds
-      setTimeout(() => {
-        if (btn.isConnected) {
-          btn.innerHTML = "";
-          const origWrapper = doc.createElement("div");
-          origWrapper.innerHTML = template.trim();
-          const origSvg = origWrapper.firstElementChild as SVGSVGElement;
-          origSvg.setAttribute("width", "20");
-          origSvg.setAttribute("height", "20");
-          btn.appendChild(origSvg);
-        }
-      }, 2000);
-
-      // Execute the original click handler
-      originalOnClick();
-    });
-  }
-
-  return btn;
-}
-
-function copyText(state: PaneState, text: string): void {
-  const win = state.root.ownerDocument!.defaultView as Window | null;
-  const clipboard = win?.navigator?.clipboard;
-  if (clipboard?.writeText) {
-    void clipboard.writeText(text).catch(() => fallbackCopyText(state, text));
-    return;
-  }
-  fallbackCopyText(state, text);
-}
-
-function fallbackCopyText(state: PaneState, text: string): void {
-  const doc = state.root.ownerDocument!;
-  const area = doc.createElement("textarea");
-  area.value = text;
-  area.style.position = "fixed";
-  area.style.opacity = "0";
-  doc.documentElement.appendChild(area);
-  area.select();
-  try {
-    doc.execCommand("copy");
-  } catch {
-    /* ignore */
-  }
-  area.remove();
-}
-
-function attachMessageActions(
-  state: PaneState,
-  msgEl: HTMLElement,
-  role: MessageRole,
-  text: string,
-  options: MessageRenderOptions = {},
-): void {
-  const doc = state.root.ownerDocument!;
-  const stack = msgEl.parentElement?.classList.contains(
-    "claudero-message-stack",
-  )
-    ? (msgEl.parentElement as HTMLElement)
-    : msgEl;
-  // Remove existing meta if any
-  stack.querySelector(":scope > .claudero-message-meta")?.remove();
-  msgEl.dataset.ts = String(options.ts || Date.now());
-  if (typeof options.turnIndex === "number")
-    msgEl.dataset.turnIndex = String(options.turnIndex);
-
-  // For assistant messages, don't add anything during streaming
-  if (role === "assistant" && msgEl.classList.contains("streaming")) {
-    return;
-  }
-
-  const meta = createEl(doc, "div", `claudero-message-meta ${role}`);
-  const time = createEl(doc, "span", "claudero-message-time");
-  time.textContent = formatMessageTime(options.ts);
-
-  if (role === "assistant") {
-    meta.appendChild(
-      createMessageActionButton(doc, "copy", "复制", () =>
-        copyText(state, text),
-      ),
-    );
-    meta.appendChild(
-      createMessageActionButton(doc, "retry", "重试", () =>
-        retryAssistantTurn(state, options.turnIndex),
-      ),
-    );
-    if (
-      getProviderCapabilities(normalizeProvider(state.providerSelect.value))
-        .supportsFork
-    ) {
-      meta.appendChild(
-        createMessageActionButton(
-          doc,
-          "fork",
-          "分叉",
-          () => void forkConversationAtTurn(state, options.turnIndex),
-        ),
-      );
-    }
-    meta.appendChild(time);
-  } else {
-    const summaryChip = buildMessageContextSummaryChip(
-      state,
-      options.contextSnapshot,
-    );
-    if (summaryChip) meta.appendChild(summaryChip);
-    meta.appendChild(time);
-    meta.appendChild(
-      createMessageActionButton(doc, "copy", "复制", () =>
-        copyText(state, text),
-      ),
-    );
-    if (options.editable) {
-      meta.appendChild(
-        createMessageActionButton(doc, "edit", "修改问题", () =>
-          editLastUserTurn(state, options.turnIndex),
-        ),
-      );
-    }
-  }
-
-  stack.appendChild(meta);
-}
-
-function refreshEditableMessageActions(state: PaneState): void {
-  state.transcript
-    .querySelectorAll('[data-claudero-message-action="edit"]')
-    .forEach((el) => el.remove());
-}
-
-function appendMessageStack(
-  state: PaneState,
-  role: MessageRole,
-  msgEl: HTMLElement,
-): HTMLElement {
-  const doc = state.root.ownerDocument!;
-  const stack = createEl(doc, "div", `claudero-message-stack ${role}`);
-  stack.appendChild(msgEl);
-  state.transcript.appendChild(stack);
-  return stack;
-}
-
-async function retryAssistantTurn(
-  state: PaneState,
-  turnIndex?: number,
-): Promise<void> {
-  if (state.running) return;
-  const assistantIndex =
-    typeof turnIndex === "number"
-      ? turnIndex
-      : state.conversationTurns.length - 1;
-  if (
-    assistantIndex < 0 ||
-    state.conversationTurns[assistantIndex]?.role !== "assistant"
-  )
-    return;
-  let userIndex = assistantIndex - 1;
-  while (userIndex >= 0 && state.conversationTurns[userIndex]?.role !== "user")
-    userIndex--;
-  const userTurn = state.conversationTurns[userIndex];
-  if (!userTurn) return;
-  state.conversationTurns = state.conversationTurns.slice(0, userIndex);
-  await saveConversation(state);
-  renderConversationTurns(state);
-  state.pendingImages = cloneImages(userTurn.images);
-  renderPendingImages(state);
-  void sendPrompt(
-    state,
-    userTurn.text,
-    state.pendingImages.slice(),
-    asSelectionContext(userTurn.contextSnapshot) || undefined,
-  );
-}
-
-async function forkConversationAtTurn(
-  state: PaneState,
-  turnIndex?: number,
-): Promise<void> {
-  if (state.running) return;
-  const index =
-    typeof turnIndex === "number"
-      ? turnIndex
-      : state.conversationTurns.length - 1;
-  if (index < 0 || !state.conversationTurns[index]) return;
-  const parentConversationId = state.conversationId;
-  const turns = state.conversationTurns.slice(0, index + 1);
-  const activeProvider = normalizeProvider(state.providerSelect.value);
-  const codexThreadId = state.providerState?.codex?.threadId;
-  const resumeAt = findLastAssistantProviderTurnId(turns);
-  if (!(await saveConversation(state))) return;
-  state.conversationId = newConversationId();
-  state.conversationTurns = turns.map((turn) => ({ ...turn }));
-  state.providerState =
-    activeProvider === "codex" && codexThreadId
-      ? {
-          codex: {
-            forkSource: {
-              threadId: codexThreadId,
-              resumeAt,
-              sourceConversationId: parentConversationId,
-            },
-          },
-        }
-      : undefined;
-  state.parentConversationId = parentConversationId;
-  state.forkedAtTurnIndex = index;
-  state.compactedAt = undefined;
-  state.currentProviderTurnId = undefined;
-  await saveConversation(state);
-  renderConversationTurns(state);
-  appendNoticeCard(
-    state,
-    "success",
-    getString("pane-fork-title"),
-    getString("pane-fork-description"),
-  );
-  setStatusDot(state, "ready");
-}
-
-function findLastAssistantProviderTurnId(
-  turns: ConversationTurn[],
-): string | undefined {
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const turn = turns[i];
-    if (turn?.role === "assistant" && turn.assistantMessageId) {
-      return turn.assistantMessageId;
-    }
-  }
-  return undefined;
-}
-
-async function editLastUserTurn(
-  state: PaneState,
-  turnIndex?: number,
-): Promise<void> {
-  if (state.running) return;
-  const userIndex =
-    typeof turnIndex === "number"
-      ? turnIndex
-      : getLastEditableUserTurnIndex(state);
-  const turn = state.conversationTurns[userIndex];
-  if (!turn || turn.role !== "user") return;
-  state.conversationTurns = state.conversationTurns.slice(0, userIndex);
-  await saveConversation(state);
-  renderConversationTurns(state);
-  state.input.value = turn.text === "(图片)" ? "" : turn.text;
-  state.pendingImages = cloneImages(turn.images);
-  renderPendingImages(state);
-  const historicalContext = asSelectionContext(turn.contextSnapshot);
-  if (historicalContext?.items?.length) {
-    selectZoteroItemsFromHistory(
-      historicalContext.items.map((item) => item.id),
-    );
-  }
-  state.input.focus();
-  state.input.selectionStart = state.input.selectionEnd =
-    state.input.value.length;
-  updateSendButton(state, false);
-}
-
-// One user bubble holding the question text and any sent images together.
-function appendUserMessage(
-  state: PaneState,
-  text: string,
-  images: PendingImage[],
-  options: MessageRenderOptions = {},
-): HTMLElement {
-  const doc = state.root.ownerDocument!;
-  const msgEl = createEl(doc, "div", "claudero-message user");
-  // Images appear above the text (image-first layout)
-  if (images.length > 0) {
-    const row = createEl(doc, "div", "claudero-img-row");
-    if (text) row.style.marginBottom = "8px";
-    for (const img of images) {
-      const thumb = createEl(doc, "div", "claudero-img-thumb");
-      const imgEl = doc.createElement("img") as HTMLImageElement;
-      const dataUrl = imageDataUrl(img);
-      imgEl.src = dataUrl;
-      thumb.appendChild(imgEl);
-      attachImagePreview(state, thumb, dataUrl);
-      row.appendChild(thumb);
-    }
-    msgEl.appendChild(row);
-  }
-  if (text) {
-    const body = createEl(doc, "div", "claudero-message-body");
-    renderMarkdown(doc, body, text);
-    msgEl.appendChild(body);
-  }
-  appendMessageStack(state, "user", msgEl);
-  attachMessageActions(state, msgEl, "user", text || "(图片)", options);
-  scrollTranscript(state);
-  return msgEl;
-}
-
-function appendMessageCard(
-  state: PaneState,
-  role: MessageRole,
-  text: string,
-  options: MessageRenderOptions = {},
-): HTMLElement {
-  const doc = state.root.ownerDocument!;
-  const msgEl = createEl(doc, "div", `claudero-message ${role}`);
-  const body = createEl(doc, "div", "claudero-message-body");
-  msgEl.appendChild(body);
-  appendMessageStack(state, role, msgEl);
-  // Add streaming class before calling attachMessageActions so buttons are not added during streaming
-  // Skip streaming class for restored messages or when explicitly requested
-  if (role === "assistant" && !options.skipStreaming) {
-    msgEl.classList.add("streaming");
-  }
-  if (text) renderMarkdown(doc, body, text);
-  attachMessageActions(state, msgEl, role, text, options);
-  scrollTranscript(state);
-  return body;
-}
-
-async function checkPendingInteractions(state: PaneState): Promise<void> {
-  // If cancel was requested, do nothing (the cancel flow already cleared pending requests)
-  if (state.cancelRequested) return;
-
-  try {
-    const port = Number(getPref("helperPort") || 38660);
-    const token = await (async () => {
-      const profilePath = Zotero.Profile.dir;
-      const tokenPath = PathUtils.join(
-        profilePath,
-        "claudero",
-        "helper",
-        ".token",
-      );
-      try {
-        return (await (IOUtils as any).readUTF8(tokenPath)).trim();
-      } catch {
-        return "";
-      }
-    })();
-
-    const permissionResponse = await fetch(
-      `http://127.0.0.1:${port}/pending-permission`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      },
-    );
-
-    if (permissionResponse.status === 200) {
-      const request = await permissionResponse.json();
-      showPermissionDialog(state, request as unknown as PermissionRequestView);
+    const permission = await pending<PermissionRequestView>("permission");
+    if (!valid()) return;
+    if (permission) {
+      showPermissionDialog(state, permission);
       stopThinkingAnimation(state);
-    } else if (permissionResponse.status === 204) {
-      // No pending permission request.
-      if (state.permissionDialog) hidePermissionDialog(state);
+    } else hidePermissionDialog(state);
+    const exitPlan = await pending<PendingExitPlan>("exit-plan");
+    if (!valid()) return;
+    if (exitPlan) {
+      showExitPlanDialog(state, exitPlan);
+      stopThinkingAnimation(state);
+      return;
     }
-
-    let hasPendingExitPlan = false;
-    const exitPlanResponse = await fetch(
-      `http://127.0.0.1:${port}/pending-exit-plan`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      },
-    );
-
-    if (exitPlanResponse.status === 200) {
-      hasPendingExitPlan = true;
-      const exitPlan = await exitPlanResponse.json();
-      showExitPlanDialog(state, exitPlan as unknown as PendingExitPlan);
+    if (state.questionDialog?.getAttribute("data-dialog-kind") === "exit-plan")
+      hideQuestionDialog(state);
+    const question = await pending<PendingQuestion>("question");
+    if (!valid()) return;
+    if (question) {
+      showQuestionDialog(state, question);
       stopThinkingAnimation(state);
     } else if (
-      exitPlanResponse.status === 204 &&
-      state.questionDialog?.getAttribute("data-dialog-kind") === "exit-plan"
-    ) {
+      state.questionDialog?.getAttribute("data-dialog-kind") === "question"
+    )
       hideQuestionDialog(state);
+  } catch (error) {
+    if (valid())
+      ztoolkit.log("[Claudero] Pending interaction poll failed:", error);
+  } finally {
+    clearTimeout(timer);
+    if (state.permissionPollController === controller) {
+      state.permissionPollController = undefined;
+      state.permissionPollInFlight = false;
     }
-
-    if (!state.questionPollingUnsupported && !hasPendingExitPlan) {
-      const questionResponse = await fetch(
-        `http://127.0.0.1:${port}/pending-question`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-      );
-
-      if (questionResponse.status === 200) {
-        const question = await questionResponse.json();
-        showQuestionDialog(state, question as unknown as PendingQuestion);
-        stopThinkingAnimation(state);
-      } else if (questionResponse.status === 204) {
-        if (
-          state.questionDialog?.getAttribute("data-dialog-kind") === "question"
-        )
-          hideQuestionDialog(state);
-      } else if (questionResponse.status === 404) {
-        state.questionPollingUnsupported = true;
-        if (
-          state.questionDialog?.getAttribute("data-dialog-kind") === "question"
-        )
-          hideQuestionDialog(state);
-      }
-    }
-  } catch (e) {
-    ztoolkit.log("[Claudero] Failed to check pending interactions:", e);
   }
-}
-
-function appendNoticeCard(
-  state: PaneState,
-  kind: NoticeKind,
-  title: string,
-  text: string,
-  action?: { label: string; onClick: (button: HTMLButtonElement) => void },
-): void {
-  const doc = state.root.ownerDocument!;
-  const card = createEl(doc, "div", `claudero-notice-card ${kind}`);
-  const iconPaths: Record<NoticeKind, string> = {
-    info: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
-    warning:
-      "M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01",
-    auth: "M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4",
-    success: "M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4L12 14.01l-3-3",
-  };
-  const iconEl = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
-  iconEl.setAttribute("viewBox", "0 0 24 24");
-  iconEl.setAttribute("width", "16");
-  iconEl.setAttribute("height", "16");
-  iconEl.setAttribute("fill", "none");
-  iconEl.setAttribute("stroke", "currentColor");
-  iconEl.setAttribute("stroke-width", "2");
-  iconEl.setAttribute("stroke-linecap", "round");
-  iconEl.setAttribute("stroke-linejoin", "round");
-  iconEl.setAttribute("class", "claudero-notice-icon");
-  for (const d of iconPaths[kind].split("M").filter(Boolean)) {
-    const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M" + d);
-    iconEl.appendChild(path);
-  }
-  const content = createEl(doc, "div", "claudero-notice-content");
-  const heading = createEl(doc, "strong", "claudero-notice-title");
-  const body = createEl(doc, "div", "claudero-notice-body");
-  heading.textContent = title;
-  body.textContent = text;
-  content.append(heading, body);
-  card.append(iconEl as unknown as HTMLElement, content);
-  if (action) {
-    const button = createEl(doc, "button", "claudero-button primary-soft");
-    button.textContent = action.label;
-    button.addEventListener("click", () => action.onClick(button));
-    content.appendChild(button);
-  }
-  state.transcript.appendChild(card);
-  scrollTranscript(state);
 }
 
 function appendWelcomeCard(state: PaneState): void {
@@ -2919,646 +966,62 @@ function appendWelcomeCard(state: PaneState): void {
   state.transcript.appendChild(card);
 
   // Show first 4 prompts (customs first, then defaults), skip insert-note
-  void loadCustomPrompts().then((customs) => {
-    if (!card.isConnected) return;
-    const defaults = getDefaultPrompts().filter(
-      (p) => p.id !== "default-insert-note",
-    );
-    const shown = customs.slice(0, 4);
-    while (shown.length < 4 && defaults.length > 0) {
-      const d = defaults.shift()!;
-      if (!shown.some((p) => p.id === d.id)) shown.push(d);
-    }
-    for (const p of shown) {
-      const button = createEl(doc, "button", "claudero-suggestion prompt-card");
-      const icon = createEl(doc, "span", "claudero-prompt-icon-wrap");
-      renderPromptIcon(doc, p.icon, icon);
-      // Tint the wrap with the icon's own color (mirrors the Prompt Library)
-      const iconColor =
-        p.icon?.type === "iconify" ? p.icon.color || "#55534f" : "#55534f";
-      icon.style.backgroundColor = `color-mix(in srgb, ${iconColor} 12%, transparent)`;
-      const body = createEl(doc, "span", "claudero-prompt-copy");
-      const name = createEl(doc, "span", "claudero-prompt-title");
-      const sub = createEl(doc, "span", "claudero-prompt-desc");
-      name.textContent = p.label;
-      sub.textContent = p.description || getString("prompt-custom");
-      body.append(name, sub);
-      button.append(icon, body);
-      button.addEventListener("click", () => void sendPrompt(state, p.text));
-      // Hover tint derived from the icon color, matching the Prompt Library rows.
-      button.addEventListener("mouseenter", () => {
-        button.style.backgroundColor = `color-mix(in srgb, ${iconColor} 8%, var(--material-mix-quinary))`;
-      });
-      button.addEventListener("mouseleave", () => {
-        button.style.backgroundColor = "";
-      });
-      suggestions.appendChild(button);
-    }
-  });
-}
-const STREAMING_RENDER_INTERVAL = 150;
-
-function pickThinkingVerb(): string {
-  return getString("activity-thinking");
-}
-
-function formatActivityTokens(tokens: number): string {
-  if (tokens < 1000) return String(Math.max(0, Math.round(tokens)));
-  const value = tokens / 1000;
-  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)}k`;
-}
-
-function compactActivityLabel(text: string, max = 46): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
-}
-
-function activityMessageForState(state: PaneState): string {
-  if (state.activityMessage) return compactActivityLabel(state.activityMessage);
-  if (state.activityMode === "thinking") return getString("activity-thinking");
-  if (state.activityMode === "compacting")
-    return getString("activity-compacting");
-  if (state.activityMode === "tool") return getString("activity-working");
-  if (state.activityMode === "waiting") return getString("activity-waiting");
-  if (state.activityMode === "requesting") return getString("activity-sending");
-  if (!state.thinkingVerb) state.thinkingVerb = pickThinkingVerb();
-  return state.thinkingVerb;
-}
-
-function setActivity(
-  state: PaneState,
-  mode: ActivityMode,
-  message?: string,
-): void {
-  const nextMessage = compactActivityLabel(message || "");
-  if (state.activityMode !== mode || state.activityMessage !== nextMessage) {
-    state.activityMode = mode;
-    state.activityMessage = nextMessage;
-    state.activityStartedTs = Date.now();
-  }
-  if (mode === "thinking" && !state.thinkingTs) state.thinkingTs = Date.now();
-  if (state.thinkingWordEl) {
-    state.thinkingWordEl.textContent = activityMessageForState(state);
-  }
-  updateThinkingAnimation(state);
-}
-
-function updateThinkingAnimation(state: PaneState): void {
-  if (!state.thinkingMetaEl) return;
-  if (state.thinkingWordEl) {
-    state.thinkingWordEl.textContent = activityMessageForState(state);
-  }
-  const elapsed = Math.max(
-    0,
-    Math.floor((Date.now() - state.turnStartedTs) / 1000),
-  );
-  // Claude Code drives its live counter from responseLength / 4, then lets
-  // authoritative SDK usage catch up when a complete message arrives.
-  const approximateTokens = Math.round(state.turnResponseChars / 4);
-  const tokens = Math.max(
-    approximateTokens,
-    state.turnOutputTokens + state.thinkingTokenEstimate,
-  );
-  const parts = [formatDuration(elapsed)];
-  if (tokens > 0) {
-    parts.push(
-      getString("activity-tokens", {
-        args: { tokens: formatActivityTokens(tokens) },
-      }),
-    );
-  }
-  if (state.activityMode === "thinking") {
-    parts.push(
-      getString("activity-thinking-effort", {
-        args: { effort: getSelectedEffort(state) },
-      }),
-    );
-  } else if (state.activityMode === "compacting") {
-    parts.push(getString("activity-context"));
-  } else if (state.activityMode === "tool") {
-    parts.push(getString("activity-tool"));
-  } else if (state.activityMode === "waiting") {
-    parts.push(getString("activity-input"));
-  } else if (
-    state.recentThoughtDurationMs > 0 &&
-    Date.now() < state.recentThoughtUntil
-  ) {
-    parts.push(
-      getString("activity-thought-for", {
-        args: {
-          seconds: Math.max(
-            1,
-            Math.round(state.recentThoughtDurationMs / 1000),
-          ),
-        },
-      }),
-    );
-  }
-  state.thinkingMetaEl.textContent = `(${parts.join(" · ")})`;
-}
-
-function startThinkingAnimation(state: PaneState): void {
-  if (state.thinkingEl) {
-    state.transcript.appendChild(state.thinkingEl);
-    updateThinkingAnimation(state);
-    scrollTranscript(state);
-    return;
-  }
-  const doc = state.root.ownerDocument!;
-  const win = doc.defaultView as Window;
-  const indicator = createEl(doc, "div", "claudero-thinking-indicator");
-  indicator.setAttribute("title", getString("composer-interrupt"));
-  const word = createEl(doc, "span", "claudero-thinking-word");
-  const meta = createEl(doc, "span", "claudero-thinking-time");
-  word.textContent = activityMessageForState(state);
-  indicator.append(word, doc.createTextNode("… "), meta);
-  state.transcript.appendChild(indicator);
-  state.thinkingEl = indicator;
-  state.thinkingWordEl = word;
-  state.thinkingMetaEl = meta;
-  updateThinkingAnimation(state);
-  state.thinkingTimer = win.setInterval(() => {
-    updateThinkingAnimation(state);
-  }, 1000);
-  scrollTranscript(state);
-}
-
-function stopThinkingAnimation(state: PaneState): void {
-  if (state.thinkingTimer !== null) {
-    (state.root.ownerDocument!.defaultView as Window).clearInterval(
-      state.thinkingTimer,
-    );
-    state.thinkingTimer = null;
-  }
-  state.thinkingEl?.remove();
-  state.thinkingEl = null;
-  state.thinkingWordEl = null;
-  state.thinkingMetaEl = null;
-}
-
-function updateTurnUsage(
-  state: PaneState,
-  usage: { outputTokens: number; final: boolean },
-): void {
-  state.turnOutputTokens = usage.final
-    ? usage.outputTokens
-    : state.turnOutputTokens + usage.outputTokens;
-  state.thinkingTokenEstimate = 0;
-  updateThinkingAnimation(state);
-}
-
-function updateToolProgress(
-  state: PaneState,
-  toolUseId: string,
-  elapsedSeconds: number,
-): void {
-  const card = state.toolCards.get(toolUseId);
-  if (!card) return;
-  const label = getString("tool-running", {
-    args: { duration: formatDuration(Math.max(0, Math.floor(elapsedSeconds))) },
-  });
-  card.status.setAttribute("title", label);
-  card.status.setAttribute("aria-label", label);
-}
-
-function updateActivityForTool(
-  state: PaneState,
-  tool: { name: string; input?: unknown; partialInput?: string },
-): void {
-  const input =
-    tool.input &&
-    typeof tool.input === "object" &&
-    Object.keys(tool.input as object).length > 0
-      ? tool.input
-      : (tool.partialInput ?? tool.input);
-  const description = getToolActivityDescription(tool.name, input);
-  if (["AskUserQuestion", "ExitPlanMode", "Sleep"].includes(tool.name)) {
-    setActivity(state, "waiting", description);
-  } else {
-    setActivity(state, "tool", description);
-  }
-}
-
-function createThinkingChevron(doc: Document): HTMLElement {
-  const span = createEl(doc, "span", "claudero-thinking-chevron");
-  return span;
-}
-
-function updateThinkingCardPresentation(
-  card: NonNullable<PaneState["thinkingCard"]>,
-  fallbackLabel: string,
-): void {
-  const presentation = thinkingPresentation(card.text);
-  card.labelSpan.textContent = presentation.title || fallbackLabel;
-  card.body.textContent = presentation.body;
-  card.el.classList.toggle("summary-only", !presentation.body);
-}
-
-// Claude's extended-thinking stream. Renders a collapsible "Thought for Ns"
-// card (like Claudian) accumulating the reasoning text.
-function appendThinkingDelta(state: PaneState, text: string): void {
-  if (!text) return;
-  setActivity(state, "thinking", getString("activity-thinking"));
-  state.turnResponseChars += text.length;
-  startThinkingAnimation(state);
-  let card = state.thinkingCard;
-  if (!card) {
-    const doc = state.root.ownerDocument!;
-    const el = createEl(doc, "div", "claudero-thinking-card");
-    const header = createEl(doc, "button", "claudero-thinking-header");
-    header.setAttribute("tabindex", "-1");
-    const labelSpan = createEl(doc, "span", "claudero-thinking-label");
-    labelSpan.textContent = getString("composer-thinking");
-    const durationSpan = createEl(doc, "span", "claudero-thinking-duration");
-    durationSpan.textContent = "(0s)";
-    const chevron = createThinkingChevron(doc);
-    header.append(labelSpan, durationSpan, chevron);
-    const body = createEl(doc, "div", "claudero-thinking-body");
-    header.addEventListener("click", () => {
-      if (!el.classList.contains("summary-only")) {
-        el.classList.toggle("collapsed");
+  void loadCustomPrompts()
+    .catch((error) => {
+      ztoolkit.log("[Claudero] Could not load prompt suggestions:", error);
+      return [];
+    })
+    .then((customs) => {
+      if (!card.isConnected) return;
+      const defaults = getDefaultPrompts().filter(
+        (p) => p.id !== "default-insert-note",
+      );
+      const shown = customs.slice(0, 4);
+      while (shown.length < 4 && defaults.length > 0) {
+        const d = defaults.shift()!;
+        if (!shown.some((p) => p.id === d.id)) shown.push(d);
+      }
+      for (const p of shown) {
+        const button = createEl(
+          doc,
+          "button",
+          "claudero-suggestion prompt-card",
+        );
+        const icon = createEl(doc, "span", "claudero-prompt-icon-wrap");
+        renderPromptIcon(doc, p.icon, icon);
+        // Tint the wrap with the icon's own color (mirrors the Prompt Library)
+        const iconColor =
+          p.icon?.type === "iconify" ? p.icon.color || "#55534f" : "#55534f";
+        icon.style.backgroundColor = `color-mix(in srgb, ${iconColor} 12%, transparent)`;
+        const body = createEl(doc, "span", "claudero-prompt-copy");
+        const name = createEl(doc, "span", "claudero-prompt-title");
+        const sub = createEl(doc, "span", "claudero-prompt-desc");
+        name.textContent = p.label;
+        sub.textContent = p.description || getString("prompt-custom");
+        body.append(name, sub);
+        button.append(icon, body);
+        button.addEventListener("click", () => void sendPrompt(state, p.text));
+        // Hover tint derived from the icon color, matching the Prompt Library rows.
+        button.addEventListener("mouseenter", () => {
+          button.style.backgroundColor = `color-mix(in srgb, ${iconColor} 8%, var(--material-mix-quinary))`;
+        });
+        button.addEventListener("mouseleave", () => {
+          button.style.backgroundColor = "";
+        });
+        suggestions.appendChild(button);
       }
     });
-    el.append(header, body);
-    // Insert before the current (still-empty) assistant bubble so the reasoning
-    // renders ABOVE the answer, matching Claudian's layout.
-    const currentStack =
-      state.currentAssistantCard?.parentElement?.classList.contains(
-        "claudero-message-stack",
-      )
-        ? state.currentAssistantCard.parentElement
-        : state.currentAssistantCard;
-    if (currentStack && currentStack.parentElement === state.transcript) {
-      state.transcript.insertBefore(el, currentStack);
-    } else {
-      state.transcript.appendChild(el);
-    }
-    const startTs = Date.now();
-    const win = doc.defaultView as Window;
-    const timer = win.setInterval(() => {
-      const elapsed = Math.max(0, Math.floor((Date.now() - startTs) / 1000));
-      durationSpan.textContent = `(${formatDuration(elapsed)})`;
-    }, 1000);
-    card = {
-      el,
-      header,
-      labelSpan,
-      durationSpan,
-      body,
-      startTs,
-      text: "",
-      timer,
-    };
-    state.thinkingCard = card;
-  }
-  card.text += text;
-  updateThinkingCardPresentation(card, getString("composer-thinking"));
-  scrollTranscript(state);
-}
-
-function reconcileThinkingSnapshot(state: PaneState, text: string): void {
-  if (!text) return;
-  if (!state.thinkingCard) {
-    appendThinkingDelta(state, text);
-    return;
-  }
-  state.turnResponseChars = Math.max(
-    0,
-    state.turnResponseChars - state.thinkingCard.text.length + text.length,
-  );
-  setActivity(state, "thinking", getString("activity-thinking"));
-  startThinkingAnimation(state);
-  state.thinkingCard.text = text;
-  updateThinkingCardPresentation(
-    state.thinkingCard,
-    getString("composer-thinking"),
-  );
-  const last = state.currentAssistantBlocks.at(-1);
-  if (last?.type === "thinking") last.text = text;
-  else pushAssistantBlock(state, { type: "thinking", text, durationMs: 0 });
-  scrollTranscript(state);
-}
-
-function finalizeThinkingCard(state: PaneState): void {
-  const card = state.thinkingCard;
-  if (!card) return;
-  const sec = Math.max(0, Math.round((Date.now() - card.startTs) / 1000));
-  setActivity(state, "responding");
-  state.recentThoughtDurationMs = Date.now() - card.startTs;
-  state.recentThoughtUntil = Date.now() + 2000;
-  updateThinkingAnimation(state);
-  (state.root.ownerDocument!.defaultView as Window).clearInterval(card.timer);
-  updateThinkingCardPresentation(
-    card,
-    getString("activity-thought-for", { args: { seconds: sec } }),
-  );
-  card.durationSpan.textContent = thinkingPresentation(card.text).title
-    ? `(${sec}s)`
-    : "";
-  // Auto-collapse once formal content follows
-  card.el.classList.add("done", "collapsed");
-  state.thinkingCard = null;
-}
-
-function updateStreamingBody(state: PaneState, force = false): void {
-  if (!state.currentAssistantBody) return;
-  const now = Date.now();
-  if (force || now - state.lastStreamingRenderTs >= STREAMING_RENDER_INTERVAL) {
-    state.lastStreamingRenderTs = now;
-    renderMarkdown(
-      state.root.ownerDocument!,
-      state.currentAssistantBody,
-      state.currentSegmentText,
-    );
-  }
-  scrollTranscript(state);
-}
-
-function finalizeAssistantBody(state: PaneState): void {
-  if (!state.currentAssistantBody) return;
-  if (state.currentSegmentText) {
-    renderMarkdown(
-      state.root.ownerDocument!,
-      state.currentAssistantBody,
-      state.currentSegmentText,
-    );
-  } else {
-    state.currentAssistantBody.textContent = "";
-  }
-}
-
-function removeMessageCardStack(card: HTMLElement): void {
-  const stack = card.parentElement;
-  if (stack?.classList.contains("claudero-message-stack")) {
-    stack.remove();
-    return;
-  }
-  card.remove();
-}
-
-function isEmptyAssistantMessageCard(card: HTMLElement | null): boolean {
-  if (
-    !card?.classList.contains("claudero-message") ||
-    !card.classList.contains("assistant")
-  )
-    return false;
-  if (card.querySelector(":scope > .claudero-thinking-indicator")) return false;
-  const body = card.querySelector(
-    ":scope > .claudero-message-body",
-  ) as HTMLElement | null;
-  if (!body) return false;
-  const hasText = !!body.textContent?.trim();
-  const hasMedia = !!body.querySelector(
-    "img, svg, canvas, table, pre, code, math, .katex, .katex-display",
-  );
-  const hasOtherContent = Array.from(card.children).some(
-    (child) => child !== body,
-  );
-  return !hasText && !hasMedia && !hasOtherContent;
-}
-
-function removeEmptyCurrentAssistantMessage(state: PaneState): void {
-  if (!isEmptyAssistantMessageCard(state.currentAssistantCard)) return;
-  removeMessageCardStack(state.currentAssistantCard!);
-  state.currentAssistantBody = null;
-  state.currentAssistantCard = null;
-  state.currentSegmentText = "";
-  state.lastStreamingRenderTs = 0;
-}
-
-// Keep a Claude Code-style activity row visible even while answer text is
-// streaming. In a narrow Zotero side pane the stable bottom row reassures the
-// user that the turn is still alive while long Markdown is rendering.
-function syncSpinnerForStreamingText(state: PaneState): void {
-  startThinkingAnimation(state);
-}
-
-function syncSpinnerForTool(state: PaneState, toolName: string): void {
-  if (["AskUserQuestion", "ExitPlanMode", "Sleep"].includes(toolName)) {
-    stopThinkingAnimation(state);
-  } else {
-    startThinkingAnimation(state);
-  }
-}
-
-function mergeAssistantText(state: PaneState, text: string): boolean {
-  if (!text) return false;
-  setActivity(state, "responding");
-  state.lastAssistantText += text;
-  state.currentSegmentText += text;
-  state.turnResponseChars += text.length;
-  syncSpinnerForStreamingText(state);
-  updateThinkingAnimation(state);
-  return true;
-}
-
-function ensureStreamingAssistantBody(state: PaneState): void {
-  if (state.currentAssistantBody?.isConnected) return;
-  state.currentAssistantBody = appendMessageCard(state, "assistant", "", {
-    ts: Date.now(),
-  });
-  state.currentAssistantCard = state.currentAssistantBody.closest(
-    ".claudero-message",
-  ) as HTMLElement | null;
-  state.lastStreamingRenderTs = 0;
-}
-
-function reconcileAssistantTextSnapshot(state: PaneState, text: string): void {
-  ensureStreamingAssistantBody(state);
-  setActivity(state, "responding");
-  const prefixLength = Math.max(
-    0,
-    state.lastAssistantText.length - state.currentSegmentText.length,
-  );
-  state.turnResponseChars = Math.max(
-    0,
-    state.turnResponseChars - state.currentSegmentText.length + text.length,
-  );
-  state.lastAssistantText = `${state.lastAssistantText.slice(0, prefixLength)}${text}`;
-  state.currentSegmentText = text;
-  syncSpinnerForStreamingText(state);
-  updateThinkingAnimation(state);
-  updateStreamingBody(state, true);
-}
-
-async function animateAssistantText(
-  state: PaneState,
-  text: string,
-): Promise<void> {
-  const units = Array.from(text);
-  if (units.length === 0) return;
-
-  // Upstream partial events are not authoritative for compatible providers.
-  // Animate the complete block locally so the UI remains progressive without
-  // exposing corrupted previews. Limit renders for long Markdown and tables.
-  const chunkSize = Math.max(1, Math.ceil(units.length / 120));
-  const delayMs = units.length <= 24 ? 28 : 16;
-  const win = state.root.ownerDocument!.defaultView as Window;
-
-  for (let index = 0; index < units.length; index += chunkSize) {
-    if (state.cancelRequested) return;
-    ensureStreamingAssistantBody(state);
-    mergeAssistantText(state, units.slice(index, index + chunkSize).join(""));
-    updateStreamingBody(state, true);
-    if (index + chunkSize < units.length) {
-      await new Promise<void>((resolve) => win.setTimeout(resolve, delayMs));
-    }
-  }
-}
-
-function appendDeepSeekCliInstallPrompt(
-  state: PaneState,
-  message: string,
-): void {
-  setStatusDot(state, "error");
-  appendNoticeCard(
-    state,
-    "warning",
-    getString("composer-deepseek-cli-missing"),
-    `${message}\n\n${getString("pane-deepseek-install-description")}`,
-    {
-      label: getString("composer-install-deepseek"),
-      onClick: (button) => {
-        button.disabled = true;
-        button.textContent = getString("composer-installing-deepseek");
-        installDeepSeekHarness()
-          .then((result) => {
-            appendNoticeCard(
-              state,
-              "success",
-              getString("composer-deepseek-installed"),
-              getString("pane-deepseek-installed-description", {
-                args: {
-                  path: result.cliPath,
-                  version: result.version ? ` (version ${result.version})` : "",
-                },
-              }),
-            );
-            setStatusDot(state, "ready");
-          })
-          .catch((error: unknown) => {
-            appendNoticeCard(
-              state,
-              "warning",
-              getString("composer-deepseek-install-failed"),
-              error instanceof Error ? error.message : String(error),
-            );
-          })
-          .finally(() => {
-            button.disabled = false;
-            button.textContent = getString("composer-install-deepseek");
-          });
-      },
-    },
-  );
-}
-
-function appendAuthPrompt(state: PaneState, message: string): void {
-  setStatusDot(state, "error");
-  const provider = normalizeProvider(state.providerSelect.value);
-  const label = providerLabel(provider);
-  appendNoticeCard(
-    state,
-    "auth",
-    getString("pane-auth-required", { args: { agent: label } }),
-    `${message}\n\n${getString("pane-auth-description", {
-      args: {
-        agent: label,
-        instructions: getString(
-          provider === "deepseek"
-            ? "pane-auth-deepseek-instructions"
-            : "pane-auth-provider-instructions",
-        ),
-      },
-    })}`,
-    provider === "deepseek"
-      ? undefined
-      : {
-          label: getString("pane-login", { args: { agent: label } }),
-          onClick: (button) => {
-            button.disabled = true;
-            runProviderAuthLogin()
-              .then(() => {
-                appendNoticeCard(
-                  state,
-                  "info",
-                  getString("pane-login-opened", { args: { agent: label } }),
-                  getString("pane-login-description"),
-                );
-              })
-              .catch((error: unknown) => {
-                appendNoticeCard(
-                  state,
-                  "warning",
-                  getString("pane-login-failed", { args: { agent: label } }),
-                  error instanceof Error ? error.message : String(error),
-                );
-              })
-              .finally(() => {
-                button.disabled = false;
-              });
-          },
-        },
-  );
-}
-
-function appendLimitPrompt(state: PaneState, message: string): void {
-  setStatusDot(state, "error");
-  appendNoticeCard(
-    state,
-    "warning",
-    getString("pane-session-limit", {
-      args: {
-        agent: providerLabel(normalizeProvider(state.providerSelect.value)),
-      },
-    }),
-    message,
-  );
-}
-
-// ── New conversation ───────────────────────────────────────────────────────
-
-function startNewConversation(state: PaneState): void {
-  if (state.running) return;
-  // Persist the current conversation before clearing the view so it stays in
-  // history and can be reopened later.
-  void saveConversation(state).then((saved) => {
-    if (!saved) return;
-    clearConversationState(state);
-    renderPendingImages(state);
-    appendWelcomeCard(state);
-    setStatusDot(state, "ready");
-  });
 }
 
 // ── Cancel / Stop ──────────────────────────────────────────────────────────
 
 async function cancelPermissionRequest(state: PaneState): Promise<void> {
+  const ownerRequestId = state.activeRequestId;
+  if (!ownerRequestId) return;
   try {
-    const port = Number(getPref("helperPort") || 38660);
-    const profilePath = Zotero.Profile.dir;
-    const tokenPath = PathUtils.join(
-      profilePath,
-      "claudero",
-      "helper",
-      ".token",
-    );
-    let token = "";
-    try {
-      token = (await (IOUtils as any).readUTF8(tokenPath)).trim();
-    } catch {
-      /* ignore */
-    }
-    await fetch(`http://127.0.0.1:${port}/cancel-permission`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    await fetch(`http://127.0.0.1:${port}/cancel-question`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    await cancelHelperRequest(ownerRequestId);
   } catch (e) {
-    ztoolkit.log("[Claudero] Failed to cancel permission request:", e);
+    ztoolkit.log("[Claudero] Failed to cancel request:", e);
   }
 }
 
@@ -3567,1202 +1030,9 @@ function cancel(state: PaneState): void {
   stopThinkingAnimation(state);
   hidePermissionDialog(state);
   hideQuestionDialog(state);
-  if (state.permissionCheckTimer) {
-    clearInterval(state.permissionCheckTimer);
-    state.permissionCheckTimer = null;
-  }
+  stopInteractionPolling(state);
+  if (state.requestController) state.requestController.abort();
   void cancelPermissionRequest(state);
-}
-
-// ── Core send logic ────────────────────────────────────────────────────────
-
-async function sendPrompt(
-  state: PaneState,
-  overridePrompt?: string,
-  overrideImages?: PendingImage[],
-  overrideContext?: ClauderoSelectionContext,
-): Promise<void> {
-  updateContext(state);
-  const prompt = (overridePrompt ?? state.input.value).trim();
-  const images = (overrideImages ?? state.pendingImages).map((img) => ({
-    ...img,
-  }));
-  const provider = normalizeProvider(state.providerSelect.value);
-  const requestModel = getSelectedModel(state);
-  const requestEffort = getSelectedEffort(state);
-  const requestConversationId = state.conversationId;
-  const capabilities = getProviderCapabilities(provider);
-  if (images.length > 0 && !capabilities.supportsImageAttachments) {
-    appendNoticeCard(
-      state,
-      "warning",
-      `${providerLabel(provider)} image attachments unsupported`,
-      "Switch provider or remove the images before sending.",
-    );
-    return;
-  }
-  // A Zotero context is no longer required — allow chatting with just text
-  // and/or pasted images.
-  if ((!prompt && images.length === 0) || state.running) return;
-
-  state.input.value = "";
-  state.pendingImages = [];
-  renderPendingImages(state);
-  // Save to input history
-  state.inputHistory.unshift({ text: prompt, images });
-  if (state.inputHistory.length > 50) state.inputHistory.length = 50;
-  state.inputHistoryIdx = -1;
-  state._inputHistorySavedText = "";
-  state._inputHistorySavedImages = [];
-
-  // SDK slash commands (starting with /) must be sent raw without wrapping
-  // in Zotero context, or the CLI won't recognize them as commands.
-  if (prompt.startsWith("/")) {
-    void sendRawSlashCommand(state, prompt);
-    return;
-  }
-
-  const userTs = Date.now();
-  refreshEditableMessageActions(state);
-  const userCard = appendUserMessage(state, prompt, images, { ts: userTs });
-  state.currentAssistantBody = appendMessageCard(state, "assistant", "", {
-    ts: Date.now(),
-  });
-  state.currentAssistantCard = state.currentAssistantBody.closest(
-    ".claudero-message",
-  ) as HTMLElement | null;
-  state.lastAssistantText = "";
-  state.currentSegmentText = "";
-  state.lastStreamingRenderTs = 0;
-  state.currentAssistantBlocks = [];
-  state.currentProviderTurnId = undefined;
-  state.currentProviderTurnId = undefined;
-  state.currentContextSnapshot = null;
-  state.thinkingTs = Date.now();
-  state.turnStartedTs = userTs;
-  state.turnOutputTokens = 0;
-  state.turnResponseChars = 0;
-  state.thinkingTokenEstimate = 0;
-  state.thinkingVerb = "";
-  state.activityMode = "requesting";
-  state.activityMessage = getString("activity-sending");
-  state.activityStartedTs = userTs;
-  state.recentThoughtDurationMs = 0;
-  state.recentThoughtUntil = 0;
-  startThinkingAnimation(state);
-  forceScrollToBottom(state); // always scroll to bottom when user sends a message
-  state.cancelRequested = false;
-  state.questionPollingUnsupported = false;
-  setRunning(state, true);
-
-  // Start permission check polling
-  if (state.permissionCheckTimer) clearInterval(state.permissionCheckTimer);
-  state.permissionCheckTimer = setInterval(() => {
-    void checkPendingInteractions(state);
-  }, 800) as unknown as number;
-
-  let sawError = false;
-  let failureMessage = "";
-  let turnPersisted = false;
-  try {
-    const context =
-      overrideContext ||
-      (await getSelectedZoteroContext(
-        state.root.ownerDocument?.defaultView || undefined,
-      ));
-    if (!overrideContext) {
-      // Apply dismissed flags and merge manually added items
-      if (state.dismissedReader) context.reader = undefined;
-      if (state.dismissedText) context.selectedText = "";
-      if (state.dismissedAnnotations) context.selectedAnnotations = [];
-      for (const mi of state.manualItems) {
-        if (!context.items.find((i) => i.id === mi.id)) {
-          const attIDs: number[] = (mi as any).getAttachments?.() ?? [];
-          context.items.push({
-            id: mi.id,
-            key: mi.key,
-            itemType: mi.itemType,
-            title: String(mi.getField("title") || ""),
-            creators: mi
-              .getCreators()
-              .map(
-                (c: { firstName?: string; lastName?: string; name?: string }) =>
-                  [c.firstName, c.lastName].filter(Boolean).join(" ") ||
-                  c.name ||
-                  "",
-              )
-              .filter(Boolean),
-            date: String((mi as any).getField?.("date", true, true) || ""),
-            publicationTitle: String(
-              (mi as any).getField?.("publicationTitle", false, true) || "",
-            ),
-            abstractNote: String(mi.getField("abstractNote") || ""),
-            url: String(mi.getField("url") || ""),
-            DOI: String(mi.getField("DOI") || ""),
-            tags: mi.getTags().map((t: { tag: string }) => t.tag),
-            notes: [],
-            attachments: attIDs
-              .map((id) => {
-                try {
-                  const a = Zotero.Items.get(id);
-                  return a
-                    ? {
-                        id: a.id,
-                        key: a.key,
-                        title: a.getDisplayTitle(),
-                        contentType: a.attachmentContentType || "",
-                      }
-                    : null;
-                } catch {
-                  return null;
-                }
-              })
-              .filter(
-                Boolean,
-              ) as import("./zoteroContext").ClauderoAttachmentContext[],
-          });
-        }
-      }
-    }
-    state.currentContextSnapshot = context;
-    const basePrompt = prompt || "(用户发送了图片，请查看)";
-    const academicMatch = matchAcademicSkillIntent(
-      basePrompt,
-      getEnabledAcademicSkills(),
-    );
-    logTurnStart({
-      provider,
-      model: requestModel,
-      effort: requestEffort,
-      permissionMode: state.permissionMode,
-      conversationId: state.conversationId,
-      promptLength: basePrompt.length,
-      imageCount: images.length,
-      academicSkill: academicMatch?.skill.id || null,
-      context,
-    });
-    const workflowPrompt = academicMatch
-      ? compileAcademicSkillPrompt({
-          userPrompt: basePrompt,
-          match: academicMatch,
-          contextStatus: resolveAcademicSkillContextStatus(
-            academicMatch.skill,
-            context,
-          ),
-        })
-      : basePrompt;
-    const promptWithHistory = shouldReplayConversationHistory(
-      provider,
-      state.providerState,
-    )
-      ? buildPromptWithConversationHistory(
-          workflowPrompt,
-          state.conversationTurns,
-        )
-      : workflowPrompt;
-    const fullPrompt = buildPromptWithZoteroContext(
-      promptWithHistory,
-      context,
-      getZoteroApiSystemPrompt(),
-    );
-    const additionalDirectories = getAttachmentDirectories(context);
-    for await (const event of queryClaudeHelper(fullPrompt, {
-      provider,
-      model: requestModel,
-      effort: requestEffort,
-      additionalDirectories,
-      permissionMode: state.permissionMode,
-      images: images.map((i) => ({ media_type: i.mediaType, data: i.data })),
-      conversationId: requestConversationId,
-      providerState: state.providerState,
-      toolPolicy: academicMatch?.skill.toolPolicy,
-    })) {
-      if (state.cancelRequested) break;
-      if (event.type === "session") {
-        logDiagnostic("provider.session", {
-          provider: event.session.provider,
-          sessionId: event.session.sessionId,
-          threadId: event.session.threadId,
-          turnId: event.session.turnId,
-        });
-        applyProviderSessionEvent(state, event.session);
-      } else if (event.type === "ready") {
-        setActivity(state, "responding");
-      } else if (event.type === "context_compaction") {
-        setActivity(
-          state,
-          event.phase === "started" ? "compacting" : "thinking",
-          event.phase === "started"
-            ? getString("activity-compacting")
-            : getString("activity-thinking"),
-        );
-        startThinkingAnimation(state);
-      } else if (event.type === "connection_status") {
-        setActivity(
-          state,
-          "waiting",
-          getString("activity-reconnecting", {
-            args: { attempt: event.attempt, maxAttempts: event.maxAttempts },
-          }),
-        );
-        startThinkingAnimation(state);
-      } else if (event.type === "thinking" && event.text) {
-        // Lazily create assistant card so the thinking card has somewhere to
-        // insert itself before (but only if one doesn't already exist).
-        if (!state.currentAssistantBody) {
-          state.currentAssistantBody = appendMessageCard(
-            state,
-            "assistant",
-            "",
-            { ts: Date.now() },
-          );
-          state.currentAssistantCard = state.currentAssistantBody.closest(
-            ".claudero-message",
-          ) as HTMLElement | null;
-          state.currentSegmentText = "";
-          state.lastStreamingRenderTs = 0;
-        }
-        appendThinkingDelta(state, event.text);
-        appendAssistantThinkingBlock(state, event.text);
-      } else if (event.type === "thinking_snapshot" && event.text) {
-        reconcileThinkingSnapshot(state, event.text);
-      } else if (event.type === "text_delta" && event.text) {
-        if (state._suppressText > 0) continue;
-        ensureStreamingAssistantBody(state);
-        finalizeThinkingCard(state);
-        startThinkingAnimation(state);
-        mergeAssistantText(state, event.text);
-        updateStreamingBody(state);
-      } else if (event.type === "text_snapshot" && event.text) {
-        if (state._suppressText > 0) continue;
-        ensureStreamingAssistantBody(state);
-        finalizeThinkingCard(state);
-        startThinkingAnimation(state);
-        reconcileAssistantTextSnapshot(state, event.text);
-      } else if (event.type === "text" && event.text) {
-        if (state._suppressText > 0) {
-          // Skill output — don't render as assistant text
-          continue;
-        }
-        // Lazily create assistant card on first text (avoids empty nodes after
-        // tool results when no text ever follows).
-        if (!state.currentAssistantBody) {
-          state.currentAssistantBody = appendMessageCard(
-            state,
-            "assistant",
-            "",
-            { ts: Date.now() },
-          );
-          state.currentAssistantCard = state.currentAssistantBody.closest(
-            ".claudero-message",
-          ) as HTMLElement | null;
-          state.currentSegmentText = "";
-          state.lastStreamingRenderTs = 0;
-          state.thinkingTs = Date.now();
-          startThinkingAnimation(state);
-        }
-        if (state._suppressText > 0) continue;
-        finalizeThinkingCard(state);
-        startThinkingAnimation(state);
-        await animateAssistantText(state, event.text);
-      } else if (event.type === "tool_use" && event.tool) {
-        logToolUse(event.tool);
-        finalizeThinkingCard(state);
-        finalizeAssistantThinkingBlock(state, Date.now() - state.thinkingTs);
-        const skillIntroCard = state.currentAssistantCard;
-        finalizeAssistantBody(state);
-        if (event.tool.name !== "Skill") commitCurrentAssistantTextBlock(state);
-        removeEmptyCurrentAssistantMessage(state);
-        state.currentSegmentText = "";
-        appendToolCard(state, event.tool);
-        updateActivityForTool(state, event.tool);
-        syncSpinnerForTool(state, event.tool.name);
-        pushAssistantBlock(state, {
-          type: "tool_use",
-          id: event.tool.id,
-          name: event.tool.name,
-          input: event.tool.input,
-          partialInput: event.tool.partialInput,
-        });
-        if (event.tool.name === "Skill") {
-          state._suppressText++;
-          state._activeSkillToolId = event.tool.id;
-          if (skillIntroCard) skillIntroCard.remove();
-          state.lastAssistantText = "";
-        }
-        if (event.tool.name === "AskUserQuestion" && event.tool.input) {
-          const input = event.tool.input as { questions?: unknown[] };
-          if (Array.isArray(input.questions)) {
-            showQuestionDialog(state, {
-              toolUseId: event.tool.id,
-              questions:
-                input.questions as import("./permissionDialog").AskUserQuestionItem[],
-            });
-            stopThinkingAnimation(state);
-          }
-        }
-        if (
-          event.tool.name === "ExitPlanMode" &&
-          event.tool.input &&
-          typeof event.tool.input === "object"
-        ) {
-          showExitPlanDialog(state, {
-            toolUseId: event.tool.id,
-            input: event.tool.input as Record<string, unknown>,
-          });
-          stopThinkingAnimation(state);
-        }
-      } else if (event.type === "tool_use_delta" && event.tool) {
-        finalizeAssistantBody(state);
-        removeEmptyCurrentAssistantMessage(state);
-        appendToolCard(state, event.tool);
-        updateActivityForTool(state, event.tool);
-        syncSpinnerForTool(state, event.tool.name);
-        const existing = state.currentAssistantBlocks.find(
-          (block) => block.type === "tool_use" && block.id === event.tool?.id,
-        );
-        if (existing?.type === "tool_use") {
-          const previousLength = existing.partialInput?.length || 0;
-          const nextLength = event.tool.partialInput?.length || 0;
-          state.turnResponseChars += Math.max(0, nextLength - previousLength);
-          updateThinkingAnimation(state);
-          existing.input = event.tool.input;
-          existing.partialInput = event.tool.partialInput;
-        }
-        if (event.tool.name === "AskUserQuestion" && event.tool.input) {
-          const input = event.tool.input as { questions?: unknown[] };
-          if (Array.isArray(input.questions)) {
-            showQuestionDialog(state, {
-              toolUseId: event.tool.id,
-              questions:
-                input.questions as import("./permissionDialog").AskUserQuestionItem[],
-            });
-            stopThinkingAnimation(state);
-          }
-        }
-        if (
-          event.tool.name === "ExitPlanMode" &&
-          event.tool.input &&
-          typeof event.tool.input === "object"
-        ) {
-          showExitPlanDialog(state, {
-            toolUseId: event.tool.id,
-            input: event.tool.input as Record<string, unknown>,
-          });
-          stopThinkingAnimation(state);
-        }
-      } else if (event.type === "tool_result" && event.result) {
-        logToolResult(event.result);
-        hideQuestionDialog(state);
-        restoreEvidenceReferences(
-          evidenceReferencesFromToolResultContent(event.result.content),
-        );
-        appendToolResult(state, event.result);
-        pushAssistantBlock(state, {
-          type: "tool_result",
-          id: event.result.id,
-          content: event.result.content,
-          isError: event.result.isError,
-        });
-        maybeAppendUndoCard(state, event.result);
-        if (
-          state._activeSkillToolId === event.result.id &&
-          state._suppressText > 0
-        ) {
-          state._suppressText = 0;
-          state._activeSkillToolId = null;
-        }
-        removeEmptyCurrentAssistantMessage(state);
-        state.currentAssistantBody = null;
-        state.currentAssistantCard = null;
-        state.currentSegmentText = "";
-        state.lastStreamingRenderTs = 0;
-        state.thinkingTs = Date.now();
-        setActivity(state, "responding");
-        startThinkingAnimation(state);
-      } else if (event.type === "usage" && event.usage) {
-        logDiagnostic("usage", {
-          outputTokens: event.usage.outputTokens,
-          final: event.usage.final,
-          durationMs: event.usage.durationMs,
-        });
-        updateTurnUsage(state, event.usage);
-      } else if (
-        event.type === "thinking_tokens" &&
-        typeof event.estimatedTokens === "number"
-      ) {
-        state.thinkingTokenEstimate = Math.max(0, event.estimatedTokens);
-        setActivity(state, "thinking", getString("activity-thinking"));
-        if (!state.thinkingCard) startThinkingAnimation(state);
-        else updateThinkingAnimation(state);
-      } else if (
-        event.type === "tool_progress" &&
-        event.toolUseId &&
-        typeof event.elapsedSeconds === "number"
-      ) {
-        updateToolProgress(state, event.toolUseId, event.elapsedSeconds);
-      } else if (
-        event.type === "commands_changed" &&
-        Array.isArray(event.commands)
-      ) {
-        // Skill was installed mid-session — refresh the slash command cache
-        _sdkCommandsCache = event.commands.map((c) => ({
-          name: c.name,
-          description: c.description,
-          isBuiltin: false,
-          argumentHint: c.argumentHint,
-        }));
-      } else if (event.type === "done") {
-        logTurnEnd({
-          cancelled: false,
-          durationMs: Date.now() - userTs,
-          outputTokens: state.turnOutputTokens,
-          responseChars: state.turnResponseChars,
-          thinkingTokens: state.thinkingTokenEstimate,
-        });
-        stopThinkingAnimation(state);
-        finalizeThinkingCard(state);
-        finalizeAssistantThinkingBlock(state, Date.now() - state.thinkingTs);
-        // Flush chunks skipped by the streaming render throttle before the
-        // message is persisted and action buttons are attached.
-        finalizeAssistantBody(state);
-        removeEmptyCurrentAssistantMessage(state);
-        if (
-          !state.lastAssistantText.trim() &&
-          state.currentAssistantBlocks.some(
-            (block) => block.type === "thinking" || block.type === "tool_use",
-          )
-        ) {
-          appendNoticeCard(
-            state,
-            "warning",
-            "No final response",
-            "Claude finished its tools and thinking without returning final text. Try sending “继续” to resume this turn.",
-          );
-        }
-        // Remove streaming class before adding action buttons
-        state.currentAssistantCard?.classList.remove("streaming");
-        // Append "* Baked for Xs" footer to the last assistant card
-        const durationSeconds = Math.floor((Date.now() - userTs) / 1000);
-        if (durationSeconds > 0 && state.currentAssistantCard) {
-          const doc = state.currentAssistantCard.ownerDocument!;
-          const footer = createEl(doc, "div", "claudero-response-footer");
-          footer.textContent = `* ${pickFlavorWord()} for ${formatDuration(durationSeconds)}`;
-          state.currentAssistantCard.appendChild(footer);
-        }
-        // Record this turn and persist.
-        const userTurnIndex = state.conversationTurns.length;
-        state.conversationTurns.push({
-          role: "user",
-          text: prompt || "(图片)",
-          ts: userTs,
-          images: cloneImages(images),
-          contextSnapshot: state.currentContextSnapshot,
-          provider,
-        });
-        attachMessageActions(state, userCard, "user", prompt || "(图片)", {
-          ts: userTs,
-          turnIndex: userTurnIndex,
-          editable: true,
-          contextSnapshot: state.currentContextSnapshot,
-        });
-        if (state.lastAssistantText) {
-          const assistantTs = Date.now();
-          const assistantTurnIndex = state.conversationTurns.length;
-          const blocks = state.currentAssistantBlocks.slice();
-          if (state.currentSegmentText) {
-            blocks.push({ type: "text", text: state.currentSegmentText });
-          }
-          state.conversationTurns.push({
-            role: "assistant",
-            text: state.lastAssistantText,
-            ts: assistantTs,
-            blocks,
-            model: requestModel,
-            effort: requestEffort,
-            durationMs: assistantTs - userTs,
-            contextSnapshot: state.currentContextSnapshot,
-            assistantMessageId: state.currentProviderTurnId,
-            provider,
-            evidenceReferences: evidenceReferencesForText(
-              state.lastAssistantText,
-            ),
-          });
-          if (state.currentAssistantCard) {
-            attachMessageActions(
-              state,
-              state.currentAssistantCard,
-              "assistant",
-              state.lastAssistantText,
-              { ts: assistantTs, turnIndex: assistantTurnIndex },
-            );
-          }
-        } else if (state.currentAssistantBlocks.length > 0) {
-          const assistantTs = Date.now();
-          state.conversationTurns.push({
-            role: "assistant",
-            text: "",
-            ts: assistantTs,
-            blocks: state.currentAssistantBlocks.slice(),
-            model: requestModel,
-            effort: requestEffort,
-            durationMs: assistantTs - userTs,
-            contextSnapshot: state.currentContextSnapshot,
-            assistantMessageId: state.currentProviderTurnId,
-            provider,
-            evidenceReferences: evidenceReferencesForText(
-              state.lastAssistantText,
-            ),
-          });
-        }
-        const savePromise = saveConversation(state);
-        turnPersisted = true;
-        if (userTurnIndex === 0 && state.lastAssistantText) {
-          const titleConversationId = requestConversationId;
-          const titleAssistantText = state.lastAssistantText;
-          void savePromise.then((saved) =>
-            saved
-              ? generateConversationTitle(
-                  titleConversationId,
-                  prompt || "(图片)",
-                  titleAssistantText,
-                )
-              : null,
-          );
-        }
-        void reloadSlashCommands().then((cmds) => {
-          if (cmds.length > 0) {
-            _sdkCommandsCache = cmds.map((c) => ({
-              name: c.name,
-              description: c.description,
-              isBuiltin: false,
-              argumentHint: c.argumentHint,
-            }));
-          }
-        });
-      } else if (event.type === "error") {
-        sawError = true;
-        const message =
-          event.error ||
-          getString("pane-query-failed", {
-            args: {
-              agent: providerLabel(
-                normalizeProvider(state.providerSelect.value),
-              ),
-            },
-          });
-        failureMessage = message;
-        logTurnEnd({
-          error: message,
-          durationMs: Date.now() - userTs,
-          outputTokens: state.turnOutputTokens,
-          responseChars: state.turnResponseChars,
-          thinkingTokens: state.thinkingTokenEstimate,
-        });
-        if (isClaudeLimitError(message)) {
-          appendLimitPrompt(state, message);
-        } else if (isClaudeAuthError(message)) {
-          appendAuthPrompt(state, message);
-        } else if (
-          provider === "deepseek" &&
-          isDeepSeekCliMissingError(message)
-        ) {
-          appendDeepSeekCliInstallPrompt(state, message);
-        } else {
-          appendNoticeCard(
-            state,
-            "warning",
-            getString("pane-provider-error", {
-              args: {
-                agent: providerLabel(
-                  normalizeProvider(state.providerSelect.value),
-                ),
-              },
-            }),
-            message,
-          );
-          setStatusDot(state, "error");
-        }
-      }
-    }
-  } catch (error) {
-    sawError = true;
-    const message = error instanceof Error ? error.message : String(error);
-    failureMessage = message;
-    logTurnEnd({
-      error: message,
-      cancelled: state.cancelRequested,
-      durationMs: Date.now() - userTs,
-      outputTokens: state.turnOutputTokens,
-      responseChars: state.turnResponseChars,
-      thinkingTokens: state.thinkingTokenEstimate,
-    });
-    if (isClaudeLimitError(message)) {
-      appendLimitPrompt(state, message);
-    } else if (isClaudeAuthError(message)) {
-      appendAuthPrompt(state, message);
-    } else if (provider === "deepseek" && isDeepSeekCliMissingError(message)) {
-      appendDeepSeekCliInstallPrompt(state, message);
-    } else {
-      appendNoticeCard(
-        state,
-        "warning",
-        getString("pane-provider-error", { args: { agent: "Claudero" } }),
-        message,
-      );
-      setStatusDot(state, "error");
-    }
-  } finally {
-    if (!turnPersisted && state.conversationId === requestConversationId) {
-      const userTurnIndex = state.conversationTurns.length;
-      state.conversationTurns.push({
-        role: "user",
-        text: prompt || "(图片)",
-        ts: userTs,
-        images: cloneImages(images),
-        contextSnapshot: state.currentContextSnapshot,
-        provider,
-      });
-      attachMessageActions(state, userCard, "user", prompt || "(图片)", {
-        ts: userTs,
-        turnIndex: userTurnIndex,
-        editable: true,
-        contextSnapshot: state.currentContextSnapshot,
-      });
-      const blocks = state.currentAssistantBlocks.slice();
-      if (state.currentSegmentText) {
-        blocks.push({ type: "text", text: state.currentSegmentText });
-      }
-      if (failureMessage || state.cancelRequested) {
-        blocks.push({
-          type: "notice",
-          kind: state.cancelRequested ? "info" : "warning",
-          title: state.cancelRequested
-            ? getString("pane-cancelled")
-            : getString("pane-request-failed"),
-          text: failureMessage || getString("pane-cancelled-description"),
-        });
-      }
-      if (state.lastAssistantText || blocks.length > 0) {
-        state.conversationTurns.push({
-          role: "assistant",
-          text: state.lastAssistantText,
-          ts: Date.now(),
-          blocks,
-          model: requestModel,
-          effort: requestEffort,
-          durationMs: Date.now() - userTs,
-          contextSnapshot: state.currentContextSnapshot,
-          assistantMessageId: state.currentProviderTurnId,
-          provider,
-          evidenceReferences: evidenceReferencesForText(
-            state.lastAssistantText,
-          ),
-        });
-      }
-      void saveConversation(state);
-    }
-    if (state.cancelRequested) {
-      logTurnEnd({
-        cancelled: true,
-        durationMs: Date.now() - userTs,
-        outputTokens: state.turnOutputTokens,
-        responseChars: state.turnResponseChars,
-        thinkingTokens: state.thinkingTokenEstimate,
-      });
-    }
-    state.cancelRequested = false;
-    stopThinkingAnimation(state);
-    finalizeThinkingCard(state);
-    finalizeAssistantBody(state);
-    removeEmptyCurrentAssistantMessage(state);
-    state.currentAssistantCard?.classList.remove("streaming");
-    state.currentAssistantBody = null;
-    state.currentAssistantCard = null;
-    state.currentSegmentText = "";
-    state.currentAssistantBlocks = [];
-    state.currentContextSnapshot = null;
-    state._suppressText = 0;
-    state._activeSkillToolId = null;
-    setRunning(state, false);
-    updateContext(state);
-    setStatusDot(state, sawError ? "error" : "ready");
-  }
-}
-
-// Send a real Claude Code SDK slash command (e.g. "/compact", "/usage") without
-// any context wrapping. The raw text is passed straight to the SDK so the CLI
-// recognises it as a slash command rather than a user question.
-async function sendRawSlashCommand(
-  state: PaneState,
-  command: string,
-): Promise<void> {
-  if (state.running) return;
-
-  const provider = normalizeProvider(state.providerSelect.value);
-  const requestModel = getSelectedModel(state);
-  const requestEffort = getSelectedEffort(state);
-  const requestConversationId = state.conversationId;
-  refreshEditableMessageActions(state);
-  const userTs = Date.now();
-  const userCard = appendUserMessage(state, command, [], { ts: userTs });
-  state.currentAssistantBody = null;
-  state.currentAssistantCard = null;
-  state.lastAssistantText = "";
-  state.currentSegmentText = "";
-  state.lastStreamingRenderTs = 0;
-  state.currentAssistantBlocks = [];
-  state.currentContextSnapshot = null;
-  state.thinkingTs = Date.now();
-  state.turnStartedTs = userTs;
-  state.turnOutputTokens = 0;
-  state.turnResponseChars = 0;
-  state.thinkingTokenEstimate = 0;
-  state.thinkingVerb = "";
-  state.activityMode = "requesting";
-  state.activityMessage = getString("activity-sending");
-  state.activityStartedTs = userTs;
-  state.recentThoughtDurationMs = 0;
-  state.recentThoughtUntil = 0;
-  startThinkingAnimation(state);
-  forceScrollToBottom(state);
-  state.cancelRequested = false;
-  state.questionPollingUnsupported = false;
-  setRunning(state, true);
-
-  if (state.permissionCheckTimer) clearInterval(state.permissionCheckTimer);
-  state.permissionCheckTimer = setInterval(() => {
-    void checkPendingInteractions(state);
-  }, 800) as unknown as number;
-
-  let sawError = false;
-  let failureMessage = "";
-  let turnPersisted = false;
-  try {
-    for await (const event of queryClaudeHelper(command, {
-      provider,
-      model: requestModel,
-      effort: requestEffort,
-      permissionMode: state.permissionMode,
-      conversationId: requestConversationId,
-      providerState: state.providerState,
-    })) {
-      if (state.cancelRequested) break;
-      if (event.type === "session") {
-        applyProviderSessionEvent(state, event.session);
-      } else if (event.type === "context_compaction") {
-        setActivity(
-          state,
-          event.phase === "started" ? "compacting" : "thinking",
-          event.phase === "started"
-            ? getString("activity-compacting")
-            : getString("activity-thinking"),
-        );
-        startThinkingAnimation(state);
-      } else if (event.type === "connection_status") {
-        setActivity(
-          state,
-          "waiting",
-          getString("activity-reconnecting", {
-            args: { attempt: event.attempt, maxAttempts: event.maxAttempts },
-          }),
-        );
-        startThinkingAnimation(state);
-      } else if (event.type === "thinking" && event.text) {
-        if (!state.currentAssistantBody) {
-          state.currentAssistantBody = appendMessageCard(
-            state,
-            "assistant",
-            "",
-            { ts: Date.now() },
-          );
-          state.currentAssistantCard = state.currentAssistantBody.closest(
-            ".claudero-message",
-          ) as HTMLElement | null;
-          state.currentSegmentText = "";
-          state.lastStreamingRenderTs = 0;
-        }
-        appendThinkingDelta(state, event.text);
-        appendAssistantThinkingBlock(state, event.text);
-      } else if (event.type === "thinking_snapshot" && event.text) {
-        reconcileThinkingSnapshot(state, event.text);
-      } else if (event.type === "text_delta" && event.text) {
-        if (state._suppressText > 0) continue;
-        ensureStreamingAssistantBody(state);
-        finalizeThinkingCard(state);
-        startThinkingAnimation(state);
-        mergeAssistantText(state, event.text);
-        updateStreamingBody(state);
-      } else if (event.type === "text_snapshot" && event.text) {
-        if (state._suppressText > 0) continue;
-        ensureStreamingAssistantBody(state);
-        finalizeThinkingCard(state);
-        startThinkingAnimation(state);
-        reconcileAssistantTextSnapshot(state, event.text);
-      } else if (event.type === "text" && event.text) {
-        if (state._suppressText > 0) continue;
-        if (!state.currentAssistantBody) {
-          state.currentAssistantBody = appendMessageCard(
-            state,
-            "assistant",
-            "",
-            { ts: Date.now() },
-          );
-          state.currentAssistantCard = state.currentAssistantBody.closest(
-            ".claudero-message",
-          ) as HTMLElement | null;
-          state.currentSegmentText = "";
-          state.lastStreamingRenderTs = 0;
-          state.thinkingTs = Date.now();
-          startThinkingAnimation(state);
-        }
-        finalizeThinkingCard(state);
-        startThinkingAnimation(state);
-        await animateAssistantText(state, event.text);
-      } else if (event.type === "tool_use" && event.tool) {
-        finalizeThinkingCard(state);
-        finalizeAssistantThinkingBlock(state, Date.now() - state.thinkingTs);
-        const skillIntroCard = state.currentAssistantCard;
-        finalizeAssistantBody(state);
-        if (event.tool.name !== "Skill") commitCurrentAssistantTextBlock(state);
-        removeEmptyCurrentAssistantMessage(state);
-        state.currentSegmentText = "";
-        appendToolCard(state, event.tool);
-        updateActivityForTool(state, event.tool);
-        syncSpinnerForTool(state, event.tool.name);
-        pushAssistantBlock(state, {
-          type: "tool_use",
-          id: event.tool.id,
-          name: event.tool.name,
-          input: event.tool.input,
-          partialInput: event.tool.partialInput,
-        });
-        if (event.tool.name === "Skill") {
-          state._suppressText++;
-          state._activeSkillToolId = event.tool.id;
-          if (skillIntroCard) skillIntroCard.remove();
-          state.lastAssistantText = "";
-        }
-        if (event.tool.name === "AskUserQuestion" && event.tool.input) {
-          const input = event.tool.input as { questions?: unknown[] };
-          if (Array.isArray(input.questions)) {
-            showQuestionDialog(state, {
-              toolUseId: event.tool.id,
-              questions:
-                input.questions as import("./permissionDialog").AskUserQuestionItem[],
-            });
-            stopThinkingAnimation(state);
-          }
-        }
-        if (
-          event.tool.name === "ExitPlanMode" &&
-          event.tool.input &&
-          typeof event.tool.input === "object"
-        ) {
-          showExitPlanDialog(state, {
-            toolUseId: event.tool.id,
-            input: event.tool.input as Record<string, unknown>,
-          });
-          stopThinkingAnimation(state);
-        }
-      } else if (event.type === "tool_use_delta" && event.tool) {
-        finalizeAssistantBody(state);
-        removeEmptyCurrentAssistantMessage(state);
-        appendToolCard(state, event.tool);
-        updateActivityForTool(state, event.tool);
-        syncSpinnerForTool(state, event.tool.name);
-        const existing = state.currentAssistantBlocks.find(
-          (block) => block.type === "tool_use" && block.id === event.tool?.id,
-        );
-        if (existing?.type === "tool_use") {
-          const previousLength = existing.partialInput?.length || 0;
-          const nextLength = event.tool.partialInput?.length || 0;
-          state.turnResponseChars += Math.max(0, nextLength - previousLength);
-          updateThinkingAnimation(state);
-          existing.input = event.tool.input;
-          existing.partialInput = event.tool.partialInput;
-        }
-        if (event.tool.name === "AskUserQuestion" && event.tool.input) {
-          const input = event.tool.input as { questions?: unknown[] };
-          if (Array.isArray(input.questions)) {
-            showQuestionDialog(state, {
-              toolUseId: event.tool.id,
-              questions:
-                input.questions as import("./permissionDialog").AskUserQuestionItem[],
-            });
-            stopThinkingAnimation(state);
-          }
-        }
-        if (
-          event.tool.name === "ExitPlanMode" &&
-          event.tool.input &&
-          typeof event.tool.input === "object"
-        ) {
-          showExitPlanDialog(state, {
-            toolUseId: event.tool.id,
-            input: event.tool.input as Record<string, unknown>,
-          });
-          stopThinkingAnimation(state);
-        }
-      } else if (event.type === "tool_result" && event.result) {
-        hideQuestionDialog(state);
-        restoreEvidenceReferences(
-          evidenceReferencesFromToolResultContent(event.result.content),
-        );
-        appendToolResult(state, event.result);
-        pushAssistantBlock(state, {
-          type: "tool_result",
-          id: event.result.id,
-          content: event.result.content,
-          isError: event.result.isError,
-        });
-        maybeAppendUndoCard(state, event.result);
-        if (
-          state._activeSkillToolId === event.result.id &&
-          state._suppressText > 0
-        ) {
-          state._suppressText = 0;
-          state._activeSkillToolId = null;
-        }
-        removeEmptyCurrentAssistantMessage(state);
-        state.currentAssistantBody = null;
-        state.currentAssistantCard = null;
-        state.currentSegmentText = "";
-        state.lastStreamingRenderTs = 0;
-        state.thinkingTs = Date.now();
-        setActivity(state, "responding");
-        startThinkingAnimation(state);
-      } else if (event.type === "usage" && event.usage) {
-        updateTurnUsage(state, event.usage);
-      } else if (
-        event.type === "thinking_tokens" &&
-        typeof event.estimatedTokens === "number"
-      ) {
-        state.thinkingTokenEstimate = Math.max(0, event.estimatedTokens);
-        setActivity(state, "thinking", getString("activity-thinking"));
-        if (!state.thinkingCard) startThinkingAnimation(state);
-        else updateThinkingAnimation(state);
-      } else if (
-        event.type === "tool_progress" &&
-        event.toolUseId &&
-        typeof event.elapsedSeconds === "number"
-      ) {
-        updateToolProgress(state, event.toolUseId, event.elapsedSeconds);
-      } else if (
-        event.type === "commands_changed" &&
-        Array.isArray(event.commands)
-      ) {
-        _sdkCommandsCache = event.commands.map((c) => ({
-          name: c.name,
-          description: c.description,
-          isBuiltin: false,
-          argumentHint: c.argumentHint,
-        }));
-      } else if (event.type === "done") {
-        stopThinkingAnimation(state);
-        finalizeThinkingCard(state);
-        finalizeAssistantThinkingBlock(state, Date.now() - state.thinkingTs);
-        finalizeAssistantBody(state);
-        removeEmptyCurrentAssistantMessage(state);
-        // Remove streaming class before adding action buttons
-        state.currentAssistantCard?.classList.remove("streaming");
-        const durationSeconds = Math.floor((Date.now() - userTs) / 1000);
-        if (durationSeconds > 0 && state.currentAssistantCard) {
-          const doc = state.currentAssistantCard.ownerDocument!;
-          const footer = createEl(doc, "div", "claudero-response-footer");
-          footer.textContent = `* ${pickFlavorWord()} for ${formatDuration(durationSeconds)}`;
-          state.currentAssistantCard.appendChild(footer);
-        }
-        const userTurnIndex = state.conversationTurns.length;
-        state.conversationTurns.push({
-          role: "user",
-          text: command,
-          ts: userTs,
-          provider,
-        });
-        attachMessageActions(state, userCard, "user", command, {
-          ts: userTs,
-          turnIndex: userTurnIndex,
-          editable: true,
-        });
-        if (state.lastAssistantText) {
-          const assistantTs = Date.now();
-          const assistantTurnIndex = state.conversationTurns.length;
-          const blocks = state.currentAssistantBlocks.slice();
-          if (state.currentSegmentText) {
-            blocks.push({ type: "text", text: state.currentSegmentText });
-          }
-          state.conversationTurns.push({
-            role: "assistant",
-            text: state.lastAssistantText,
-            ts: assistantTs,
-            blocks,
-            model: requestModel,
-            effort: requestEffort,
-            durationMs: assistantTs - userTs,
-            assistantMessageId: state.currentProviderTurnId,
-            provider,
-          });
-          if (state.currentAssistantCard) {
-            attachMessageActions(
-              state,
-              state.currentAssistantCard,
-              "assistant",
-              state.lastAssistantText,
-              { ts: assistantTs, turnIndex: assistantTurnIndex },
-            );
-          }
-        } else if (state.currentAssistantBlocks.length > 0) {
-          const assistantTs = Date.now();
-          state.conversationTurns.push({
-            role: "assistant",
-            text: "",
-            ts: assistantTs,
-            blocks: state.currentAssistantBlocks.slice(),
-            model: requestModel,
-            effort: requestEffort,
-            durationMs: assistantTs - userTs,
-            assistantMessageId: state.currentProviderTurnId,
-            provider,
-          });
-        }
-        if (command.trim() === "/compact") {
-          state.compactedAt = Date.now();
-        }
-        const savePromise = saveConversation(state);
-        turnPersisted = true;
-        if (userTurnIndex === 0 && state.lastAssistantText) {
-          const titleAssistantText = state.lastAssistantText;
-          void savePromise.then((saved) =>
-            saved
-              ? generateConversationTitle(
-                  requestConversationId,
-                  command,
-                  titleAssistantText,
-                )
-              : null,
-          );
-        }
-        void reloadSlashCommands().then((cmds) => {
-          if (cmds.length > 0) {
-            _sdkCommandsCache = cmds.map((c) => ({
-              name: c.name,
-              description: c.description,
-              isBuiltin: false,
-              argumentHint: c.argumentHint,
-            }));
-          }
-        });
-      } else if (event.type === "error") {
-        sawError = true;
-        const message =
-          event.error ||
-          getString("pane-query-failed", {
-            args: {
-              agent: providerLabel(
-                normalizeProvider(state.providerSelect.value),
-              ),
-            },
-          });
-        failureMessage = message;
-        if (isClaudeLimitError(message)) appendLimitPrompt(state, message);
-        else if (isClaudeAuthError(message)) appendAuthPrompt(state, message);
-        else if (provider === "deepseek" && isDeepSeekCliMissingError(message))
-          appendDeepSeekCliInstallPrompt(state, message);
-        else {
-          appendNoticeCard(
-            state,
-            "warning",
-            getString("pane-provider-error", {
-              args: {
-                agent: providerLabel(
-                  normalizeProvider(state.providerSelect.value),
-                ),
-              },
-            }),
-            message,
-          );
-          setStatusDot(state, "error");
-        }
-      }
-    }
-  } catch (error) {
-    sawError = true;
-    const message = error instanceof Error ? error.message : String(error);
-    failureMessage = message;
-    if (isClaudeLimitError(message)) appendLimitPrompt(state, message);
-    else if (isClaudeAuthError(message)) appendAuthPrompt(state, message);
-    else if (provider === "deepseek" && isDeepSeekCliMissingError(message))
-      appendDeepSeekCliInstallPrompt(state, message);
-    else {
-      appendNoticeCard(
-        state,
-        "warning",
-        getString("pane-provider-error", { args: { agent: "Claudero" } }),
-        message,
-      );
-      setStatusDot(state, "error");
-    }
-  } finally {
-    if (!turnPersisted && state.conversationId === requestConversationId) {
-      const userTurnIndex = state.conversationTurns.length;
-      state.conversationTurns.push({
-        role: "user",
-        text: command,
-        ts: userTs,
-        provider,
-      });
-      attachMessageActions(state, userCard, "user", command, {
-        ts: userTs,
-        turnIndex: userTurnIndex,
-        editable: true,
-      });
-      const blocks = state.currentAssistantBlocks.slice();
-      if (state.currentSegmentText) {
-        blocks.push({ type: "text", text: state.currentSegmentText });
-      }
-      if (failureMessage || state.cancelRequested) {
-        blocks.push({
-          type: "notice",
-          kind: state.cancelRequested ? "info" : "warning",
-          title: state.cancelRequested
-            ? getString("pane-cancelled")
-            : getString("pane-request-failed"),
-          text: failureMessage || getString("pane-cancelled-description"),
-        });
-      }
-      if (state.lastAssistantText || blocks.length > 0) {
-        state.conversationTurns.push({
-          role: "assistant",
-          text: state.lastAssistantText,
-          ts: Date.now(),
-          blocks,
-          model: requestModel,
-          effort: requestEffort,
-          durationMs: Date.now() - userTs,
-          assistantMessageId: state.currentProviderTurnId,
-          provider,
-        });
-      }
-      void saveConversation(state);
-    }
-    state.cancelRequested = false;
-    stopThinkingAnimation(state);
-    finalizeThinkingCard(state);
-    finalizeAssistantBody(state);
-    removeEmptyCurrentAssistantMessage(state);
-    state.currentAssistantCard?.classList.remove("streaming");
-    state.currentAssistantBody = null;
-    state.currentAssistantCard = null;
-    state.currentSegmentText = "";
-    state.currentAssistantBlocks = [];
-    state.currentContextSnapshot = null;
-    state._suppressText = 0;
-    state._activeSkillToolId = null;
-    setRunning(state, false);
-    updateContext(state);
-    setStatusDot(state, sawError ? "error" : "ready");
-  }
 }
 
 async function insertAssistantNote(state: PaneState): Promise<void> {
@@ -4816,18 +1086,23 @@ function hideClauderoPanel(win: Window): void {
   const state = host ? paneStates.get(host) : undefined;
   if (state) {
     if (state.running) cancel(state);
-    if (state.permissionCheckTimer) {
-      win.clearInterval(state.permissionCheckTimer);
-      state.permissionCheckTimer = null;
-    }
+    // Record and enqueue the partial turn before a reopened pane reads history.
+    if (state.finalizeRequest) state.finalizeRequest();
+    else void saveConversation(state);
+    state.disposed = true;
+    state.modelCatalog?.dispose();
+    cancelImageReads(state);
+    state.disposeComposer();
+    closeContextDetailPopup(doc);
+    stopInteractionPolling(state);
     stopThinkingAnimation(state);
+    finalizeThinkingCard(state);
     hidePermissionDialog(state);
     hideQuestionDialog(state);
     if (state.providerPrefObserverID) {
       Zotero.Prefs.unregisterObserver(state.providerPrefObserverID);
       state.providerPrefObserverID = null;
     }
-    void saveConversation(state);
     paneStates.delete(host!);
   }
   host?.remove();
@@ -5001,6 +1276,9 @@ function showHistoryPopup(state: PaneState): void {
       setStatusDot(state, "ready");
     },
     onAutoRename: async (conv) => {
+      const conversation = await loadConversationById(conv.id);
+      if (!conversation)
+        throw new Error(getString("history-conversation-missing"));
       const latestTitle = await getConversationTitle(conv.id);
       if (latestTitle && latestTitle !== conv.title) {
         ztoolkit.log(
@@ -5009,12 +1287,13 @@ function showHistoryPopup(state: PaneState): void {
         conv.title = latestTitle;
       }
       const firstUser =
-        conv.turns.find((t) => t.role === "user" && t.text.trim())?.text ||
+        conversation.turns.find((t) => t.role === "user" && t.text.trim())
+          ?.text ||
         conv.title ||
         "";
       const firstAssistant =
-        conv.turns.find((t) => t.role === "assistant" && t.text.trim())?.text ||
-        "";
+        conversation.turns.find((t) => t.role === "assistant" && t.text.trim())
+          ?.text || "";
       return generateConversationTitle(
         conv.id,
         firstUser,
@@ -5027,7 +1306,7 @@ function showHistoryPopup(state: PaneState): void {
 
 async function deleteConversationFromHistory(
   state: PaneState,
-  conv: SavedConversation,
+  conv: ConversationIndexEntry,
 ): Promise<void> {
   await deleteConversation(conv.id);
   // If we just deleted the conversation that's currently open, start a fresh
@@ -5040,11 +1319,14 @@ async function deleteConversationFromHistory(
   }
 }
 
-async function refinePromptWithClaude(input: {
-  label: string;
-  description: string;
-  text: string;
-}): Promise<Partial<Pick<CustomPrompt, "label" | "description" | "text">>> {
+async function refinePromptWithClaude(
+  input: {
+    label: string;
+    description: string;
+    text: string;
+  },
+  signal?: AbortSignal,
+): Promise<Partial<Pick<CustomPrompt, "label" | "description" | "text">>> {
   const systemPrompt = [
     "You refine reusable prompts for an academic Zotero assistant named Claudero.",
     "Improve clarity, specificity, and reliability without making the prompt verbose.",
@@ -5052,6 +1334,7 @@ async function refinePromptWithClaude(input: {
     "Keep label short. Keep description under 90 characters. Preserve the user's intent.",
   ].join("\n");
   const raw = await runAuxClaudeQuery(JSON.stringify(input, null, 2), {
+    signal,
     systemPrompt,
     model: String(
       defaultModelForProvider(normalizeProvider(getPref("provider"))),
@@ -5215,7 +1498,8 @@ function showItemPicker(state: PaneState): void {
 // Returns the filter word if the entire input value is "/word" (or just "/"),
 // otherwise null (so mid-sentence slashes are ignored).
 function getSlashQuery(input: HTMLTextAreaElement): string | null {
-  const match = input.value.match(/^\/(\w*)$/);
+  // Command names may contain "-" (e.g. /release-notes) and ":" (namespaced).
+  const match = input.value.match(/^\/([\w:-]*)$/);
   return match ? (match[1] ?? "") : null;
 }
 
@@ -5245,7 +1529,9 @@ function renderSlashPopup(
   const q = query.toLowerCase();
   const filtered = q
     ? allCmds.filter(
-        (c) => c.name.includes(q) || c.description.toLowerCase().includes(q),
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          c.description.toLowerCase().includes(q),
       )
     : allCmds;
 
@@ -5288,6 +1574,9 @@ function renderSlashPopup(
       }
     };
     doc.addEventListener("mousedown", onOutside, true);
+    onElementRemoved(popup, () =>
+      doc.removeEventListener("mousedown", onOutside, true),
+    );
   }
 
   popup.__filtered = filtered;
@@ -5339,32 +1628,40 @@ function updateSlashPopup(state: PaneState): void {
 
   if (!_sdkCommandsFetching) {
     _sdkCommandsFetching = true;
-    void fetchSlashCommands().then((sdkCmds) => {
-      _sdkCommandsFetching = false;
-      // Only cache if we got real results; empty means session not ready → retry next time
-      if (sdkCmds.length > 0) {
-        _sdkCommandsCache = sdkCmds.map((c) => ({
-          name: c.name,
-          description: c.description,
-          isBuiltin: false,
-          argumentHint: c.argumentHint,
-        }));
-      }
-      // Re-render with full command list if popup is still open
-      const currentQuery = getSlashQuery(state.input);
-      if (currentQuery !== null) {
-        const currentPopup = state.root.querySelector(
-          ".claudero-slash-popup",
-        ) as
-          | (HTMLElement & {
-              __filtered?: SlashCommand[];
-              __selectedIdx?: number;
-            })
-          | null;
-        const allCmds = [...builtinSlashCommands(), ..._sdkCommandsCache!];
-        renderSlashPopup(state, allCmds, currentQuery, currentPopup);
-      }
-    });
+    void fetchSlashCommands()
+      .then((sdkCmds) => {
+        // Only cache if we got real results; empty means session not ready → retry next time
+        if (sdkCmds.length > 0) {
+          _sdkCommandsCache = sdkCmds.map((c) => ({
+            name: c.name,
+            description: c.description,
+            isBuiltin: false,
+            argumentHint: c.argumentHint,
+          }));
+        }
+        if (state.disposed) return;
+        // Re-render with full command list if popup is still open
+        const currentQuery = getSlashQuery(state.input);
+        if (currentQuery !== null) {
+          const currentPopup = state.root.querySelector(
+            ".claudero-slash-popup",
+          ) as
+            | (HTMLElement & {
+                __filtered?: SlashCommand[];
+                __selectedIdx?: number;
+              })
+            | null;
+          // The cache stays null when the session is not ready yet.
+          const allCmds = [
+            ...builtinSlashCommands(),
+            ...(_sdkCommandsCache ?? []),
+          ];
+          renderSlashPopup(state, allCmds, currentQuery, currentPopup);
+        }
+      })
+      .finally(() => {
+        _sdkCommandsFetching = false;
+      });
   }
 }
 
@@ -5469,8 +1766,9 @@ function showItemPickerPopup(state: PaneState): void {
             state.selectedAnnotations.length > 0 ||
             state.manualItems.length > 0;
           state.contextChips.style.display = hasCtx ? "flex" : "none";
-          state.input.disabled = !hasCtx;
-          state.sendButton.disabled = !state.running && !hasCtx;
+          // Context is optional; the composer stays usable without it.
+          state.input.disabled = false;
+          state.sendButton.disabled = false;
         }
       } else {
         // Add
@@ -5526,6 +1824,9 @@ function showItemPickerPopup(state: PaneState): void {
     }
   };
   doc.addEventListener("mousedown", onOutside, true);
+  onElementRemoved(popup, () =>
+    doc.removeEventListener("mousedown", onOutside, true),
+  );
 }
 
 function hideItemPicker(state: PaneState): void {
@@ -5621,6 +1922,10 @@ function createComposer(doc: Document) {
   });
   return {
     ...view,
+    dispose: () => {
+      stateRef = null;
+      view.dispose();
+    },
     setStateRef: (state: PaneState) => {
       stateRef = state;
       view.setStateRef(state);
@@ -5654,6 +1959,7 @@ function buildPanel(doc: Document, win: Window): HTMLElement {
     transcript,
     input: composer.input,
     sendButton: composer.sendButton,
+    disposeComposer: composer.dispose,
     providerSelect: composer.providerSelect,
     modelSelect: composer.modelSelect,
     effortSelect: composer.effortSelect,
@@ -5924,7 +2230,10 @@ function buildPanel(doc: Document, win: Window): HTMLElement {
       }
       const entry = state.inputHistory[state.inputHistoryIdx];
       state.input.value = entry.text;
-      state.pendingImages = entry.images.map((img) => ({ ...img }));
+      replaceImageDraft(
+        state,
+        entry.images.map((img) => ({ ...img })),
+      );
       renderPendingImages(state);
       // Move cursor to end
       state.input.selectionStart = state.input.selectionEnd =
@@ -5940,7 +2249,7 @@ function buildPanel(doc: Document, win: Window): HTMLElement {
       if (state.inputHistoryIdx === 0) {
         // Restore the saved input (or clear)
         state.input.value = state._inputHistorySavedText;
-        state.pendingImages = state._inputHistorySavedImages.slice();
+        replaceImageDraft(state, state._inputHistorySavedImages.slice());
         renderPendingImages(state);
         state.inputHistoryIdx = -1;
         state._inputHistorySavedText = "";
@@ -5949,7 +2258,10 @@ function buildPanel(doc: Document, win: Window): HTMLElement {
         state.inputHistoryIdx--;
         const entry = state.inputHistory[state.inputHistoryIdx];
         state.input.value = entry.text;
-        state.pendingImages = entry.images.map((img) => ({ ...img }));
+        replaceImageDraft(
+          state,
+          entry.images.map((img) => ({ ...img })),
+        );
         renderPendingImages(state);
         state.input.selectionStart = state.input.selectionEnd =
           state.input.value.length;
@@ -6113,6 +2425,8 @@ export function registerClauderoPane(win: _ZoteroTypes.MainWindow): void {
     win.document.removeEventListener("keyup", refreshContext, true);
     win.clearInterval(contextTimer);
     hideClauderoPanel(win);
+    win.document.getElementById(TOOLBAR_BUTTON_ID)?.remove();
+    win.document.getElementById("claudero-stylesheet")?.remove();
     mountedWindows.delete(win);
     windowCleanupCallbacks.delete(win);
   };
@@ -6127,6 +2441,7 @@ export function registerClauderoToolbarButton(
   win: _ZoteroTypes.MainWindow,
   attempt = 0,
 ): void {
+  if (!addon.data.alive || win.closed) return;
   const doc = win.document;
   if (doc.getElementById(TOOLBAR_BUTTON_ID)) return;
 

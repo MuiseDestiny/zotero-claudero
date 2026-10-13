@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -33,19 +33,46 @@ async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"));
 }
 
-function trackedFiles() {
-  return execFileSync("git", ["ls-files", "-z"], {
-    cwd: root,
-    encoding: "utf8",
-  })
-    .split("\0")
-    .filter(Boolean);
+function publishableFiles() {
+  return [
+    ...new Set(
+      execFileSync(
+        "git",
+        ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        {
+          cwd: root,
+          encoding: "utf8",
+        },
+      )
+        .split("\0")
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function isPrivateFile(file) {
+  return (
+    (/(?:^|\/)(?:\.env(?:\..*)?|AGENTS\.md|CLAUDE\.md|GEMINI\.md|zotero-cmd\.json)$/.test(
+      file,
+    ) &&
+      file !== ".env.example") ||
+    /^(?:\.scaffold|\.claude|\.codex|\.agents|\.vscode|\.claudero-eval|node_modules|build|logs|\.cache|coverage)\//.test(
+      file,
+    ) ||
+    /\.(?:tsbuildinfo|xpi|log)$/.test(file) ||
+    /^(?:doc\/agent-architecture\.md|docs\/(?:release-checklist|pdf-golden-eval|pre-release-check-[^/]+)\.md)$/.test(
+      file,
+    )
+  );
 }
 
 const packageJson = await readJson(path.join(root, "package.json"));
 const packageLock = await readJson(path.join(root, "package-lock.json"));
+const updateFile = packageJson.version.includes("-")
+  ? "update-beta.json"
+  : "update.json";
 const manifest = await readJson(path.join(buildRoot, "addon", "manifest.json"));
-const updateManifest = await readJson(path.join(buildRoot, "update.json"));
+const updateManifest = await readJson(path.join(buildRoot, updateFile));
 const xpiPath = path.join(buildRoot, "claudero.xpi");
 const update = updateManifest.addons?.[expectedAddonId]?.updates?.[0];
 
@@ -104,7 +131,7 @@ await check("built manifest", async () => {
   );
   assert(
     zotero?.update_url ===
-      `${expectedRepository}/releases/download/release/update.json`,
+      `${expectedRepository}/releases/download/release/${updateFile}`,
     "manifest update URL is incorrect",
   );
 });
@@ -156,23 +183,43 @@ await check("XPI package and checksum", async () => {
   }
 });
 
-await check("tracked file hygiene", async () => {
-  const forbidden = trackedFiles().filter(
-    (file) =>
-      file === ".env" ||
-      file.startsWith(".scaffold/") ||
-      file.startsWith(".claudero-eval/") ||
-      file.startsWith("node_modules/") ||
-      file.endsWith(".tsbuildinfo") ||
-      file.endsWith(".xpi"),
+await check("bundled KaTeX version and assets", async () => {
+  const katexRoot = path.join(root, "node_modules/katex");
+  const katexPackage = await readJson(path.join(katexRoot, "package.json"));
+  assert(
+    katexPackage.version === packageJson.dependencies.katex,
+    "installed KaTeX differs from the pinned renderer version",
   );
   assert(
+    packageJson.overrides?.["@vscode/markdown-it-katex"]?.katex === "$katex",
+    "Markdown plugin must use the same patched KaTeX renderer",
+  );
+  const files = [
+    ["dist/katex.min.css", "katex.min.css"],
+    ["LICENSE", "LICENSE.txt"],
+    ...(await readdir(path.join(katexRoot, "dist/fonts"))).map((font) => [
+      `dist/fonts/${font}`,
+      `fonts/${font}`,
+    ]),
+  ];
+  for (const [source, target] of files) {
+    const expected = await readFile(path.join(katexRoot, source));
+    const actual = await readFile(
+      path.join(buildRoot, "addon/content/katex", target),
+    );
+    assert(actual.equals(expected), `outdated KaTeX asset: ${target}`);
+  }
+});
+
+await check("publication file hygiene", async () => {
+  const forbidden = publishableFiles().filter(isPrivateFile);
+  assert(
     forbidden.length === 0,
-    `forbidden tracked files: ${forbidden.join(", ")}`,
+    `private or generated publication files: ${forbidden.join(", ")}`,
   );
 });
 
-await check("tracked secret scan", async () => {
+await check("publication secret scan", async () => {
   const textExtensions = new Set([
     ".css",
     ".example",
@@ -195,7 +242,7 @@ await check("tracked secret scan", async () => {
     /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
   ];
   const matches = [];
-  for (const file of trackedFiles()) {
+  for (const file of publishableFiles()) {
     if (!textExtensions.has(path.extname(file)) && file !== ".env.example") {
       continue;
     }

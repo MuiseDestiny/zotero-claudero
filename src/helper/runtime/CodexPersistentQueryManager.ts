@@ -8,6 +8,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { throwIfAborted } from "../../shared/helperStream";
 import type { ImageInput } from "./MessageChannel";
 import type {
   PermissionManager,
@@ -500,6 +501,7 @@ function buildCodexMcpServers(
     config.helperBridge?.bundlePath
   ) {
     servers.zotero = buildZoteroBridgeMcpServer({
+      provider: "codex",
       endpoint: config.zoteroEndpointUrl,
       helperUrl: `http://${config.helperBridge.host}:${config.helperBridge.port}`,
       token: config.helperBridge.token,
@@ -1062,9 +1064,11 @@ export class CodexPersistentQueryManager {
     };
   }
 
-  async initialize(config: CodexConfig): Promise<void> {
+  async initialize(config: CodexConfig, signal?: AbortSignal): Promise<void> {
     const startedAt = Date.now();
+    throwIfAborted(signal);
     await mkdir(config.workspacePath, { recursive: true });
+    throwIfAborted(signal);
     this.close();
     this.runtimeUnhealthyReason = null;
     this.debug("initialize.start", {

@@ -17,12 +17,16 @@ function parseJsonObject(value: string): unknown {
   }
 }
 
+let nextFallbackTurnId = 0;
+
 export class ToolInputStreamState {
   private toolsByIndex = new Map<string, ToolBlockState>();
   private emittedToolIds = new Set<string>();
   private textByIndex = new Map<string, string>();
   private thinkingByIndex = new Map<string, string>();
   private textDeltaSeen = false;
+  private fallbackTurnId = "";
+  private fallbackToolSequence = 0;
 
   resetTurn(): void {
     this.toolsByIndex.clear();
@@ -30,6 +34,8 @@ export class ToolInputStreamState {
     this.textByIndex.clear();
     this.thinkingByIndex.clear();
     this.textDeltaSeen = false;
+    this.fallbackTurnId = `turn-${++nextFallbackTurnId}`;
+    this.fallbackToolSequence = 0;
   }
 
   markTextDelta(index = "0", text = ""): void {
@@ -117,8 +123,14 @@ export class ToolInputStreamState {
     return { kind: "snapshot", text };
   }
 
+  private fallbackToolId(index: string): string {
+    const existing = this.toolsByIndex.get(index);
+    if (existing) return existing.id;
+    return `${this.fallbackTurnId}-tool-${++this.fallbackToolSequence}`;
+  }
+
   registerToolUse(index: string, tool: ToolUseEvent): ToolUseEvent | null {
-    const id = tool.id || `tool-${Date.now()}`;
+    const id = tool.id || this.fallbackToolId(index);
     const normalized: ToolBlockState = {
       index,
       id,
@@ -136,7 +148,7 @@ export class ToolInputStreamState {
     if (!index) return null;
     const existing = this.toolsByIndex.get(index) || {
       index,
-      id: `tool-${Date.now()}`,
+      id: this.fallbackToolId(index),
       name: "unknown",
       partialInput: "",
     };

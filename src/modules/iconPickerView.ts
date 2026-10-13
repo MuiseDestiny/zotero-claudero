@@ -1,5 +1,7 @@
 import type { PromptIcon } from "./conversationStore";
 import { getString } from "../utils/locale";
+import { onElementRemoved } from "./elementLifecycle";
+import { withRequestDeadline } from "../shared/requestDeadline";
 
 export interface IconPickerOptions {
   onSelect: (icon: PromptIcon) => void;
@@ -518,18 +520,27 @@ export function showIconPicker(
     renderIcons(filtered.length ? filtered : allIcons);
   }
 
+  const catalogRequest = new AbortController();
   async function loadAllIcons(): Promise<void> {
     const id = ++requestId;
     try {
       const url = `${ICONIFY_API}/search?query=&limit=999&prefix=lucide`;
-      const res = await fetch(url, { cache: "force-cache" });
-      if (!res.ok || closed || id !== requestId) return;
-      const data = (await res.json()) as { icons?: string[] };
+      const data = await withRequestDeadline(
+        async (signal) => {
+          const res = await fetch(url, { cache: "force-cache", signal });
+          if (!res.ok) throw new Error(`Icon catalog returned ${res.status}`);
+          return (await res.json()) as { icons?: unknown[] };
+        },
+        catalogRequest.signal,
+        10_000,
+      );
+      if (closed || id !== requestId) return;
       if (Array.isArray(data.icons) && data.icons.length) {
         // Merge API results with seed list (keep seed order first, then add new ones)
         const seedSet = new Set(ICONIFY_SEED_ICONS.map(normalizeIconName));
         const newIcons = data.icons.filter(
-          (n: string) => !seedSet.has(normalizeIconName(n)),
+          (n): n is string =>
+            typeof n === "string" && !seedSet.has(normalizeIconName(n)),
         );
         allIcons = [...ICONIFY_SEED_ICONS, ...newIcons];
         if (!searchInput.value.trim()) renderIcons(allIcons);
@@ -619,7 +630,16 @@ export function showIconPicker(
         doc.removeEventListener("mousedown", onOutside, true);
       }
     };
-    setTimeout(() => doc.addEventListener("mousedown", onOutside, true), 0);
+    doc.addEventListener("mousedown", onOutside, true);
+    onElementRemoved(
+      cp,
+      () => {
+        cp.remove();
+        if (colorPopup === cp) colorPopup = null;
+        doc.removeEventListener("mousedown", onOutside, true);
+      },
+      popup,
+    );
   });
 
   popup.addEventListener("keydown", (event: KeyboardEvent) => {
@@ -633,12 +653,22 @@ export function showIconPicker(
   // Show seed icons immediately, then load full list in background
   renderIcons(allIcons);
   void loadAllIcons();
-  setTimeout(() => {
+  const focusTimer = setTimeout(() => {
     try {
+      if (closed || !popup.isConnected) return;
       searchInput.focus();
     } catch {
       /* best effort */
     }
   }, 30);
+  onElementRemoved(popup, () => {
+    closed = true;
+    catalogRequest.abort();
+    requestId++;
+    colorPopup?.remove();
+    colorPopup = null;
+    if (timer != null) doc.defaultView?.clearTimeout(timer);
+    clearTimeout(focusTimer);
+  });
   return popup;
 }

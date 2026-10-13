@@ -17,6 +17,20 @@ import { homedir } from "os";
 import path from "node:path";
 import process from "node:process";
 import { PermissionManager } from "./runtime/PermissionManager";
+import { collectAuxiliaryRuntime } from "./runtime/AuxiliaryQuery";
+import { watchParentProcess } from "./runtime/ParentProcess";
+import { throwIfAborted } from "../shared/helperStream";
+import { randomUUID } from "node:crypto";
+import {
+  validateMcpServerConfig,
+  validateMcpServers,
+} from "../shared/mcpConfigValidation";
+import {
+  RequestBusyError,
+  RequestCoordinator,
+  type RequestLease,
+  type RequestProvider,
+} from "./runtime/RequestCoordinator";
 import {
   ClaudeRuntimeAdapter,
   CodexRuntimeAdapter,
@@ -60,7 +74,7 @@ import {
 
 type HelperProvider = "claude" | "codex" | "deepseek";
 
-type HelperConfig = HelperServerConfig;
+type HelperConfig = HelperServerConfig & { parentPid: number };
 
 interface ImageInput {
   media_type: string;
@@ -68,6 +82,7 @@ interface ImageInput {
 }
 
 interface SendPayload {
+  requestId?: string;
   prompt: string;
   workspacePath?: string;
   sessionId?: string;
@@ -147,6 +162,10 @@ interface DeepSeekInstallResult {
 interface RequestPermissionPayload {
   toolName: string;
   input: unknown;
+  /** Provider hint used by external MCP bridges (e.g. Codex). */
+  provider?: HelperProvider;
+  /** Optional owning request. When omitted, the active request for provider is used. */
+  ownerRequestId?: string;
 }
 
 interface AuxQueryPayload {
@@ -173,11 +192,17 @@ function parseArgs(argv: string[]): HelperConfig {
     return index >= 0 ? argv[index + 1] || fallback : fallback;
   };
 
-  return validateHelperServerConfig({
-    host: getArg("--host", "127.0.0.1"),
-    port: Number(getArg("--port", "38660")),
-    token: getArg("--token"),
-  });
+  const parentPid = Number(getArg("--parent-pid", String(process.ppid)));
+  if (!Number.isSafeInteger(parentPid) || parentPid < 1)
+    throw new Error("Invalid parent process ID");
+  return {
+    ...validateHelperServerConfig({
+      host: getArg("--host", "127.0.0.1"),
+      port: Number(getArg("--port", "38660")),
+      token: getArg("--token"),
+    }),
+    parentPid,
+  };
 }
 
 function normalizeProvider(value: string | undefined): HelperProvider {
@@ -226,9 +251,10 @@ function writeEvent(
 ): void {
   if (recorder && isAgentEventPayload(event)) {
     recorder.record(event);
-    latestAgentTrace = recorder.snapshot();
+    latestAgentTrace = recorder;
   }
-  res.write(`${JSON.stringify(event)}\n`);
+  if (!res.destroyed && !res.writableEnded)
+    res.write(`${JSON.stringify(event)}\n`);
 }
 
 function isExecutableFile(filePath: string | undefined): filePath is string {
@@ -749,14 +775,113 @@ function uniqueExistingDirectories(paths: string[] | undefined): string[] {
 
 // ── HTTP Handlers ────────────────────────────────────────────────────────────
 
-const permissionManager = new PermissionManager();
-const runtimeAdapters: Record<HelperProvider, AgentRuntimeAdapter> = {
-  claude: new ClaudeRuntimeAdapter(permissionManager),
-  codex: new CodexRuntimeAdapter(permissionManager),
-  deepseek: new DeepSeekRuntimeAdapter(permissionManager),
+const permissionManagers: Record<HelperProvider, PermissionManager> = {
+  claude: new PermissionManager(),
+  codex: new PermissionManager(),
+  deepseek: new PermissionManager(),
 };
+const runtimeAdapters: Record<HelperProvider, AgentRuntimeAdapter> = {
+  claude: new ClaudeRuntimeAdapter(permissionManagers.claude),
+  codex: new CodexRuntimeAdapter(permissionManagers.codex),
+  deepseek: new DeepSeekRuntimeAdapter(permissionManagers.deepseek),
+};
+const coordinator = new RequestCoordinator();
+interface RuntimeExecution {
+  lease: RequestLease;
+  ready: boolean;
+  acceptingBridge: boolean;
+  endpoint?: string;
+  stopPromise?: Promise<void>;
+  bridgeCalls: Set<Promise<unknown>>;
+}
+const executions = new Map<string, RuntimeExecution>();
+const cancelledRequestIds = new Set<string>();
+
+function rememberCancelledRequest(requestId: string): void {
+  cancelledRequestIds.add(requestId);
+  while (cancelledRequestIds.size > 1024) {
+    cancelledRequestIds.delete(cancelledRequestIds.values().next().value!);
+  }
+}
+
+function ownedExecution(ownerRequestId: unknown): RuntimeExecution {
+  if (typeof ownerRequestId !== "string")
+    throw new HttpRequestError(400, "ownerRequestId is required");
+  const execution = executions.get(ownerRequestId);
+  if (
+    !execution ||
+    !coordinator.owns(execution.lease) ||
+    execution.lease.signal.aborted
+  ) {
+    throw new HttpRequestError(404, "Request not found or expired");
+  }
+  return execution;
+}
+
+function assertExecution(execution: RuntimeExecution): void {
+  if (execution.lease.signal.aborted || !coordinator.owns(execution.lease)) {
+    throw new DOMException("Request cancelled", "AbortError");
+  }
+}
+
+function cancelExecution(execution: RuntimeExecution): Promise<void> {
+  execution.acceptingBridge = false;
+  execution.lease.cancel();
+  const provider = execution.lease.provider;
+  permissionManagers[provider].cancelAll();
+  if (execution.ready && !execution.stopPromise) {
+    execution.stopPromise = Promise.resolve().then(() =>
+      runtimeAdapters[provider].cancelActiveTurn(),
+    );
+    void execution.stopPromise.catch(() => {});
+  }
+  return execution.stopPromise || Promise.resolve();
+}
+
+async function withRuntimeLease<T>(
+  provider: HelperProvider,
+  requestId: string,
+  conversationId: string | undefined,
+  res: ServerResponse,
+  operation: (execution: RuntimeExecution) => Promise<T>,
+): Promise<T> {
+  const cancelledBeforeArrival = cancelledRequestIds.delete(requestId);
+  if (cancelledBeforeArrival)
+    throw new HttpRequestError(409, "Request was cancelled before it started.");
+  const lease = coordinator.acquire(requestId, provider, conversationId);
+  const execution: RuntimeExecution = {
+    lease,
+    ready: false,
+    acceptingBridge: false,
+    bridgeCalls: new Set(),
+  };
+  executions.set(requestId, execution);
+  const onClose = () => {
+    if (!res.writableEnded) void cancelExecution(execution).catch(() => {});
+  };
+  res.once("close", onClose);
+  if (res.destroyed) onClose();
+  try {
+    assertExecution(execution);
+    return await operation(execution);
+  } finally {
+    execution.acceptingBridge = false;
+    res.off("close", onClose);
+    permissionManagers[provider].cancelAll();
+    try {
+      if (lease.signal.aborted) {
+        await cancelExecution(execution);
+        await runtimeAdapters[provider].close();
+      }
+      await Promise.allSettled([...execution.bridgeCalls]);
+    } finally {
+      executions.delete(requestId);
+      coordinator.release(lease);
+    }
+  }
+}
 let activeProvider: HelperProvider = "claude";
-let latestAgentTrace: AgentEventTrace | null = null;
+let latestAgentTrace: AgentEventRecorder | null = null;
 type HelperDebugLevel = "info" | "warning" | "error";
 interface HelperDebugEntry {
   ts: string;
@@ -822,9 +947,21 @@ async function restartRuntimeAdapters(): Promise<Record<string, boolean>> {
   const activeProviders = (["claude", "codex", "deepseek"] as const).filter(
     (provider) => runtimeAdapters[provider].isActive,
   );
-  permissionManager.cancelAll();
-  runtimeAdapters.claude.close();
-  runtimeAdapters.codex.close();
+  // Abort in-flight requests before tearing down their provider processes so
+  // streams cannot continue against a closed runtime.
+  await Promise.allSettled(
+    [...executions.values()].map(async (execution) => {
+      await cancelExecution(execution);
+      // Wait until the request's finally block has released its lease. That
+      // block may close the adapter after cancellation; reinitializing before
+      // it completes could therefore close the newly initialized runtime.
+      await execution.lease.released;
+    }),
+  );
+  for (const provider of ["claude", "codex", "deepseek"] as const) {
+    permissionManagers[provider].cancelAll();
+    runtimeAdapters[provider].close();
+  }
   latestAgentTrace = null;
   const restarted: Record<string, boolean> = {
     claude: false,
@@ -928,12 +1065,10 @@ function providerPayloadSummary(
 }
 
 function currentWorkspacePathFor(provider: HelperProvider): string | null {
-  return (
-    queryManagerFor(provider).workspacePath ||
-    runtimeAdapters.claude.workspacePath ||
-    runtimeAdapters.codex.workspacePath ||
-    runtimeAdapters.deepseek.workspacePath
-  );
+  // A provider's runtime must never inherit another provider's workspace.
+  // Doing so makes /send and /models believe the requested workspace is already
+  // initialized and can return data from the wrong project.
+  return queryManagerFor(provider).workspacePath;
 }
 
 function traceSummary(trace: AgentEventTrace | null): unknown {
@@ -984,7 +1119,7 @@ function diagnosticsPayload(): unknown {
       codex: runtimeAdapters.codex.diagnostics(),
       deepseek: runtimeAdapters.deepseek.diagnostics(),
     },
-    trace: traceSummary(latestAgentTrace),
+    trace: traceSummary(latestAgentTrace?.snapshot() || null),
     debugLog: helperDebugLog.slice(-180),
   });
 }
@@ -1056,6 +1191,7 @@ function runtimeLiveUpdateConfig(
 }
 
 const providerInitializationPromises = new Map<HelperProvider, Promise<void>>();
+const helperLifetime = new AbortController();
 
 async function initializeProviderFromPayload(
   provider: HelperProvider,
@@ -1109,6 +1245,7 @@ async function initializeProviderNow(
   const manager = queryManagerFor(provider);
   try {
     await mkdir(workspacePath, { recursive: true });
+    throwIfAborted(helperLifetime.signal);
     if (provider === "codex") {
       const codexPath = resolveCodexPath(
         payload.codexPath,
@@ -1122,33 +1259,36 @@ async function initializeProviderNow(
         codexPath,
         additionalDirectories,
       });
-      await manager.initialize({
-        workspacePath,
-        codexPath,
-        environment: payload.environment || {},
-        model: normalizeClaudeModel(payload.model),
-        effort: payload.effort,
-        additionalDirectories,
-        permissionMode: payload.permissionMode,
-        zoteroEndpointUrl: payload.zoteroEndpointUrl,
-        enableZoteroMcp: payload.enableZoteroMcp,
-        mcpServers: payload.mcpServers,
-        mcpDisabledTools: payload.mcpDisabledTools,
-        conversationId: payload.conversationId,
-        codexInstallationMethod: payload.codexInstallationMethod,
-        codexWslDistro: payload.codexWslDistro,
-        codexSafeMode: payload.codexSafeMode,
-        providerState: payload.providerState?.codex,
-        helperBridge:
-          helperConfig && payload.zoteroEndpointUrl
-            ? {
-                host: helperConfig.host,
-                port: helperConfig.port,
-                token: helperConfig.token,
-                bundlePath: process.argv[1] || "",
-              }
-            : undefined,
-      });
+      await manager.initialize(
+        {
+          workspacePath,
+          codexPath,
+          environment: payload.environment || {},
+          model: normalizeClaudeModel(payload.model),
+          effort: payload.effort,
+          additionalDirectories,
+          permissionMode: payload.permissionMode,
+          zoteroEndpointUrl: payload.zoteroEndpointUrl,
+          enableZoteroMcp: payload.enableZoteroMcp,
+          mcpServers: payload.mcpServers,
+          mcpDisabledTools: payload.mcpDisabledTools,
+          conversationId: payload.conversationId,
+          codexInstallationMethod: payload.codexInstallationMethod,
+          codexWslDistro: payload.codexWslDistro,
+          codexSafeMode: payload.codexSafeMode,
+          providerState: payload.providerState?.codex,
+          helperBridge:
+            helperConfig && payload.zoteroEndpointUrl
+              ? {
+                  host: helperConfig.host,
+                  port: helperConfig.port,
+                  token: helperConfig.token,
+                  bundlePath: process.argv[1] || "",
+                }
+              : undefined,
+        },
+        helperLifetime.signal,
+      );
       recordHelperDebug("runtime", "initialize complete", {
         provider,
         elapsedMs: Date.now() - startedAt,
@@ -1172,17 +1312,20 @@ async function initializeProviderNow(
         nodePath,
         additionalDirectories,
       });
-      await manager.initialize({
-        workspacePath,
-        deepseekPath,
-        nodePath,
-        environment: payload.environment || {},
-        model: payload.model,
-        effort: payload.effort,
-        permissionMode: payload.permissionMode,
-        conversationId: payload.conversationId,
-        providerState: payload.providerState?.deepseek,
-      });
+      await manager.initialize(
+        {
+          workspacePath,
+          deepseekPath,
+          nodePath,
+          environment: payload.environment || {},
+          model: payload.model,
+          effort: payload.effort,
+          permissionMode: payload.permissionMode,
+          conversationId: payload.conversationId,
+          providerState: payload.providerState?.deepseek,
+        },
+        helperLifetime.signal,
+      );
       recordHelperDebug("runtime", "initialize complete", {
         provider,
         elapsedMs: Date.now() - startedAt,
@@ -1199,22 +1342,25 @@ async function initializeProviderNow(
       claudePath,
       additionalDirectories,
     });
-    await manager.initialize({
-      workspacePath,
-      claudePath,
-      environment: payload.environment || {},
-      model: normalizeClaudeModel(payload.model),
-      effort: normalizeClaudeEffort(payload.effort),
-      additionalDirectories,
-      permissionMode: payload.permissionMode,
-      zoteroEndpointUrl: payload.zoteroEndpointUrl,
-      zoteroEndpointToken: helperConfig?.token,
-      enableZoteroMcp: payload.enableZoteroMcp,
-      mcpServers: payload.mcpServers,
-      mcpDisabledTools: payload.mcpDisabledTools,
-      conversationId: payload.conversationId,
-      providerState: payload.providerState?.claude,
-    });
+    await manager.initialize(
+      {
+        workspacePath,
+        claudePath,
+        environment: payload.environment || {},
+        model: normalizeClaudeModel(payload.model),
+        effort: normalizeClaudeEffort(payload.effort),
+        additionalDirectories,
+        permissionMode: payload.permissionMode,
+        zoteroEndpointUrl: payload.zoteroEndpointUrl,
+        zoteroEndpointToken: helperConfig?.token,
+        enableZoteroMcp: payload.enableZoteroMcp,
+        mcpServers: payload.mcpServers,
+        mcpDisabledTools: payload.mcpDisabledTools,
+        conversationId: payload.conversationId,
+        providerState: payload.providerState?.claude,
+      },
+      helperLifetime.signal,
+    );
     recordHelperDebug("runtime", "initialize complete", {
       provider,
       elapsedMs: Date.now() - startedAt,
@@ -1231,6 +1377,7 @@ async function initializeProviderNow(
       },
       "error",
     );
+    manager.close();
     throw error;
   }
 }
@@ -1258,31 +1405,20 @@ async function handleInit(
     return;
   }
 
-  try {
-    await initializeProviderFromPayload(
-      provider,
-      payload.workspacePath,
-      payload,
-      helperConfig,
-    );
-    activeProvider = provider;
-    recordHelperDebug("http", "/init ok", {
-      provider,
-      active: queryManagerFor(provider).isActive,
-    });
-
-    sendJson(res, 200, { ok: true });
-  } catch (error) {
-    recordHelperDebug(
-      "http",
-      "/init failed",
-      { provider, error: helperErrorData(error) },
-      "error",
-    );
-    sendJson(res, 500, {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  validateRuntimePayload(payload);
+  await withRuntimeLease(
+    provider,
+    randomUUID(),
+    payload.conversationId,
+    res,
+    async (execution) => {
+      await prepareRuntime(provider, payload, helperConfig);
+      execution.ready = true;
+      assertExecution(execution);
+      activeProvider = provider;
+      sendJson(res, 200, { ok: true });
+    },
+  );
 }
 
 async function handleSend(
@@ -1298,6 +1434,98 @@ async function handleSendWithPayload(
   payload: SendPayload,
   res: ServerResponse,
   helperConfig: HelperConfig,
+): Promise<void> {
+  const provider = normalizeProvider(payload.provider);
+  const requestId = payload.requestId || randomUUID();
+  validateRuntimePayload(payload);
+  await withRuntimeLease(
+    provider,
+    requestId,
+    payload.conversationId,
+    res,
+    async (execution) => {
+      await handleOwnedSend(
+        { ...payload, requestId },
+        res,
+        helperConfig,
+        execution,
+      );
+    },
+  );
+}
+
+function validateRuntimePayload(
+  payload: Partial<InitPayload & SendPayload>,
+): void {
+  if (
+    payload.workspacePath !== undefined &&
+    (typeof payload.workspacePath !== "string" ||
+      !path.isAbsolute(payload.workspacePath))
+  ) {
+    throw new HttpRequestError(400, "Workspace path must be absolute.");
+  }
+  if (payload.mcpServers !== undefined) {
+    const error = validateMcpServers(payload.mcpServers);
+    if (error) throw new HttpRequestError(400, error);
+  }
+}
+
+async function prepareRuntime(
+  provider: HelperProvider,
+  payload: Partial<InitPayload & SendPayload>,
+  helperConfig: HelperConfig,
+): Promise<void> {
+  const manager = queryManagerFor(provider);
+  const workspace = payload.workspacePath || manager.workspacePath;
+  if (!workspace) throw new HttpRequestError(400, "workspacePath is required");
+  validateRuntimePayload(payload);
+  const environment = { ...process.env, ...(payload.environment || {}) };
+  const resolved = { ...payload };
+  if (provider === "claude" && payload.claudePath === "")
+    resolved.claudePath = resolveClaudePath(undefined, environment);
+  if (provider === "codex" && payload.codexPath === "")
+    resolved.codexPath = resolveCodexPath(
+      undefined,
+      environment,
+      payload.codexInstallationMethod,
+    );
+  if (provider === "deepseek" && payload.deepseekPath === "")
+    resolved.deepseekPath = resolveDeepSeekPath(undefined, environment);
+  if (
+    !manager.isActive ||
+    manager.workspacePath !== workspace ||
+    manager.requiresRestart(runtimeRestartConfig(provider, resolved))
+  ) {
+    await manager.close();
+    try {
+      await initializeProviderFromPayload(
+        provider,
+        workspace,
+        resolved,
+        helperConfig,
+      );
+    } catch (error) {
+      await manager.close();
+      throw error;
+    }
+  } else {
+    manager.updateConfig(runtimeLiveUpdateConfig(provider, resolved));
+    if (resolved.permissionMode !== undefined)
+      await manager.setPermissionMode(resolved.permissionMode);
+    const previous = lastProviderInitializations.get(provider)?.payload;
+    lastProviderInitializations.set(provider, {
+      workspacePath: workspace,
+      payload: { ...previous, ...cacheableInitializationPayload(resolved) },
+      helperConfig,
+    });
+  }
+}
+
+async function handleOwnedSend(
+  payload: SendPayload & { requestId: string },
+  res: ServerResponse,
+  helperConfig: HelperConfig,
+  execution: RuntimeExecution,
 ): Promise<void> {
   const startedAt = Date.now();
   if (!payload.prompt && (!payload.images || payload.images.length === 0)) {
@@ -1330,130 +1558,26 @@ async function handleSendWithPayload(
     ...providerPayloadSummary(provider, payload),
   });
 
-  if (manager.isBusy) {
-    recordHelperDebug(
-      "http",
-      "/send rejected",
-      { provider, reason: "turn already in progress" },
-      "warning",
-    );
-    sendJson(res, 409, {
-      error: `${provider} already has a turn in progress. Cancel it or wait for it to finish.`,
-    });
-    return;
-  }
-
-  if (!manager.isActive) {
-    if (!currentWorkspacePath) {
-      recordHelperDebug(
-        "http",
-        "/send rejected",
-        { provider, reason: "runtime not initialized and no workspace" },
-        "warning",
-      );
-      sendJson(res, 400, {
-        error: "Persistent query not initialized. Call /init first.",
-      });
-      return;
-    }
-    try {
-      recordHelperDebug("http", "/send initializing inactive runtime", {
-        provider,
-        currentWorkspacePath,
-      });
-      await initializeProviderFromPayload(
-        provider,
-        currentWorkspacePath,
-        payload,
-        helperConfig,
-      );
-    } catch (error) {
-      recordHelperDebug(
-        "http",
-        "/send runtime initialize failed",
-        { provider, error: helperErrorData(error) },
-        "error",
-      );
-      sendJson(res, 500, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
-  }
-
-  const hasConfigUpdate =
-    payload.claudePath ||
-    payload.codexPath ||
-    payload.deepseekPath ||
-    payload.codexInstallationMethod ||
-    payload.codexWslDistro ||
-    payload.codexSafeMode ||
-    payload.model ||
-    payload.effort ||
-    payload.additionalDirectories ||
-    payload.environment ||
-    payload.permissionMode ||
-    payload.zoteroEndpointUrl ||
-    payload.enableZoteroMcp !== undefined ||
-    payload.mcpServers ||
-    payload.mcpDisabledTools ||
-    payload.conversationId ||
-    payload.providerState;
-  const needsRestart =
-    (!!requestedWorkspacePath &&
-      requestedWorkspacePath !== manager.workspacePath) ||
-    (hasConfigUpdate
-      ? manager.requiresRestart(runtimeRestartConfig(provider, payload))
-      : false);
-
-  if (needsRestart && manager.workspacePath) {
-    const restartWorkspacePath =
-      requestedWorkspacePath || manager.workspacePath;
-    try {
-      recordHelperDebug("http", "/send restarting runtime", {
-        provider,
-        restartWorkspacePath,
-      });
-      manager.close();
-      await initializeProviderFromPayload(
-        provider,
-        restartWorkspacePath,
-        payload,
-        helperConfig,
-      );
-    } catch (error) {
-      recordHelperDebug(
-        "http",
-        "/send restart failed",
-        { provider, error: helperErrorData(error) },
-        "error",
-      );
-      sendJson(res, 500, {
-        error: `Failed to restart ${provider} runtime: ${error instanceof Error ? error.message : String(error)}`,
-      });
-      return;
-    }
-  } else {
-    manager.updateConfig(runtimeLiveUpdateConfig(provider, payload));
-    if (payload.permissionMode !== undefined) {
-      try {
-        await manager.setPermissionMode(payload.permissionMode);
-      } catch (error) {
-        recordHelperDebug(
-          "http",
-          "/send permission update failed",
-          { provider, error: helperErrorData(error) },
-          "error",
-        );
-        sendJson(res, 500, {
-          error: `Failed to update permission mode: ${error instanceof Error ? error.message : String(error)}`,
-        });
-        return;
-      }
-    }
-  }
-
+  await prepareRuntime(provider, payload, helperConfig);
+  execution.ready = true;
+  execution.endpoint = payload.zoteroEndpointUrl;
+  assertExecution(execution);
+  permissionManagers[provider].setScope(
+    JSON.stringify({
+      provider,
+      conversationId: payload.conversationId,
+      workspace: manager.workspacePath,
+      cliPath:
+        provider === "claude"
+          ? payload.claudePath
+          : provider === "codex"
+            ? payload.codexPath
+            : payload.deepseekPath,
+      environment: payload.environment,
+    }),
+  );
   manager.setToolPolicy(payload.toolPolicy);
+  execution.acceptingBridge = true;
 
   res.writeHead(200, {
     "Content-Type": "application/x-ndjson; charset=utf-8",
@@ -1466,6 +1590,7 @@ async function handleSendWithPayload(
     runtime: "helper",
   });
   const eventCounts: Record<string, number> = {};
+  let outcome: "success" | "error" | "cancelled" = "success";
   const countEvent = (event: unknown) => {
     const record = event && typeof event === "object" ? event : null;
     const type =
@@ -1476,7 +1601,11 @@ async function handleSendWithPayload(
     return type;
   };
   recordHelperDebug("http", "/send stream opened", { provider });
-  writeEvent(res, { type: "ready" }, traceRecorder);
+  writeEvent(
+    res,
+    { type: "ready", requestId: payload.requestId },
+    traceRecorder,
+  );
   countEvent({ type: "ready" });
 
   try {
@@ -1485,6 +1614,8 @@ async function handleSendWithPayload(
       payload.prompt,
       payload.images,
     )) {
+      assertExecution(execution);
+      if (event.type === "error") outcome = "error";
       const type = countEvent(event);
       if (!firstAgentEvent) {
         firstAgentEvent = true;
@@ -1496,8 +1627,8 @@ async function handleSendWithPayload(
       }
       writeEvent(res, event, traceRecorder);
     }
-    writeEvent(res, { type: "done" }, traceRecorder);
-    countEvent({ type: "done" });
+    assertExecution(execution);
+    if (outcome === "error") await manager.close();
     recordHelperDebug("http", "/send done", {
       provider,
       elapsedMs: Date.now() - startedAt,
@@ -1515,19 +1646,30 @@ async function handleSendWithPayload(
       },
       "error",
     );
+    outcome = execution.lease.signal.aborted ? "cancelled" : "error";
+    if (outcome === "error") {
+      writeEvent(
+        res,
+        {
+          type: "error",
+          error: error instanceof Error ? error.message : String(error),
+        },
+        traceRecorder,
+      );
+    }
+    await cancelExecution(execution).catch(() => {});
+    await manager.close();
+  } finally {
+    execution.acceptingBridge = false;
+    if (execution.stopPromise) await execution.stopPromise;
+    await Promise.allSettled([...execution.bridgeCalls]);
+    if (outcome === "success" && execution.lease.signal.aborted)
+      outcome = "cancelled";
     writeEvent(
       res,
-      {
-        type: "error",
-        error: error instanceof Error ? error.message : String(error),
-      },
+      { type: "done", requestId: payload.requestId, outcome },
       traceRecorder,
     );
-    // The streaming query threw — its underlying CLI session may be dead.
-    // Drop it so the next message re-initializes a fresh query instead of
-    // reusing a broken one (which surfaces as a NetworkError client-side).
-    manager.close();
-  } finally {
     res.end();
   }
 }
@@ -1547,31 +1689,10 @@ async function handleQuery(
     return;
   }
 
-  const provider = normalizeProvider(payload.provider);
-  activeProvider = provider;
-  const manager = queryManagerFor(provider);
-
-  // Initialize if not already active
-  if (!manager.isActive) {
-    try {
-      await initializeProviderFromPayload(
-        provider,
-        payload.workspacePath,
-        payload,
-        helperConfig,
-      );
-    } catch (error) {
-      sendJson(res, 500, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
-  }
-
-  // Send the message using the already-parsed payload (do NOT re-read the
-  // request body — the stream has already been consumed above).
   await handleSendWithPayload(payload, res, helperConfig);
 }
+
+const auxiliaryControllers = new Set<AbortController>();
 
 async function handleAuxQuery(
   req: IncomingMessage,
@@ -1583,6 +1704,17 @@ async function handleAuxQuery(
     return;
   }
 
+  const controller = new AbortController();
+  auxiliaryControllers.add(controller);
+  const cancel = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  res.once("close", cancel);
+  const deadline = setTimeout(() => controller.abort(), 60_000);
+  if (res.destroyed) cancel();
+  const prompt = payload.systemPrompt
+    ? `${payload.systemPrompt}\n\n${payload.prompt}`
+    : payload.prompt;
   try {
     const provider = normalizeProvider(payload.provider);
     if (provider === "codex") {
@@ -1595,34 +1727,22 @@ async function handleAuxQuery(
         payload.codexInstallationMethod,
       );
       const auxManager = new CodexRuntimeAdapter(new PermissionManager());
-      await auxManager.initialize({
-        workspacePath: payload.workspacePath,
-        codexPath,
-        environment: payload.environment || {},
-        model: normalizeClaudeModel(payload.model) || "gpt-5.4-mini",
-        effort: payload.effort || "low",
-        permissionMode: "dontAsk",
-        codexInstallationMethod: payload.codexInstallationMethod,
-        codexWslDistro: payload.codexWslDistro,
-        codexSafeMode: payload.codexSafeMode,
-      });
-      let text = "";
-      const prompt = payload.systemPrompt
-        ? `${payload.systemPrompt}\n\n${payload.prompt}`
-        : payload.prompt;
-      try {
-        for await (const event of auxManager.sendMessageEvents(prompt)) {
-          if (
-            event.type === "text" ||
-            event.type === "text_delta" ||
-            event.type === "text_snapshot"
-          ) {
-            text += event.text;
-          }
-        }
-      } finally {
-        auxManager.close();
-      }
+      const text = await collectAuxiliaryRuntime(
+        auxManager,
+        {
+          workspacePath: payload.workspacePath,
+          codexPath,
+          environment: payload.environment || {},
+          model: normalizeClaudeModel(payload.model) || "gpt-5.4-mini",
+          effort: payload.effort || "low",
+          permissionMode: "dontAsk",
+          codexInstallationMethod: payload.codexInstallationMethod,
+          codexWslDistro: payload.codexWslDistro,
+          codexSafeMode: payload.codexSafeMode,
+        },
+        prompt,
+        controller.signal,
+      );
       sendJson(res, 200, { text });
       return;
     }
@@ -1638,28 +1758,20 @@ async function handleAuxQuery(
       );
       const nodePath = resolveDeepSeekNodePath(deepseekEnvironment);
       const auxManager = new DeepSeekRuntimeAdapter(new PermissionManager());
-      await auxManager.initialize({
-        workspacePath: payload.workspacePath,
-        deepseekPath,
-        nodePath,
-        environment: payload.environment || {},
-        model: payload.model,
-        effort: payload.effort,
-        permissionMode: "dontAsk",
-      });
-      let text = "";
-      const prompt = payload.systemPrompt
-        ? `${payload.systemPrompt}\n\n${payload.prompt}`
-        : payload.prompt;
-      try {
-        for await (const event of auxManager.sendMessageEvents(prompt)) {
-          if (event.type === "text" || event.type === "text_delta") {
-            text += event.text;
-          }
-        }
-      } finally {
-        auxManager.close();
-      }
+      const text = await collectAuxiliaryRuntime(
+        auxManager,
+        {
+          workspacePath: payload.workspacePath,
+          deepseekPath,
+          nodePath,
+          environment: payload.environment || {},
+          model: payload.model,
+          effort: payload.effort,
+          permissionMode: "dontAsk",
+        },
+        prompt,
+        controller.signal,
+      );
       sendJson(res, 200, { text });
       return;
     }
@@ -1684,40 +1796,56 @@ async function handleAuxQuery(
     options.maxTurns = 1;
     options.tools = [];
     options.thinking = { type: "disabled" };
+    options.abortController = controller;
     if (payload.systemPrompt) {
       options.systemPrompt = payload.systemPrompt;
     }
 
     let text = "";
-    for await (const message of query({ prompt: payload.prompt, options })) {
-      const record =
-        message && typeof message === "object"
-          ? (message as Record<string, unknown>)
-          : null;
-      if (record?.type === "assistant") {
-        const sdkMessage =
-          record.message && typeof record.message === "object"
-            ? (record.message as Record<string, unknown>)
+    const session = query({ prompt: payload.prompt, options });
+    const close = () => session.close();
+    controller.signal.addEventListener("abort", close, { once: true });
+    try {
+      if (controller.signal.aborted)
+        throw new DOMException("Request cancelled", "AbortError");
+      for await (const message of session) {
+        const record =
+          message && typeof message === "object"
+            ? (message as Record<string, unknown>)
             : null;
-        const content = sdkMessage?.content;
-        if (Array.isArray(content)) {
-          for (const part of content) {
-            const block =
-              part && typeof part === "object"
-                ? (part as Record<string, unknown>)
-                : null;
-            if (block?.type === "text" && typeof block.text === "string") {
-              text += block.text;
+        if (record?.type === "assistant") {
+          const sdkMessage =
+            record.message && typeof record.message === "object"
+              ? (record.message as Record<string, unknown>)
+              : null;
+          const content = sdkMessage?.content;
+          if (Array.isArray(content)) {
+            for (const part of content) {
+              const block =
+                part && typeof part === "object"
+                  ? (part as Record<string, unknown>)
+                  : null;
+              if (block?.type === "text" && typeof block.text === "string") {
+                text += block.text;
+              }
             }
           }
         }
       }
+    } finally {
+      controller.signal.removeEventListener("abort", close);
+      session.close();
     }
     sendJson(res, 200, { text });
   } catch (error) {
-    sendJson(res, 500, {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    if (!res.destroyed && !res.writableEnded)
+      sendJson(res, 500, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+  } finally {
+    clearTimeout(deadline);
+    res.off("close", cancel);
+    auxiliaryControllers.delete(controller);
   }
 }
 
@@ -1737,38 +1865,24 @@ async function handleModels(
     return;
   }
   const manager = queryManagerFor(provider);
-  if (manager.isBusy) {
-    sendJson(res, 409, { error: `${provider} is busy with an active turn.` });
-    return;
-  }
-  try {
-    if (!manager.isActive) {
-      await initializeProviderFromPayload(
-        provider,
-        payload.workspacePath,
-        payload,
-        helperConfig,
-      );
-    }
-    activeProvider = provider;
-    const models = await manager.listModels();
-    recordHelperDebug("runtime", "models listed", {
-      provider,
-      count: models.length,
-      defaultModel: models.find((model) => model.isDefault)?.value,
-    });
-    sendJson(res, 200, { models });
-  } catch (error) {
-    recordHelperDebug(
-      "runtime",
-      "models list failed",
-      { provider, error: helperErrorData(error) },
-      "error",
-    );
-    sendJson(res, 500, {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  validateRuntimePayload(payload);
+  await withRuntimeLease(
+    provider,
+    randomUUID(),
+    payload.conversationId,
+    res,
+    async (execution) => {
+      // Always prepare against the requested workspace. The active runtime may
+      // belong to another provider/workspace, and listModels requires a live
+      // manager for this exact target.
+      await prepareRuntime(provider, payload, helperConfig);
+      execution.ready = true;
+      assertExecution(execution);
+      const models = await manager.listModels();
+      assertExecution(execution);
+      sendJson(res, 200, { models });
+    },
+  );
 }
 
 async function handleInstallDeepSeek(res: ServerResponse): Promise<void> {
@@ -1804,6 +1918,118 @@ async function route(
     return;
   }
 
+  const url = new URL(req.url || "/", "http://127.0.0.1");
+  const endpoint = url.pathname;
+
+  if (
+    req.method === "GET" &&
+    ["/pending-permission", "/pending-question", "/pending-exit-plan"].includes(
+      endpoint,
+    )
+  ) {
+    const execution = ownedExecution(url.searchParams.get("ownerRequestId"));
+    const manager = runtimeAdapters[execution.lease.provider];
+    const pending =
+      endpoint === "/pending-permission"
+        ? permissionManagers[execution.lease.provider].getCurrentRequest()
+        : endpoint === "/pending-question"
+          ? manager.getPendingQuestion()
+          : manager.getPendingExitPlan();
+    sendJson(
+      res,
+      pending ? 200 : 204,
+      pending ? { ...pending, ownerRequestId: execution.lease.requestId } : "",
+    );
+    return;
+  }
+
+  if (
+    req.method === "POST" &&
+    [
+      "/cancel",
+      "/cancel-permission",
+      "/cancel-question",
+      "/cancel-exit-plan",
+    ].includes(endpoint)
+  ) {
+    const body = await readJsonBody<{ ownerRequestId?: string }>(req);
+    if (
+      typeof body.ownerRequestId !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(body.ownerRequestId)
+    ) {
+      throw new HttpRequestError(400, "ownerRequestId is required");
+    }
+    const execution = executions.get(body.ownerRequestId);
+    if (execution) await cancelExecution(execution);
+    else rememberCancelledRequest(body.ownerRequestId);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (
+    req.method === "POST" &&
+    ["/permission", "/answer-question", "/answer-exit-plan"].includes(endpoint)
+  ) {
+    const body = await readJsonBody<{
+      ownerRequestId?: string;
+      requestId: string;
+      toolUseId: string;
+      allowed: boolean;
+      remember?: boolean;
+      answers: Record<string, string | string[]>;
+      response?: string;
+      decision: import("./runtime/PersistentQueryManager").ExitPlanDecision;
+    }>(req);
+    const execution = ownedExecution(body.ownerRequestId);
+    const manager = runtimeAdapters[execution.lease.provider];
+    let answered = false;
+    if (endpoint === "/permission") {
+      if (typeof body.allowed !== "boolean")
+        throw new HttpRequestError(400, "allowed must be boolean");
+      answered = permissionManagers[execution.lease.provider].resolve(
+        body.requestId,
+        { allowed: body.allowed, remember: body.remember === true },
+      );
+    } else if (endpoint === "/answer-question") {
+      if (
+        !body.answers ||
+        typeof body.answers !== "object" ||
+        Array.isArray(body.answers) ||
+        !Object.values(body.answers).every(
+          (value) =>
+            typeof value === "string" ||
+            (Array.isArray(value) &&
+              value.every((entry) => typeof entry === "string")),
+        )
+      ) {
+        throw new HttpRequestError(400, "Invalid question answers");
+      }
+      answered =
+        manager.getPendingQuestion()?.toolUseId === body.toolUseId &&
+        manager.answerQuestion(body.toolUseId, body.answers, body.response);
+    } else {
+      if (
+        !body.decision ||
+        !["approve", "approve-new-session", "feedback"].includes(
+          body.decision.type,
+        ) ||
+        (body.decision.type === "feedback" &&
+          typeof body.decision.text !== "string")
+      ) {
+        throw new HttpRequestError(400, "Invalid plan decision");
+      }
+      answered =
+        manager.getPendingExitPlan()?.toolUseId === body.toolUseId &&
+        manager.answerExitPlan(body.toolUseId, body.decision);
+    }
+    sendJson(
+      res,
+      answered ? 200 : 404,
+      answered ? { ok: true } : { error: "Interaction not found or expired" },
+    );
+    return;
+  }
+
   if (req.method === "GET" && req.url === "/health") {
     sendJson(res, 200, {
       ok: true,
@@ -1816,7 +2042,7 @@ async function route(
 
   if (req.method === "GET" && req.url === "/trace/latest") {
     if (latestAgentTrace) {
-      sendJson(res, 200, latestAgentTrace);
+      sendJson(res, 200, latestAgentTrace.snapshot());
     } else {
       sendJson(res, 204, "");
     }
@@ -1840,19 +2066,9 @@ async function route(
   }
 
   if (req.method === "POST" && req.url === "/shutdown") {
+    shutdownRequested = true;
     sendJson(res, 200, { ok: true });
-    setTimeout(() => process.exit(0), 50);
-    return;
-  }
-
-  // Get current pending permission request
-  if (req.method === "GET" && req.url === "/pending-permission") {
-    const request = permissionManager.getCurrentRequest();
-    if (request) {
-      sendJson(res, 200, request);
-    } else {
-      sendJson(res, 204, ""); // No content
-    }
+    setTimeout(() => requestHelperShutdown(), 50);
     return;
   }
 
@@ -1878,13 +2094,47 @@ async function route(
 
   if (req.method === "POST" && req.url === "/test-mcp") {
     const body = await readJsonBody<TestMcpPayload>(req);
-    const result = await testMcpServer(body.config || {});
+    const error = validateMcpServerConfig(body.config);
+    if (error) throw new HttpRequestError(400, error);
+    const result = await testMcpServer(body.config);
     sendJson(res, 200, result);
     return;
   }
 
   if (req.method === "POST" && req.url === "/request-permission") {
     const body = await readJsonBody<RequestPermissionPayload>(req);
+    if (
+      body.provider !== undefined &&
+      body.provider !== "claude" &&
+      body.provider !== "codex" &&
+      body.provider !== "deepseek"
+    ) {
+      throw new HttpRequestError(400, "Invalid permission provider");
+    }
+    const provider = body.provider || activeProvider;
+    // External MCP bridges cannot always know the transient request id. Resolve
+    // the currently leased execution for the provider while still honoring an
+    // explicit owner id when supplied.
+    let permissionExecution: RuntimeExecution | undefined;
+    if (body.ownerRequestId !== undefined) {
+      permissionExecution = ownedExecution(body.ownerRequestId);
+      if (permissionExecution.lease.provider !== provider) {
+        throw new HttpRequestError(
+          409,
+          "Permission provider does not match request",
+        );
+      }
+    } else {
+      const lease = coordinator.active(provider);
+      permissionExecution = lease ? executions.get(lease.requestId) : undefined;
+    }
+    if (!permissionExecution || !coordinator.owns(permissionExecution.lease)) {
+      sendJson(res, 404, {
+        allowed: false,
+        error: "No active request for provider",
+      });
+      return;
+    }
     const toolName = body.toolName || "Tool action";
     const inputRecord =
       body.input && typeof body.input === "object"
@@ -1893,124 +2143,26 @@ async function route(
     const action =
       typeof inputRecord.action === "string" ? inputRecord.action : "";
     const policyToolName = action ? `mcp__zotero__${action}` : toolName;
-    const policyDenial = permissionManager.getToolPolicyDenial(policyToolName);
+    const manager = permissionManagers[provider];
+    const policyDenial = manager.getToolPolicyDenial(policyToolName);
     if (policyDenial) {
       sendJson(res, 200, { allowed: false, error: policyDenial });
       return;
     }
-    if (permissionManager.isRemembered(toolName, body.input)) {
+    if (manager.isRemembered(toolName, body.input)) {
       sendJson(res, 200, { allowed: true, remember: true });
       return;
     }
     const requestId = Math.random().toString(36).slice(2, 11);
-    const decision = await permissionManager.request({
+    const decision = await manager.request({
       id: requestId,
       toolName,
       input: body.input,
     });
     if (decision.allowed && decision.remember) {
-      permissionManager.remember(toolName, body.input);
+      manager.remember(toolName, body.input);
     }
     sendJson(res, 200, decision);
-    return;
-  }
-
-  // Permission decision endpoint
-  if (req.method === "POST" && req.url === "/permission") {
-    const body = await readJsonBody<{
-      requestId: string;
-      allowed: boolean;
-      remember?: boolean;
-    }>(req);
-    if (
-      permissionManager.resolve(body.requestId, {
-        allowed: body.allowed,
-        remember: body.remember,
-      })
-    ) {
-      sendJson(res, 200, { ok: true });
-    } else {
-      sendJson(res, 404, { error: "Permission request not found or expired" });
-    }
-    return;
-  }
-
-  // Cancel all pending permission requests (used by stop/cancel button)
-  if (req.method === "POST" && req.url === "/cancel-permission") {
-    permissionManager.cancelAll();
-    activeQueryManager().cancelPendingQuestion();
-    activeQueryManager().cancelPendingExitPlan();
-    activeQueryManager().cancelActiveTurn();
-    sendJson(res, 200, { ok: true });
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/cancel-question") {
-    activeQueryManager().cancelPendingQuestion();
-    activeQueryManager().cancelPendingExitPlan();
-    activeQueryManager().cancelActiveTurn();
-    sendJson(res, 200, { ok: true });
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/cancel-exit-plan") {
-    activeQueryManager().cancelPendingExitPlan();
-    sendJson(res, 200, { ok: true });
-    return;
-  }
-
-  // Get current pending AskUserQuestion request
-  if (req.method === "GET" && req.url === "/pending-question") {
-    const question = activeQueryManager().getPendingQuestion();
-    if (question) {
-      sendJson(res, 200, question);
-    } else {
-      sendJson(res, 204, "");
-    }
-    return;
-  }
-
-  if (req.method === "GET" && req.url === "/pending-exit-plan") {
-    const exitPlan = activeQueryManager().getPendingExitPlan();
-    if (exitPlan) {
-      sendJson(res, 200, exitPlan);
-    } else {
-      sendJson(res, 204, "");
-    }
-    return;
-  }
-
-  // Answer a pending AskUserQuestion
-  if (req.method === "POST" && req.url === "/answer-question") {
-    const body = await readJsonBody<{
-      toolUseId: string;
-      answers: Record<string, string | string[]>;
-      response?: string;
-    }>(req);
-    if (
-      activeQueryManager().answerQuestion(
-        body.toolUseId,
-        body.answers,
-        body.response,
-      )
-    ) {
-      sendJson(res, 200, { ok: true });
-    } else {
-      sendJson(res, 404, { error: "Question not found or expired" });
-    }
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/answer-exit-plan") {
-    const body = await readJsonBody<{
-      toolUseId: string;
-      decision: import("./runtime/PersistentQueryManager").ExitPlanDecision;
-    }>(req);
-    if (activeQueryManager().answerExitPlan(body.toolUseId, body.decision)) {
-      sendJson(res, 200, { ok: true });
-    } else {
-      sendJson(res, 404, { error: "Exit plan request not found or expired" });
-    }
     return;
   }
 
@@ -2039,6 +2191,9 @@ async function route(
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
+let requestHelperShutdown: () => void;
+let shutdownRequested = false;
+
 function main(): void {
   if (process.argv.includes("--zotero-mcp-stdio")) {
     runZoteroMcpStdioServer(process.argv.slice(2));
@@ -2048,10 +2203,19 @@ function main(): void {
     throw new Error("Claudero helper must be started with --server");
   }
   const config = parseArgs(process.argv.slice(2));
-
+  let shuttingDown = false;
   const server = createServer((req, res) => {
+    if (shutdownRequested || shuttingDown) {
+      sendJson(res, 503, { error: "Helper is shutting down" });
+      return;
+    }
     route(req, res, config).catch((error) => {
-      const status = error instanceof HttpRequestError ? error.status : 500;
+      const status =
+        error instanceof RequestBusyError
+          ? 409
+          : error instanceof HttpRequestError
+            ? error.status
+            : 500;
       if (!res.headersSent) {
         sendJson(res, status, {
           error: error instanceof Error ? error.message : String(error),
@@ -2061,6 +2225,32 @@ function main(): void {
       }
     });
   });
+
+  requestHelperShutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    helperLifetime.abort();
+    stopWatchingParent();
+    for (const lease of coordinator.pause()) lease.cancel();
+    for (const controller of auxiliaryControllers) controller.abort();
+    for (const provider of ["claude", "codex", "deepseek"] as const) {
+      permissionManagers[provider].cancelAll();
+      try {
+        runtimeAdapters[provider].close();
+      } catch {
+        /* Continue closing other providers. */
+      }
+    }
+    server.close();
+    server.closeAllConnections();
+    // Let child-process cleanup and kill escalation finish before forcing exit.
+    setTimeout(() => process.exit(0), 5_000).unref();
+  };
+  const stopWatchingParent = watchParentProcess(config.parentPid, () =>
+    requestHelperShutdown(),
+  );
+  process.once("SIGTERM", () => requestHelperShutdown());
+  process.once("SIGINT", () => requestHelperShutdown());
 
   server.listen(config.port, config.host, () => {
     console.log(

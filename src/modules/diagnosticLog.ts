@@ -1,6 +1,8 @@
 import { getPref } from "../utils/prefs";
 import { isZoteroMcpEnabled } from "./mcpSettings";
 import type { ClauderoSelectionContext } from "./zoteroContext";
+import { withRequestDeadline, waitWithSignal } from "../shared/requestDeadline";
+import { throwIfAborted } from "../shared/helperStream";
 import {
   sanitizeDiagnosticData,
   stableDiagnosticHash,
@@ -220,24 +222,30 @@ export function snapshotDiagnosticLog(extra: Record<string, unknown> = {}) {
   };
 }
 
-async function fetchHelperDiagnostics(): Promise<unknown> {
+async function fetchHelperDiagnostics(signal?: AbortSignal): Promise<unknown> {
   try {
-    const port = Number(getPref("helperPort") || 38660);
-    const tokenPath = PathUtils.join(
-      Zotero.Profile.dir,
-      "claudero",
-      "helper",
-      ".token",
-    );
-    const token = (await IOUtils.readUTF8(tokenPath)).trim();
-    const response = await fetch(`http://127.0.0.1:${port}/diagnostics`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) {
-      return { error: `Helper returned ${response.status}` };
-    }
-    return response.json();
+    return await withRequestDeadline(async (requestSignal) => {
+      const port = Number(getPref("helperPort") || 38660);
+      const tokenPath = PathUtils.join(
+        Zotero.Profile.dir,
+        "claudero",
+        "helper",
+        ".token",
+      );
+      const token = (
+        await waitWithSignal(IOUtils.readUTF8(tokenPath), requestSignal)
+      ).trim();
+      const response = await fetch(`http://127.0.0.1:${port}/diagnostics`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: requestSignal,
+      });
+      if (!response.ok) {
+        return { error: `Helper returned ${response.status}` };
+      }
+      return response.json();
+    }, signal);
   } catch (error) {
+    throwIfAborted(signal);
     return {
       error: error instanceof Error ? error.message : String(error),
     };
@@ -261,9 +269,12 @@ function safeTimestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-export async function exportDiagnosticLog(): Promise<string> {
+export async function exportDiagnosticLog(
+  signal?: AbortSignal,
+): Promise<string> {
   logDiagnostic("diagnostics.export.requested", { entries: entries.length });
-  const helperDiagnostics = await fetchHelperDiagnostics();
+  const helperDiagnostics = await fetchHelperDiagnostics(signal);
+  throwIfAborted(signal);
   const payload = snapshotDiagnosticLog({ helperDiagnostics });
   const filename = `claudero-diagnostics-${safeTimestamp()}.json`;
   const path = desktopPath(filename);
@@ -273,6 +284,7 @@ export async function exportDiagnosticLog(): Promise<string> {
     logDiagnostic("diagnostics.export", { path, entries: entries.length });
     return path;
   } catch (error) {
+    throwIfAborted(signal);
     const fallback = await fallbackDiagnosticPath(filename);
     await Zotero.File.putContentsAsync(fallback, data, "utf-8");
     logDiagnostic(

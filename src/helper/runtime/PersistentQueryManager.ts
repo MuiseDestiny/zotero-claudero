@@ -1,3 +1,4 @@
+import { throwIfAborted } from "../../shared/helperStream";
 import {
   query,
   type Options,
@@ -147,12 +148,17 @@ export class PersistentQueryManager {
     return Object.keys(servers).sort();
   }
 
-  async initialize(config: PersistentQueryConfig): Promise<void> {
+  async initialize(
+    config: PersistentQueryConfig,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    throwIfAborted(signal);
     if (this.state) {
       throw new Error("Persistent query already initialized");
     }
 
     await mkdir(config.workspacePath, { recursive: true });
+    throwIfAborted(signal);
 
     const messageChannel = new MessageChannel();
     const options = buildQueryOptions({
@@ -746,6 +752,7 @@ export class PersistentQueryManager {
     void this.state.query.interrupt().catch(() => {});
     void this.state.iter.return?.().catch(() => {});
     this.state.messageChannel.close();
+    this.state.query.close();
     this.state = null;
   }
 

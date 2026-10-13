@@ -14,18 +14,12 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 
-const defaultPython =
-  "/Users/muisedestiny/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3";
-const defaultPdfRoot = "/Users/muisedestiny/Documents/Zotero";
-
 function parseArgs(argv) {
   const args = {
-    root: process.env.CLAUDERO_PDF_FIXTURE_ROOT || defaultPdfRoot,
+    root: process.env.CLAUDERO_PDF_FIXTURE_ROOT || "",
     limit: Number(process.env.CLAUDERO_PDF_EVAL_LIMIT || 12),
     maxPages: Number(process.env.CLAUDERO_PDF_EVAL_MAX_PAGES || 6),
-    python:
-      process.env.PYTHON ||
-      (existsSync(defaultPython) ? defaultPython : "python3"),
+    python: process.env.PYTHON || "python3",
     report: path.join(repoRoot, ".claudero-eval", "pdf-golden-report.json"),
     minQuoteFixtures: 3,
   };
@@ -332,6 +326,11 @@ function summarize(results, totalPdfCount) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (!args.root) {
+    throw new Error(
+      "Provide --root <PDF directory> or set CLAUDERO_PDF_FIXTURE_ROOT.",
+    );
+  }
   if (!existsSync(args.root)) {
     throw new Error(`PDF fixture root does not exist: ${args.root}`);
   }

@@ -1,4 +1,10 @@
 import { getPref, setPref } from "../utils/prefs";
+import { isConfigRecord } from "../shared/configValidation";
+import {
+  validateAcademicSkill,
+  validateStoredAcademicSkill,
+} from "../shared/academicSkillValidation";
+export { validateAcademicSkill } from "../shared/academicSkillValidation";
 import type { AcademicToolPolicy } from "../shared/academicToolPolicy";
 import type { ClauderoSelectionContext } from "./zoteroContext";
 
@@ -73,6 +79,15 @@ export interface StoredAcademicSkill {
 export interface AcademicSkillStore {
   version: 1;
   skills: Record<string, StoredAcademicSkill>;
+  invalidSkills?: Record<string, AcademicSkillInvalidRecord>;
+  /** Unreadable/unsupported document: block writes until explicitly repaired. */
+  rawDocument?: string;
+  validationError?: string;
+}
+
+export interface AcademicSkillInvalidRecord {
+  raw: unknown;
+  error: string;
 }
 
 export type AcademicSkillStatus =
@@ -93,6 +108,8 @@ export interface AcademicSkillRecord {
   status: AcademicSkillStatus;
   updateAvailable: boolean;
   modified: boolean;
+  validationError?: string;
+  rawStored?: unknown;
 }
 
 export interface AcademicSkillMatch {
@@ -352,7 +369,7 @@ function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue);
   if (value && typeof value === "object") {
     const input = value as Record<string, unknown>;
-    const output: Record<string, unknown> = {};
+    const output: Record<string, unknown> = Object.create(null);
     for (const key of Object.keys(input).sort()) {
       const nested = input[key];
       if (nested !== undefined) output[key] = stableValue(nested);
@@ -391,21 +408,67 @@ function normalizeId(value: string): string {
 export function parseAcademicSkillStore(raw = ""): AcademicSkillStore {
   if (!raw.trim()) return { version: 1, skills: {} };
   try {
-    const parsed = JSON.parse(raw) as Partial<AcademicSkillStore>;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      !isConfigRecord(parsed) ||
+      (parsed.version !== undefined && parsed.version !== 1) ||
+      !isConfigRecord(parsed.skills)
+    ) {
+      throw new Error("Skill store must contain a version 1 skills object.");
+    }
+    const skills: Record<string, StoredAcademicSkill> = {};
+    const invalidSkills: Record<string, AcademicSkillInvalidRecord> = {};
+    for (const [id, candidate] of Object.entries(parsed.skills)) {
+      const error = validateStoredAcademicSkill(candidate, id);
+      if (error) {
+        Object.defineProperty(invalidSkills, id, {
+          value: { raw: candidate, error },
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+      } else {
+        Object.defineProperty(skills, id, {
+          value: candidate,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+      }
+    }
     return {
       version: 1,
-      skills:
-        parsed.skills && typeof parsed.skills === "object"
-          ? (parsed.skills as Record<string, StoredAcademicSkill>)
-          : {},
+      skills,
+      ...(Object.keys(invalidSkills).length ? { invalidSkills } : {}),
     };
-  } catch {
-    return { version: 1, skills: {} };
+  } catch (error) {
+    return {
+      version: 1,
+      skills: {},
+      rawDocument: raw,
+      validationError:
+        error instanceof Error ? error.message : "Invalid skill store.",
+    };
   }
 }
 
 export function serializeAcademicSkillStore(store: AcademicSkillStore): string {
-  return JSON.stringify({ version: 1, skills: store.skills }, null, 2);
+  if (store.rawDocument !== undefined) return store.rawDocument;
+  for (const [id, skill] of Object.entries(store.skills)) {
+    const error = validateStoredAcademicSkill(skill, id);
+    if (error) throw new Error(error);
+  }
+  const rawInvalid = Object.fromEntries(
+    Object.entries(store.invalidSkills || {}).map(([id, invalid]) => [
+      id,
+      invalid.raw,
+    ]),
+  );
+  return JSON.stringify(
+    { version: 1, skills: { ...rawInvalid, ...store.skills } },
+    null,
+    2,
+  );
 }
 
 export function getAcademicSkillStore(): AcademicSkillStore {
@@ -413,22 +476,62 @@ export function getAcademicSkillStore(): AcademicSkillStore {
 }
 
 export function saveAcademicSkillStore(store: AcademicSkillStore): void {
+  if (store.rawDocument !== undefined)
+    throw new Error(
+      "Repair the invalid skill store before saving; original data has been preserved.",
+    );
   setPref("academicSkills", serializeAcademicSkillStore(store));
+}
+
+function editableSkillStore(store: AcademicSkillStore): AcademicSkillStore {
+  if (store.rawDocument !== undefined)
+    throw new Error(
+      "Repair the invalid skill store before saving; original data has been preserved.",
+    );
+  return {
+    ...store,
+    skills: { ...store.skills },
+    invalidSkills: { ...store.invalidSkills },
+  };
 }
 
 export function getAcademicSkillRecords(
   store = getAcademicSkillStore(),
   builtins = BUILTIN_ACADEMIC_SKILLS,
 ): AcademicSkillRecord[] {
+  // Callers may supply an in-memory store too; apply the same read boundary.
+  if (store.rawDocument === undefined) {
+    store = parseAcademicSkillStore(
+      JSON.stringify({
+        version: 1,
+        skills: {
+          ...Object.fromEntries(
+            Object.entries(store.invalidSkills || {}).map(([id, entry]) => [
+              id,
+              entry.raw,
+            ]),
+          ),
+          ...store.skills,
+        },
+      }),
+    );
+  }
   const builtinById = new Map(builtins.map((skill) => [skill.id, skill]));
   const records: AcademicSkillRecord[] = [];
 
   for (const builtin of builtins) {
-    const stored = store.skills[builtin.id];
+    const stored = Object.prototype.hasOwnProperty.call(
+      store.skills,
+      builtin.id,
+    )
+      ? store.skills[builtin.id]
+      : undefined;
+    const invalid = store.invalidSkills?.[builtin.id];
     const builtinHash = academicSkillHash(builtin);
     const effective = stored?.skill || builtin;
     const effectiveHash = academicSkillHash(effective);
-    const enabled = stored ? stored.enabled !== false : true;
+    const enabled =
+      !invalid && !store.validationError && (stored ? stored.enabled : true);
     const modified = !!stored && effectiveHash !== builtinHash;
     const updateAvailable =
       !!stored?.basedOnBuiltinHash &&
@@ -452,6 +555,12 @@ export function getAcademicSkillRecords(
       status,
       updateAvailable,
       modified,
+      ...(invalid
+        ? { validationError: invalid.error, rawStored: invalid.raw }
+        : {}),
+      ...(store.validationError
+        ? { validationError: store.validationError }
+        : {}),
     });
   }
 
@@ -469,6 +578,28 @@ export function getAcademicSkillRecords(
     });
   }
 
+  for (const [id, invalid] of Object.entries(store.invalidSkills || {})) {
+    if (builtinById.has(id)) continue;
+    const placeholder = createImportedSkill({
+      id,
+      title: id,
+      description: invalid.error,
+      body: "",
+      sourceType: "markdown",
+    });
+    placeholder.id = id;
+    records.push({
+      id,
+      skill: placeholder,
+      enabled: false,
+      effectiveHash: "",
+      status: "disabled",
+      updateAvailable: false,
+      modified: true,
+      validationError: invalid.error,
+      rawStored: invalid.raw,
+    });
+  }
   return records.sort((a, b) => a.skill.title.localeCompare(b.skill.title));
 }
 
@@ -483,23 +614,26 @@ export function saveAcademicSkillOverride(
   enabled = true,
   store = getAcademicSkillStore(),
 ): AcademicSkillStore {
+  const error = validateAcademicSkill(skill);
+  if (error) throw new Error(error);
+  if (typeof enabled !== "boolean")
+    throw new Error("Skill enabled must be a boolean.");
+  const next = editableSkillStore(store);
   const builtin = BUILTIN_ACADEMIC_SKILLS.find((item) => item.id === skill.id);
-  const basedOnBuiltinHash = builtin ? academicSkillHash(builtin) : undefined;
-  const now = Date.now();
-  const next: AcademicSkillStore = {
-    version: 1,
-    skills: {
-      ...store.skills,
-      [skill.id]: {
-        id: skill.id,
-        enabled,
-        basedOnBuiltinHash,
-        skill,
-        updatedAt: now,
-        source: skill.source,
-      },
+  Object.defineProperty(next.skills, skill.id, {
+    value: {
+      id: skill.id,
+      enabled,
+      skill,
+      ...(builtin ? { basedOnBuiltinHash: academicSkillHash(builtin) } : {}),
+      updatedAt: Date.now(),
+      ...(skill.source ? { source: skill.source } : {}),
     },
-  };
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+  delete next.invalidSkills?.[skill.id];
   saveAcademicSkillStore(next);
   return next;
 }
@@ -511,25 +645,18 @@ export function setAcademicSkillEnabled(
 ): AcademicSkillStore {
   const record = getAcademicSkillRecords(store).find((item) => item.id === id);
   if (!record) return store;
-  const next: AcademicSkillStore = { version: 1, skills: { ...store.skills } };
-  next.skills[id] = {
-    id,
-    enabled,
-    basedOnBuiltinHash: record.builtinHash,
-    skill: record.skill,
-    updatedAt: Date.now(),
-    source: record.skill.source,
-  };
-  saveAcademicSkillStore(next);
-  return next;
+  if (record.validationError)
+    throw new Error("Repair this skill before enabling it.");
+  return saveAcademicSkillOverride(record.skill, enabled, store);
 }
 
 export function resetAcademicSkillToBuiltin(
   id: string,
   store = getAcademicSkillStore(),
 ): AcademicSkillStore {
-  const next: AcademicSkillStore = { version: 1, skills: { ...store.skills } };
+  const next = editableSkillStore(store);
   delete next.skills[id];
+  delete next.invalidSkills?.[id];
   saveAcademicSkillStore(next);
   return next;
 }
@@ -540,8 +667,9 @@ export function deleteCustomAcademicSkill(
 ): AcademicSkillStore {
   const hasBuiltin = BUILTIN_ACADEMIC_SKILLS.some((skill) => skill.id === id);
   if (hasBuiltin) return store;
-  const next: AcademicSkillStore = { version: 1, skills: { ...store.skills } };
+  const next = editableSkillStore(store);
   delete next.skills[id];
+  delete next.invalidSkills?.[id];
   saveAcademicSkillStore(next);
   return next;
 }
@@ -552,8 +680,10 @@ export function updateAcademicSkillToBuiltin(
 ): AcademicSkillStore {
   const builtin = BUILTIN_ACADEMIC_SKILLS.find((skill) => skill.id === id);
   if (!builtin) return store;
-  const next: AcademicSkillStore = { version: 1, skills: { ...store.skills } };
-  const previousEnabled = next.skills[id]?.enabled !== false;
+  const next = editableSkillStore(store);
+  const previousEnabled =
+    !next.invalidSkills?.[id] && next.skills[id]?.enabled !== false;
+  delete next.invalidSkills?.[id];
   if (previousEnabled) {
     delete next.skills[id];
   } else {
@@ -706,7 +836,7 @@ function parseFrontmatter(raw: string): {
 } {
   const match = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
   if (!match) return { metadata: {}, body: raw.trim() };
-  const metadata: Record<string, string> = {};
+  const metadata: Record<string, string> = Object.create(null);
   for (const line of match[1].split(/\r?\n/)) {
     const sep = line.indexOf(":");
     if (sep <= 0) continue;
@@ -722,39 +852,48 @@ export function importAcademicSkillFromText(
   const text = raw.trim();
   if (!text) throw new Error("Skill content is empty.");
 
+  let parsed: unknown;
+  let json = false;
   try {
-    const parsed = JSON.parse(text) as
-      | AcademicSkill
-      | { skill?: AcademicSkill }
-      | {
-          name?: string;
-          title?: string;
-          description?: string;
-          messages?: unknown[];
-        };
-    if ("skill" in parsed && parsed.skill) {
-      return sanitizeImportedAcademicSkill(parsed.skill, options.sourceType);
-    }
-    if ("id" in parsed && typeof parsed.id === "string") {
+    parsed = JSON.parse(text);
+    json = true;
+  } catch (error) {
+    // JSON-looking input must not silently become a Markdown prompt.
+    if (/^[{[]/.test(text)) throw error;
+  }
+  if (json) {
+    if (!isConfigRecord(parsed))
+      throw new Error("Skill JSON must be an object.");
+    if ("skill" in parsed || "id" in parsed) {
+      const input = "skill" in parsed ? parsed.skill : parsed;
+      const error = validateAcademicSkill(input, true);
+      if (error) throw new Error(error);
       return sanitizeImportedAcademicSkill(
-        parsed as AcademicSkill,
+        input as AcademicSkill,
         options.sourceType,
       );
     }
-    if ("name" in parsed && typeof parsed.name === "string") {
-      const promptMessages = Array.isArray(parsed.messages)
-        ? parsed.messages.map((message) => stableStringify(message)).join("\n")
-        : "";
+    if (typeof parsed.name === "string") {
+      for (const key of ["title", "description"]) {
+        if (key in parsed && typeof parsed[key] !== "string")
+          throw new Error(`Prompt ${key} must be a string.`);
+      }
+      if ("messages" in parsed && !Array.isArray(parsed.messages))
+        throw new Error("Prompt messages must be an array.");
       return createImportedSkill({
         id: parsed.name,
-        title: parsed.title || parsed.name,
-        description: parsed.description || `Imported prompt ${parsed.name}`,
-        body: promptMessages || parsed.description || "",
+        title: (parsed.title as string) || parsed.name,
+        description:
+          (parsed.description as string) || `Imported prompt ${parsed.name}`,
+        body: Array.isArray(parsed.messages)
+          ? parsed.messages
+              .map((message) => stableStringify(message))
+              .join("\n")
+          : (parsed.description as string) || "",
         sourceType: "mcp-prompt",
       });
     }
-  } catch {
-    // Fall through to Markdown/SKILL.md parsing.
+    throw new Error("Skill JSON must contain a skill, id, or prompt name.");
   }
 
   const { metadata, body } = parseFrontmatter(text);
@@ -788,7 +927,7 @@ function sanitizeImportedAcademicSkill(
     body: input.promptTemplate?.task || input.description || "",
     sourceType,
   });
-  return {
+  const skill: AcademicSkill = {
     ...fallback,
     ...input,
     id: normalizeId(input.id || fallback.id),
@@ -811,11 +950,14 @@ function sanitizeImportedAcademicSkill(
       allowScripts: false,
     },
     source: {
-      type: sourceType,
+      type: sourceType === "builtin" ? "markdown" : sourceType,
       importedAt: Date.now(),
       sourceHash: hashText(stableStringify(input)),
     },
   };
+  const error = validateAcademicSkill(skill);
+  if (error) throw new Error(error);
+  return skill;
 }
 
 function createImportedSkill(options: {
@@ -854,7 +996,7 @@ function createImportedSkill(options: {
       task: options.body || options.description,
     },
     source: {
-      type: options.sourceType,
+      type: options.sourceType === "builtin" ? "markdown" : options.sourceType,
       importedAt: Date.now(),
       sourceHash: hashText(options.body),
     },

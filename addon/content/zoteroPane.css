@@ -1888,8 +1888,15 @@ toolbarbutton.claudero-header-action:hover {
 }
 
 .claudero-button.primary-soft {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 30px;
   margin-top: 10px;
   padding: 6px 12px;
+  line-height: 1.2;
+  appearance: none;
   color: #be4246;
   border-color: color-mix(in srgb, #be4246 40%, transparent);
   background: color-mix(in srgb, #be4246 9%, transparent);
@@ -2996,7 +3003,7 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-stack {
   min-width: 0;
-  gap: 8px;
+  gap: 0;
   width: min(72em, 100%);
 }
 
@@ -3027,8 +3034,9 @@ toolbarbutton.claudero-header-action:hover {
   display: flex !important;
   position: relative;
   flex-flow: row nowrap !important;
-  align-items: stretch !important;
+  align-items: center !important;
   justify-content: flex-start !important;
+  height: 42px;
   width: 100%;
   min-width: 0;
   border-bottom: var(--material-panedivider);
@@ -3061,11 +3069,17 @@ toolbarbutton.claudero-header-action:hover {
 
 .claudero-pref-tab:hover {
   color: var(--fill-primary) !important;
+  background: color-mix(
+    in srgb,
+    var(--fill-primary) 5%,
+    transparent
+  ) !important;
 }
 
 .claudero-pref-tab[data-active="true"] {
   color: var(--accent-blue) !important;
   font-weight: 500 !important;
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent) !important;
 }
 
 .claudero-pref-tabs:not([data-indicator-ready="true"])
@@ -3075,7 +3089,7 @@ toolbarbutton.claudero-header-action:hover {
 
 #claudero-pref-tab-indicator {
   position: absolute;
-  bottom: 1px;
+  bottom: 0;
   left: 0;
   width: 0;
   height: 3px;
@@ -3150,6 +3164,14 @@ toolbarbutton.claudero-header-action:hover {
   width: 100% !important;
   max-width: none !important;
   box-sizing: border-box !important;
+}
+
+.claudero-pref-row html|input:focus-visible,
+.claudero-pref-row html|textarea:focus-visible,
+.claudero-pref-row menulist:focus-visible,
+.claudero-pref-control:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-blue) 65%, transparent);
+  outline-offset: 1px;
 }
 
 .claudero-pref-stack html|code {
@@ -3482,6 +3504,7 @@ toolbarbutton.claudero-header-action:hover {
 .claudero-pref-skill-import-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 6px;
 }
 
 .claudero-pref-skill-row:hover td,
@@ -3712,7 +3735,7 @@ toolbarbutton.claudero-header-action:hover {
   color: var(--fill-secondary);
   line-height: 1.6;
 }
-.claudero-pref-panel[hidden] {
+.claudero-pref-stack [hidden] {
   display: none !important;
 }
 .claudero-pref-tabs-wrapper[data-overflow="true"] {
@@ -3739,6 +3762,43 @@ toolbarbutton.claudero-header-action:hover {
 .claudero-pref-tabs-wrapper[data-overflow="true"] .claudero-pref-tab-arrow {
   width: 30px;
   visibility: visible;
+}
+
+@container (max-width: 560px) {
+  .claudero-pref-tab-content {
+    padding: 1em;
+  }
+
+  .claudero-pref-row {
+    align-items: stretch !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+  }
+
+  .claudero-pref-row-label,
+  .claudero-pref-row html|input,
+  .claudero-pref-row html|textarea,
+  .claudero-pref-row menulist,
+  .claudero-pref-row html|code,
+  .claudero-pref-control {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex-basis: auto !important;
+  }
+
+  .claudero-pref-row-label {
+    font-size: 11px;
+  }
+
+  .claudero-pref-row-tall .claudero-pref-row-label {
+    padding-top: 0;
+  }
+
+  .claudero-pref-mcp-actions,
+  .claudero-pref-skills-actions,
+  .claudero-pref-diagnostics-actions {
+    flex-wrap: wrap;
+  }
 }
 #claudero-pref-tab-prev {
   grid-column: 1;
@@ -3786,6 +3846,243 @@ toolbarbutton.claudero-header-action:hover {
 @media (prefers-reduced-motion: reduce) {
   #claudero-pref-tab-indicator {
     transition: none;
+  }
+}
+
+/* ── Preference polish -----------------------------------------------------
+ * Keep the preference pane visually aligned with Zotero GPT's compact card
+ * layout while using Reader semantic theme variables so dark mode follows
+ * Zotero automatically.  These rules intentionally scope to the preference
+ * root and avoid changing the conversation pane controls.
+ */
+.claudero-pref-stack {
+  --claudero-pref-control-height: 30px;
+  --claudero-pref-radius: 6px;
+}
+
+.claudero-pref-card {
+  box-shadow: none;
+}
+
+.claudero-pref-tab-content {
+  padding: 14px 16px 16px;
+}
+
+.claudero-pref-tabs,
+.claudero-pref-tab,
+.claudero-pref-tab-arrow {
+  min-height: 40px;
+  height: 40px;
+}
+
+.claudero-pref-tab {
+  padding: 10px 11px !important;
+  font-size: 12.5px;
+}
+
+.claudero-pref-intro {
+  padding: 0;
+  margin-bottom: 8px;
+  border: 0;
+  background: none;
+}
+
+.claudero-pref-intro strong {
+  display: block;
+  font-size: 13.5px;
+  line-height: 1.35;
+}
+
+.claudero-pref-intro p {
+  max-width: 72em;
+  margin: 5px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+/* Native XUL controls need an explicit surface to match HTML controls. */
+.claudero-pref-row html|input,
+.claudero-pref-row html|textarea,
+.claudero-pref-row menulist,
+.claudero-pref-control,
+.claudero-pref-stack html|input:not([type="hidden"]),
+.claudero-pref-stack html|textarea,
+.claudero-pref-stack menulist {
+  min-height: var(--claudero-pref-control-height);
+  border: var(--material-border) !important;
+  border-radius: var(--claudero-pref-radius) !important;
+  background: var(--material-background) !important;
+  color: var(--fill-primary) !important;
+  font: inherit;
+  line-height: 1.35;
+}
+
+.claudero-pref-row html|input:not([type="hidden"]),
+.claudero-pref-row menulist,
+.claudero-pref-control {
+  height: var(--claudero-pref-control-height);
+  padding: 0 9px !important;
+}
+
+.claudero-pref-row html|textarea {
+  min-height: 7.5em;
+  padding: 7px 9px !important;
+  resize: vertical;
+}
+
+.claudero-pref-row html|input:focus,
+.claudero-pref-row html|textarea:focus,
+.claudero-pref-row menulist:focus,
+.claudero-pref-control:focus {
+  outline: none !important;
+  border-color: var(--accent-blue) !important;
+  box-shadow: 0 0 0 1px var(--accent-blue) !important;
+}
+
+.claudero-pref-row-label {
+  align-self: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fill-secondary);
+}
+
+.claudero-pref-row-tall .claudero-pref-row-label {
+  align-self: flex-start;
+}
+
+.claudero-pref-panel > .claudero-pref-row + .claudero-pref-row {
+  margin-top: 1px;
+}
+
+.claudero-pref-stack
+  html|button:not(.claudero-pref-tab):not(.claudero-pref-tab-arrow),
+.claudero-pref-stack
+  button:not(.claudero-pref-tab):not(.claudero-pref-tab-arrow) {
+  appearance: none !important;
+  min-height: 29px;
+  padding: 4px 10px;
+  border: var(--material-border) !important;
+  border-radius: var(--claudero-pref-radius) !important;
+  background: var(--material-mix-quarternary) !important;
+  color: var(--fill-primary) !important;
+  font: inherit;
+  line-height: 1.25;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+
+.claudero-pref-stack
+  html|button:not(.claudero-pref-tab):not(.claudero-pref-tab-arrow):hover,
+.claudero-pref-stack
+  button:not(.claudero-pref-tab):not(.claudero-pref-tab-arrow):hover {
+  background: var(--material-mix-quarternary) !important;
+  border-color: var(--fill-tertiary) !important;
+}
+
+.claudero-pref-stack
+  html|button:not(.claudero-pref-tab):not(
+    .claudero-pref-tab-arrow
+  ):focus-visible,
+.claudero-pref-stack
+  button:not(.claudero-pref-tab):not(.claudero-pref-tab-arrow):focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.claudero-pref-stack html|button:disabled,
+.claudero-pref-stack button:disabled {
+  opacity: 0.52;
+  cursor: default;
+}
+
+.claudero-pref-setup-panel,
+.claudero-pref-skill-import-panel {
+  border-radius: 8px;
+  background: var(--material-mix-quinary);
+}
+
+.claudero-pref-setup-panel {
+  padding: 12px 13px;
+  border: var(--material-border);
+}
+
+.claudero-pref-setup-head strong,
+.claudero-pref-skill-import-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.claudero-pref-status {
+  line-height: 1.45;
+}
+
+.claudero-pref-status:empty {
+  display: none;
+}
+
+/* Reader themes pinned at c12c65e3 supply these semantic surfaces and fills. */
+.claudero-pref-disclosure {
+  min-width: 0;
+  margin-top: 8px;
+  border-top: var(--material-border50);
+}
+
+.claudero-pref-disclosure > html|summary {
+  padding: 10px 2px;
+  color: var(--fill-secondary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.claudero-pref-disclosure > html|summary:hover {
+  color: var(--fill-primary);
+  background: var(--fill-quinary);
+}
+
+.claudero-pref-disclosure > html|summary:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.claudero-pref-disclosure-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 0 8px;
+}
+
+/* XUL preference panes can retain the layout of native details contents. */
+.claudero-pref-disclosure:not([open]) > .claudero-pref-disclosure-body {
+  display: none;
+}
+
+.claudero-pref-hint {
+  margin: 0;
+  color: var(--fill-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.claudero-pref-setup-row {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+
+.claudero-pref-setup-row > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+
+@container (max-width: 560px) {
+  .claudero-pref-tab-content {
+    padding: 12px;
+  }
+
+  .claudero-pref-intro {
+    padding-inline-end: 12px;
   }
 }
 

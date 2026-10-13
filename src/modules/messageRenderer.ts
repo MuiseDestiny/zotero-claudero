@@ -1,6 +1,7 @@
 import hljs from "highlight.js/lib/common";
 import MarkdownIt from "markdown-it";
 import { markdownItKatex } from "../shared/markdownKatexPlugin";
+import { normalizeMarkdownStrongSpacing } from "../shared/markdownNormalization";
 import {
   decodeEvidenceReference,
   hydrateEvidenceMarkers,
@@ -1336,8 +1337,10 @@ export function renderMarkdown(
   // the label before the closing parenthesis arrives and expose that locator as
   // plain text. Hold the incomplete link back until it is syntactically whole.
   const normalized = normalizeMathDelimiters(
-    hydrateEvidenceMarkers(
-      sanitizeEvidencePresentation(hideIncompleteEvidenceLinks(text)),
+    normalizeMarkdownStrongSpacing(
+      hydrateEvidenceMarkers(
+        sanitizeEvidencePresentation(hideIncompleteEvidenceLinks(text)),
+      ),
     ),
   );
   const html = markdownRenderer.render(normalized);

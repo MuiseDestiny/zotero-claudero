@@ -57,6 +57,17 @@ export class PermissionManager {
   private requestQueue: string[] = [];
   private rememberedAllows = new Set<string>();
   private toolPolicy: AcademicToolPolicy | undefined;
+  private scope = "";
+
+  setScope(scope: string): void {
+    if (this.scope === scope) return;
+    this.scope = scope;
+    this.rememberedAllows.clear();
+  }
+
+  clearRemembered(): void {
+    this.rememberedAllows.clear();
+  }
 
   setToolPolicy(policy: AcademicToolPolicy | undefined): void {
     this.toolPolicy = policy;
@@ -138,6 +149,17 @@ export class PermissionManager {
           toolUseID: toolOptions.toolUseID,
         };
       }
+      // A request can arrive after its owning turn has already been
+      // cancelled. AbortSignal does not replay the abort event to listeners
+      // added later, so guard before enqueueing (and again immediately after
+      // registering the listener below) to avoid leaving an orphaned prompt.
+      if (toolOptions.signal.aborted) {
+        return {
+          behavior: "deny",
+          message: "Operation cancelled",
+          toolUseID: toolOptions.toolUseID,
+        };
+      }
       if (this.isRemembered(toolName, toolInput)) {
         return {
           behavior: "allow",
@@ -158,6 +180,7 @@ export class PermissionManager {
       toolOptions.signal.addEventListener("abort", abortHandler, {
         once: true,
       });
+      if (toolOptions.signal.aborted) abortHandler();
 
       try {
         const decision = await permissionPromise;

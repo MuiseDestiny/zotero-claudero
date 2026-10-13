@@ -22,22 +22,13 @@ const defaultReport = path.join(
   "pdf-golden-report.json",
 );
 const defaultOutDir = path.join(repoRoot, ".claudero-eval", "review-site");
-const defaultPdftoppm =
-  "/Users/muisedestiny/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/pdftoppm";
-const defaultPython =
-  "/Users/muisedestiny/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3";
-
 function parseArgs(argv) {
   const args = {
     report: process.env.CLAUDERO_PDF_REVIEW_REPORT || defaultReport,
     outDir: process.env.CLAUDERO_PDF_REVIEW_OUT || defaultOutDir,
     limit: Number(process.env.CLAUDERO_PDF_REVIEW_LIMIT || 18),
-    pdftoppm:
-      process.env.PDFTOPPM ||
-      (existsSync(defaultPdftoppm) ? defaultPdftoppm : "pdftoppm"),
-    python:
-      process.env.PYTHON ||
-      (existsSync(defaultPython) ? defaultPython : "python3"),
+    pdftoppm: process.env.PDFTOPPM || "pdftoppm",
+    python: process.env.PYTHON || "python3",
     scale: Number(process.env.CLAUDERO_PDF_REVIEW_SCALE || 1200),
     maxPages: Number(process.env.CLAUDERO_PDF_REVIEW_MAX_PAGES || 8),
   };

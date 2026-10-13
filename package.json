@@ -1,7 +1,7 @@
 {
   "name": "claudero",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "AI research assistant embedded in Zotero",
   "config": {
     "addonName": "Claudero",
@@ -26,14 +26,14 @@
   "scripts": {
     "start": "zotero-plugin serve",
     "restart": "zotero-plugin serve",
-    "build": "zotero-plugin build && tsc --noEmit",
+    "build": "node scripts/sync-katex-assets.mjs && zotero-plugin build && tsc --noEmit",
     "check:release": "npm run build && node scripts/verify-release.mjs",
-    "audit:prod": "npm audit --omit=dev --audit-level=high",
-    "audit:all": "npm audit --audit-level=high",
+    "audit:prod": "npm audit --omit=dev --audit-level=low",
+    "audit:all": "npm audit --audit-level=low",
     "test:helper": "npm run build && node scripts/smoke-helper-communication.mjs --full",
     "test:helper:quick": "npm run build && node scripts/smoke-helper-communication.mjs",
     "test:helper:mock": "npm run build && node scripts/smoke-helper-mock.mjs",
-    "test:runtime": "node scripts/run-node-tests.mjs test/deepseekRuntime.node.ts test/codexMcpConfig.test.ts test/windowsExecutablePaths.test.ts test/helperServerSecurity.test.ts test/diagnosticPrivacy.test.ts test/markdownSecurity.test.ts test/mcpTester.node.ts test/runtimeEnvironment.test.ts test/providerSettings.node.ts test/settingsAutoDetect.node.ts",
+    "test:runtime": "node scripts/run-node-tests.mjs test/deepseekRuntime.node.ts test/codexMcpConfig.test.ts test/windowsExecutablePaths.test.ts test/helperServerSecurity.test.ts test/diagnosticPrivacy.test.ts test/markdownSecurity.test.ts test/mcpTester.node.ts test/runtimeEnvironment.test.ts test/providerSettings.node.ts test/settingsAutoDetect.node.ts test/permissionManager.test.ts test/requestLifecycle.test.ts test/helperStartup.node.ts test/imageDraft.test.ts test/providerModelRequest.test.ts test/conversationRecovery.test.ts test/evidenceVerification.node.ts test/zoteroContext.node.ts test/conversationIndex.node.ts test/selectionContextValidation.test.ts test/auxiliaryQuery.test.ts test/helperLifecycle.node.ts test/requestFailure.test.ts test/setupGuide.test.ts test/paneStreamingState.node.ts test/paneArchitecture.node.ts",
     "diagnose:codex-latency": "npm run build && node scripts/diagnose-codex-latency.mjs",
     "test:evidence": "npm run build && node scripts/smoke-evidence-contract.mjs && node scripts/smoke-evidence-golden.mjs && node scripts/smoke-pdf-visual-audit.mjs",
     "test:evidence:ci": "node scripts/smoke-evidence-contract.mjs && node scripts/smoke-evidence-golden.mjs && node scripts/smoke-pdf-visual-audit.mjs",
@@ -53,12 +53,12 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.233",
     "@iconify-json/lucide": "^1.2.114",
     "@iconify-json/tabler": "^1.2.35",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@vscode/markdown-it-katex": "^1.1.2",
     "highlight.js": "^11.11.1",
     "iconify-icon": "^3.0.2",
-    "katex": "0.16.25",
-    "markdown-it": "^15.0.0",
+    "katex": "0.18.2",
+    "markdown-it": "^15.0.2",
     "zod": "^4.0.0",
     "zotero-plugin-toolkit": "^5.1.0-beta.13"
   },
@@ -91,7 +91,10 @@
     ]
   },
   "overrides": {
-    "adm-zip": "0.6.0",
+    "@vscode/markdown-it-katex": {
+      "katex": "$katex"
+    },
+    "adm-zip": "0.6.1",
     "diff": "8.0.4",
     "serialize-javascript": "7.0.5"
   }

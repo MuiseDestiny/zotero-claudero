@@ -5,6 +5,16 @@ import zotero from "@zotero-plugin/eslint-config";
 export default zotero({
   overrides: [
     {
+      ignores: [
+        ".claude/**",
+        ".codex/**",
+        ".agents/**",
+        ".claudero-eval/**",
+        ".cache/**",
+        "coverage/**",
+      ],
+    },
+    {
       files: ["**/*.ts"],
       rules: {
         // We disable this rule here because the template

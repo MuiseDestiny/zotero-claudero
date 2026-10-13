@@ -20,6 +20,8 @@ import {
 import { logDiagnostic } from "./diagnosticLog";
 import { getZoteroEndpointBaseUrl } from "./zoteroEndpoint";
 import type { AgentEventPayload } from "../shared/agentEvents";
+import { streamResponseEvents, throwIfAborted } from "../shared/helperStream";
+import { waitWithSignal, withRequestDeadline } from "../shared/requestDeadline";
 import { CLAUDERO_HELPER_VERSION as EXPECTED_HELPER_VERSION } from "../shared/helperProtocol";
 import type { ProviderModelDescriptor } from "../shared/providerModels";
 import type { AcademicToolPolicy } from "../shared/academicToolPolicy";
@@ -39,6 +41,7 @@ export interface ClauderoImageInput {
 }
 
 export interface ClauderoQueryRequest {
+  requestId: string;
   prompt: string;
   workspacePath: string;
   provider?: AiProvider;
@@ -70,6 +73,7 @@ export interface ClauderoQueryRequest {
 }
 
 export interface ClauderoQueryOptions {
+  requestId?: string;
   provider?: AiProvider;
   model?: string;
   effort?: string;
@@ -89,8 +93,17 @@ export interface ClauderoQueryOptions {
 }
 
 let helperProcess: nsIProcess | null = null;
+let helperConnection: { port: number; token: string } | undefined;
+let helperShutdown: Promise<void> | undefined;
 let persistentQueryInitialized = false;
 let helperEnsurePromise: Promise<void> | null = null;
+// A module instance belongs to one plugin lifetime; reload creates a new one.
+let helperLifetime: AbortController | undefined;
+
+function getHelperSignal(): AbortSignal {
+  // Browser globals are installed after module evaluation by src/index.ts.
+  return (helperLifetime ||= new AbortController()).signal;
+}
 
 function helperLog(message: string): void {
   ztoolkit.log(`[AI Rename/helper] ${message}`);
@@ -357,17 +370,34 @@ async function fetchLoopbackHealth(
   port: number,
   token: string,
   timeoutMs = 1200,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(`http://127.0.0.1:${port}/health`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
+): Promise<{ ok: boolean; version: number; active: boolean }> {
+  return withRequestDeadline(
+    async (signal) => {
+      const response = await fetch(`http://127.0.0.1:${port}/health`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal,
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        return { ok: false, version: 0, active: false };
+      }
+      const data: unknown = await response.json();
+      return {
+        ok: true,
+        version:
+          data && typeof data === "object" && "version" in data
+            ? Number(data.version)
+            : 0,
+        active:
+          !!data &&
+          typeof data === "object" &&
+          "active" in data &&
+          data.active === true,
+      };
+    },
+    getHelperSignal(),
+    timeoutMs,
+  );
 }
 
 async function ensureHelperFile(): Promise<string> {
@@ -396,6 +426,7 @@ async function waitForHelper(
   const startedAt = Date.now();
   let lastError: unknown;
   while (Date.now() < deadline) {
+    throwIfAborted(getHelperSignal());
     try {
       const response = await fetchLoopbackHealth(port, token);
       if (response.ok) {
@@ -405,6 +436,7 @@ async function waitForHelper(
         return;
       }
     } catch (error) {
+      throwIfAborted(getHelperSignal());
       lastError = error;
     }
     await Zotero.Promise.delay(300);
@@ -425,21 +457,27 @@ async function probePort(
     if (response.ok) return "reuse";
     return "occupied";
   } catch {
+    throwIfAborted(getHelperSignal());
     return "free";
   }
 }
 
 async function startHelperOnPort(port: number, token: string): Promise<void> {
+  throwIfAborted(getHelperSignal());
   // Kill any helper process tracked in the current session before starting a new one.
-  shutdownClaudeHelper();
-  await Zotero.Promise.delay(300);
+  const hadProcess = !!helperProcess;
+  stopHelperProcess();
+  if (hadProcess) await Zotero.Promise.delay(300);
+  throwIfAborted(getHelperSignal());
 
   const nodePath = resolveNodePath();
   const helperPath = await ensureHelperFile();
+  throwIfAborted(getHelperSignal());
   helperLog(
     `starting helper port=${port} node=${nodePath} bundle=${helperPath}`,
   );
   await IOUtils.makeDirectory(getWorkspacePath(), { createAncestors: true });
+  throwIfAborted(getHelperSignal());
 
   const nodeFile = (Components.classes as any)[
     "@mozilla.org/file/local;1"
@@ -461,13 +499,24 @@ async function startHelperOnPort(port: number, token: string): Promise<void> {
     "--token",
     token,
   ];
+  const parentPid = Services.appinfo?.processID;
+  if (Number.isSafeInteger(parentPid) && parentPid > 1)
+    args.push("--parent-pid", String(parentPid));
   processInstance.runwAsync(args, args.length);
   helperProcess = processInstance;
-  await waitForHelper(port, token, 15000);
+  try {
+    await waitForHelper(port, token, 15000);
+    throwIfAborted(getHelperSignal());
+  } catch (error) {
+    if (helperProcess === processInstance) stopHelperProcess();
+    throw error;
+  }
+  helperConnection = { port, token };
   persistentQueryInitialized = false;
 }
 
 async function ensureClaudeHelperImpl(): Promise<void> {
+  throwIfAborted(getHelperSignal());
   // GUI-launched Zotero processes often inherit a reduced PATH. Run the same
   // cross-platform discovery used by Preferences before resolving Node so
   // NVM/Volta/custom Windows installations work without opening Preferences.
@@ -476,10 +525,12 @@ async function ensureClaudeHelperImpl(): Promise<void> {
   } catch (error) {
     helperLog(`auto-detect failed: ${errorMessage(error)}`);
   }
+  throwIfAborted(getHelperSignal());
   const preferredPort = Number(getPref("helperPort") || 38660);
   const startedAt = Date.now();
   helperLog(`ensure start preferredPort=${preferredPort}`);
   const token = await getOrCreateHelperToken();
+  throwIfAborted(getHelperSignal());
   const candidates = [
     preferredPort,
     ...Array.from({ length: 40 }, (_, index) => 38660 + index),
@@ -499,14 +550,9 @@ async function ensureClaudeHelperImpl(): Promise<void> {
     if (status === "reuse") {
       helperLog(`found helper candidate port=${p}`);
       const healthResponse = await fetchLoopbackHealth(p, token);
+      if (!healthResponse.ok) continue;
       if (healthResponse.ok) {
-        const healthData = (await healthResponse.json()) as unknown;
-        const version =
-          healthData &&
-          typeof healthData === "object" &&
-          "version" in healthData
-            ? Number((healthData as { version?: number }).version)
-            : 0;
+        const version = healthResponse.version;
         // A helper process from an older plugin version may still be running
         // (plugin reload overwrites the .mjs but doesn't kill the process).
         // Ask it to exit, then start a fresh one with the current protocol.
@@ -515,11 +561,20 @@ async function ensureClaudeHelperImpl(): Promise<void> {
             `stale helper port=${p} version=${version} expected=${EXPECTED_HELPER_VERSION}; restarting`,
           );
           try {
-            await fetch(`http://127.0.0.1:${p}/shutdown`, {
-              method: "POST",
-              headers: { Authorization: `Bearer ${token}` },
-            });
+            await withRequestDeadline(
+              async (signal) => {
+                const response = await fetch(`http://127.0.0.1:${p}/shutdown`, {
+                  method: "POST",
+                  headers: { Authorization: `Bearer ${token}` },
+                  signal,
+                });
+                await response.body?.cancel();
+              },
+              getHelperSignal(),
+              1200,
+            );
           } catch {
+            throwIfAborted(getHelperSignal());
             // Old helpers without /shutdown will 404; the port simply won't
             // free below and we'll move on to start a fresh one elsewhere.
           }
@@ -539,24 +594,20 @@ async function ensureClaudeHelperImpl(): Promise<void> {
               if (p !== preferredPort) setPref("helperPort", p);
               return;
             } catch (error) {
+              throwIfAborted(getHelperSignal());
               helperLog(`restart failed port=${p}: ${errorMessage(error)}`);
               // Lost the bind race; fall through to scan the next port.
             }
           }
           continue; // Stale helper still holding this port; try the next one.
         }
-        if (
-          healthData &&
-          typeof healthData === "object" &&
-          "active" in healthData
-        ) {
-          persistentQueryInitialized =
-            (healthData as { active?: boolean }).active === true;
-        }
+        persistentQueryInitialized = healthResponse.active;
       }
+      throwIfAborted(getHelperSignal());
       if (p !== preferredPort) {
         setPref("helperPort", p);
       }
+      helperConnection = { port: p, token };
       helperLog(
         `reusing helper port=${p} version=${EXPECTED_HELPER_VERSION} elapsedMs=${Date.now() - startedAt}`,
       );
@@ -572,6 +623,7 @@ async function ensureClaudeHelperImpl(): Promise<void> {
       if (p !== preferredPort) setPref("helperPort", p);
       return;
     } catch (error) {
+      throwIfAborted(getHelperSignal());
       helperLog(`start failed port=${p}: ${errorMessage(error)}`);
       // Race: port may have been taken between probe and bind. Try the next.
     }
@@ -583,8 +635,14 @@ async function ensureClaudeHelperImpl(): Promise<void> {
 }
 
 export function ensureClaudeHelper(): Promise<void> {
+  if (getHelperSignal().aborted) {
+    return Promise.reject(new DOMException("Plugin shut down", "AbortError"));
+  }
   if (!helperEnsurePromise) {
-    helperEnsurePromise = ensureClaudeHelperImpl().finally(() => {
+    helperEnsurePromise = waitWithSignal(
+      ensureClaudeHelperImpl(),
+      getHelperSignal(),
+    ).finally(() => {
       helperEnsurePromise = null;
     });
   } else {
@@ -604,60 +662,67 @@ export async function prewarmClaudeHelper(): Promise<void> {
 
 /** Settings requests must resolve the port and token after helper startup. */
 export async function requestHelperJson<T>(
-  endpoint: "/test-mcp" | "/diagnostics" | "/restart-runtimes",
+  endpoint: string,
   init: RequestInit = {},
 ): Promise<T> {
-  await ensureClaudeHelper();
-  const port = Number(getPref("helperPort") || 38660);
-  const token = await getOrCreateHelperToken();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
-  try {
+  if (!/^\/[a-z-]+(?:\?[^#]*)?$/.test(endpoint))
+    throw new Error("Invalid helper endpoint");
+  return withRequestDeadline(async (signal) => {
+    await waitWithSignal(ensureClaudeHelper(), signal);
+    const port = Number(getPref("helperPort") || 38660);
+    const token = await waitWithSignal(getOrCreateHelperToken(), signal);
+    throwIfAborted(signal);
+    const headers = new Headers(init.headers);
+    headers.set("Content-Type", "application/json");
+    headers.set("Authorization", `Bearer ${token}`);
     const response = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
       ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...init.headers,
-        Authorization: `Bearer ${token}`,
-      },
-      signal: controller.signal,
+      headers,
+      signal,
     });
-    if (!response.ok) {
-      throw new Error(`Helper returned ${response.status}`);
-    }
-    return (await response.json()) as T;
-  } finally {
-    clearTimeout(timer);
-  }
+    const text = await response.text();
+    if (!response.ok)
+      throw new Error(`Helper returned ${response.status}: ${text}`);
+    return (response.status === 204 ? null : JSON.parse(text)) as T;
+  }, init.signal);
 }
 
 export async function fetchProviderModels(
   provider: AiProvider,
+  signal?: AbortSignal,
 ): Promise<ProviderModelDescriptor[]> {
   if (provider === "claude") return [];
-  await ensureClaudeHelper();
-  const port = Number(getPref("helperPort") || 38660);
-  const token = await getOrCreateHelperToken();
-  const response = await fetch(`http://127.0.0.1:${port}/models`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      workspacePath: getWorkspacePath(),
-      ...(await buildProviderPayload(provider)),
-      model: defaultModelForProvider(provider),
-      effort: defaultEffortForProvider(provider),
-      ...buildMcpPayload(provider),
-    }),
-  });
-  if (!response.ok) {
-    throw new Error(
-      `Failed to load ${provider} models: ${response.status} ${await response.text()}`,
+  const data = await withRequestDeadline(async (requestSignal) => {
+    await waitWithSignal(ensureClaudeHelper(), requestSignal);
+    const port = Number(getPref("helperPort") || 38660);
+    const token = await waitWithSignal(getOrCreateHelperToken(), requestSignal);
+    const payload = await waitWithSignal(
+      buildProviderPayload(provider),
+      requestSignal,
     );
-  }
-  const data = (await response.json()) as { models?: unknown };
+    throwIfAborted(requestSignal);
+    const response = await fetch(`http://127.0.0.1:${port}/models`, {
+      method: "POST",
+      signal: requestSignal,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        workspacePath: getWorkspacePath(),
+        ...payload,
+        model: defaultModelForProvider(provider),
+        effort: defaultEffortForProvider(provider),
+        ...buildMcpPayload(provider),
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Failed to load ${provider} models: ${response.status} ${await response.text()}`,
+      );
+    }
+    return response.json() as Promise<{ models?: unknown }>;
+  }, signal);
   const models = Array.isArray(data.models)
     ? (data.models as ProviderModelDescriptor[]).filter(
         (model) => !!model?.value && !!model?.label,
@@ -783,124 +848,96 @@ export async function* queryClaudeHelper(
   prompt: string,
   options: ClauderoQueryOptions = {},
 ): AsyncGenerator<ClauderoQueryEvent> {
-  const requestId = `query-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-  const startedAt = Date.now();
+  const requestId = options.requestId || crypto.randomUUID();
   const provider = options.provider || normalizeProviderPref();
-  await ensureClaudeHelper();
-
-  // Try to use persistent query (new fast path)
-  if (!persistentQueryInitialized) {
-    try {
-      await initializePersistentQuery(provider);
-    } catch (error) {
-      // Fall back to legacy /query endpoint if initialization fails
-      ztoolkit.log(
-        "Failed to initialize persistent query, falling back to legacy endpoint:",
-        error,
-      );
-    }
-  }
-
+  throwIfAborted(options.signal);
+  await waitWithSignal(ensureClaudeHelper(), options.signal);
+  throwIfAborted(options.signal);
   const port = Number(getPref("helperPort") || 38660);
   const token = await getOrCreateHelperToken();
-  const providerCapabilities = getProviderCapabilities(provider);
-  const images = providerCapabilities.supportsImageAttachments
-    ? options.images
-    : undefined;
-  logDiagnostic("helper.query.start", {
+  const payload: ClauderoQueryRequest = {
     requestId,
-    provider,
-    port,
-    promptLength: prompt.length,
-    imageCount: images?.length || 0,
-    persistentQueryInitialized,
+    prompt,
+    workspacePath: getWorkspacePath(),
+    ...(await buildProviderPayload(provider)),
+    model: options.model ?? defaultModelForProvider(provider),
+    effort: options.effort ?? defaultEffortForProvider(provider),
+    additionalDirectories: options.additionalDirectories || [],
+    permissionMode: options.permissionMode || "auto",
+    ...buildMcpPayload(provider, prompt),
+    images: getProviderCapabilities(provider).supportsImageAttachments
+      ? options.images
+      : undefined,
     conversationId: options.conversationId,
-    model: options.model,
-    effort: options.effort,
-    permissionMode: options.permissionMode,
-  });
-
-  let response: Response;
-
-  if (persistentQueryInitialized) {
-    response = await fetch(`http://127.0.0.1:${port}/send`, {
+    providerState: options.providerState,
+    toolPolicy: options.toolPolicy,
+  };
+  throwIfAborted(options.signal);
+  let terminal = false;
+  let submitted = false;
+  const cancelRequest = () => {
+    if (submitted && !terminal)
+      void cancelHelperRequest(requestId).catch(() => {});
+  };
+  options.signal?.addEventListener("abort", cancelRequest, { once: true });
+  try {
+    throwIfAborted(options.signal);
+    submitted = true;
+    const response = await fetch(`http://127.0.0.1:${port}/send`, {
       method: "POST",
       signal: options.signal,
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        prompt,
-        workspacePath: getWorkspacePath(),
-        ...(await buildProviderPayload(provider)),
-        model: options.model,
-        effort: options.effort,
-        additionalDirectories: options.additionalDirectories,
-        permissionMode: options.permissionMode,
-        ...buildMcpPayload(provider, prompt),
-        images,
-        conversationId: options.conversationId,
-        providerState: options.providerState,
-        toolPolicy: options.toolPolicy,
-      }),
-    });
-    logDiagnostic("helper.send.response", {
-      requestId,
-      provider,
-      status: response.status,
-      elapsedMs: Date.now() - startedAt,
+      body: JSON.stringify(payload),
     });
     if (!response.ok) {
+      submitted = false;
       throw new Error(
         `Claudero helper send failed: ${response.status} ${await response.text()}`,
       );
     }
-    yield* streamResponseEvents(response);
-    logDiagnostic("helper.send.stream.done", {
+    for await (const event of streamResponseEvents(
+      response,
       requestId,
-      provider,
-      elapsedMs: Date.now() - startedAt,
-    });
-    return;
+      options.signal,
+    )) {
+      if (event.type === "done") terminal = true;
+      yield event;
+    }
+  } finally {
+    options.signal?.removeEventListener("abort", cancelRequest);
+    if (submitted && !terminal)
+      await cancelHelperRequest(requestId).catch(() => {});
   }
+}
 
-  // Use legacy /query endpoint (slow but compatible)
-  response = await fetch(`http://127.0.0.1:${port}/query`, {
-    method: "POST",
-    signal: options.signal,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      prompt,
-      workspacePath: getWorkspacePath(),
-      ...(await buildProviderPayload(provider)),
-      model: options.model,
-      effort: options.effort,
-      additionalDirectories: options.additionalDirectories,
-      permissionMode: options.permissionMode,
-      ...buildMcpPayload(provider, prompt),
-      images,
-      conversationId: options.conversationId,
-      providerState: options.providerState,
-      toolPolicy: options.toolPolicy,
-    } satisfies ClauderoQueryRequest),
-  });
-  logDiagnostic("helper.query.response", {
-    requestId,
-    provider,
-    status: response.status,
-    elapsedMs: Date.now() - startedAt,
-  });
-
-  yield* streamResponseEvents(response);
-  logDiagnostic("helper.query.stream.done", {
-    requestId,
-    provider,
-    elapsedMs: Date.now() - startedAt,
-  });
+export async function cancelHelperRequest(
+  ownerRequestId: string,
+): Promise<void> {
+  // Cancellation must not start a helper after the original request was aborted.
+  const port = Number(getPref("helperPort") || 38660);
+  const token = await getOrCreateHelperToken();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/cancel`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ownerRequestId }),
+      signal: controller.signal,
+    });
+    await response.text();
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`Helper cancellation failed: ${response.status}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function runAuxClaudeQuery(
@@ -917,97 +954,66 @@ export async function runAuxClaudeQuery(
   helperLog(
     `${requestId} begin model=${options.model || "pref"} effort=${options.effort || "pref"} promptChars=${prompt.length}`,
   );
-  await ensureClaudeHelper();
-  const port = Number(getPref("helperPort") || 38660);
-  const token = await getOrCreateHelperToken();
-  helperLog(`${requestId} POST http://127.0.0.1:${port}/aux-query`);
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/aux-query`, {
-      method: "POST",
-      signal: options.signal,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        prompt,
-        systemPrompt: options.systemPrompt,
-        workspacePath: getWorkspacePath(),
-        ...(await buildProviderPayload(normalizeProviderPref())),
-        model:
-          options.model || String(getPref("model") || "haiku") || undefined,
-        effort:
-          options.effort || String(getPref("effort") || "high") || undefined,
-      }),
-    });
-    const body = await response.text();
-    helperLog(
-      `${requestId} response status=${response.status} elapsedMs=${Date.now() - startedAt} bodyChars=${body.length}`,
-    );
-    let data: { text?: string; error?: string };
-    try {
-      data = JSON.parse(body) as { text?: string; error?: string };
-    } catch (error) {
-      throw new Error(
-        `Aux query returned invalid JSON (${response.status}): ${body.slice(0, 500)}`,
-        { cause: error },
+  return withRequestDeadline(
+    async (signal) => {
+      await waitWithSignal(ensureClaudeHelper(), signal);
+      const port = Number(getPref("helperPort") || 38660);
+      const token = await waitWithSignal(getOrCreateHelperToken(), signal);
+      const providerPayload = await waitWithSignal(
+        buildProviderPayload(normalizeProviderPref()),
+        signal,
       );
-    }
-    if (!response.ok) {
-      throw new Error(data.error || `Aux query failed: ${response.status}`);
-    }
-    helperLog(`${requestId} success textChars=${data.text?.length || 0}`);
-    return data.text || "";
-  } catch (error) {
-    helperLog(
-      `${requestId} failed elapsedMs=${Date.now() - startedAt}: ${errorMessage(error)}`,
-    );
-    throw error;
-  }
-}
-
-async function* streamResponseEvents(
-  response: Response,
-): AsyncGenerator<ClauderoQueryEvent> {
-  if (!response.ok) {
-    throw new Error(`Claudero helper query failed: ${response.status}`);
-  }
-
-  if (!response.body) {
-    const text = await response.text();
-    for (const line of text.split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      yield JSON.parse(line) as ClauderoQueryEvent;
-    }
-    return;
-  }
-
-  const reader = response.body.getReader() as any;
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let newline = buffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = buffer.slice(0, newline).trim();
-      buffer = buffer.slice(newline + 1);
-      if (line) {
-        yield JSON.parse(line) as ClauderoQueryEvent;
+      throwIfAborted(signal);
+      helperLog(`${requestId} POST http://127.0.0.1:${port}/aux-query`);
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/aux-query`, {
+          method: "POST",
+          signal,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            prompt,
+            systemPrompt: options.systemPrompt,
+            workspacePath: getWorkspacePath(),
+            ...providerPayload,
+            model:
+              options.model || String(getPref("model") || "haiku") || undefined,
+            effort:
+              options.effort ||
+              String(getPref("effort") || "high") ||
+              undefined,
+          }),
+        });
+        const body = await response.text();
+        helperLog(
+          `${requestId} response status=${response.status} elapsedMs=${Date.now() - startedAt} bodyChars=${body.length}`,
+        );
+        let data: { text?: string; error?: string };
+        try {
+          data = JSON.parse(body) as { text?: string; error?: string };
+        } catch (error) {
+          throw new Error(
+            `Aux query returned invalid JSON (${response.status}): ${body.slice(0, 500)}`,
+            { cause: error },
+          );
+        }
+        if (!response.ok) {
+          throw new Error(data.error || `Aux query failed: ${response.status}`);
+        }
+        helperLog(`${requestId} success textChars=${data.text?.length || 0}`);
+        return data.text || "";
+      } catch (error) {
+        helperLog(
+          `${requestId} failed elapsedMs=${Date.now() - startedAt}: ${errorMessage(error)}`,
+        );
+        throw error;
       }
-      newline = buffer.indexOf("\n");
-    }
-  }
-
-  // Flush any final multi-byte UTF-8 sequence retained by the streaming
-  // decoder. Without this, a response ending on a Chinese character can lose
-  // its last bytes even though the HTTP stream completed normally.
-  buffer += decoder.decode();
-  const tail = buffer.trim();
-  if (tail) {
-    yield JSON.parse(tail) as ClauderoQueryEvent;
-  }
+    },
+    options.signal,
+    60_000,
+  );
 }
 
 export async function fetchSlashCommands(): Promise<
@@ -1121,12 +1127,15 @@ export async function runClaudeAuthLogin(): Promise<void> {
   await runCliLogin(resolveClaudePath(), ["auth", "login"], "claude");
 }
 
-export async function runProviderAuthLogin(): Promise<void> {
-  if (normalizeProviderPref() === "codex") {
+export async function runProviderAuthLogin(
+  provider: AiProvider = normalizeProviderPref(),
+): Promise<void> {
+  await autoDetectSettings();
+  if (provider === "codex") {
     await runCliLogin(resolveCodexPath(), ["login"], "codex");
     return;
   }
-  if (normalizeProviderPref() === "deepseek") {
+  if (provider === "deepseek") {
     throw new Error(
       "DeepSeek Harness has no interactive login command. Set DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL or configure the official dsh credentials in ~/.dsh (optionally set DSH_HOME).",
     );
@@ -1134,12 +1143,55 @@ export async function runProviderAuthLogin(): Promise<void> {
   await runClaudeAuthLogin();
 }
 
-export function shutdownClaudeHelper(): void {
+export function shutdownClaudeHelper(): Promise<void> {
+  if (helperShutdown) return helperShutdown;
+  getHelperSignal();
+  helperLifetime!.abort();
+  const connection = helperConnection;
+  const process = helperProcess;
+  helperConnection = undefined;
+  helperProcess = null;
+  persistentQueryInitialized = false;
+  helperShutdown = (async () => {
+    if (connection) {
+      try {
+        await withRequestDeadline(
+          async (signal) => {
+            const response = await fetch(
+              `http://127.0.0.1:${connection.port}/shutdown`,
+              {
+                method: "POST",
+                headers: { Authorization: `Bearer ${connection.token}` },
+                signal,
+              },
+            );
+            await response.body?.cancel();
+            if (!response.ok) throw new Error("Helper shutdown rejected");
+          },
+          undefined,
+          1_200,
+        );
+        return;
+      } catch {
+        /* Fall back to terminating only the process we started. */
+      }
+    }
+    try {
+      process?.kill();
+    } catch {
+      /* Already exited. */
+    }
+  })();
+  return helperShutdown;
+}
+
+function stopHelperProcess(): void {
   try {
     helperProcess?.kill();
   } catch {
     // Best effort.
   }
   helperProcess = null;
+  helperConnection = undefined;
   persistentQueryInitialized = false;
 }

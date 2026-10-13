@@ -28,6 +28,7 @@ interface BridgeConfig {
   endpoint: string;
   helperUrl: string;
   token: string;
+  provider?: "claude" | "codex" | "deepseek";
 }
 
 interface JsonRpcRequest {
@@ -105,6 +106,12 @@ function parseBridgeConfig(argv: string[]): BridgeConfig {
     endpoint: textArg(argv, "--endpoint"),
     helperUrl: textArg(argv, "--helper-url"),
     token: textArg(argv, "--token"),
+    provider: (() => {
+      const value = textArg(argv, "--provider");
+      return value === "claude" || value === "codex" || value === "deepseek"
+        ? value
+        : undefined;
+    })(),
   };
 }
 
@@ -455,6 +462,7 @@ async function requestPermission(
     body: JSON.stringify({
       toolName: "Zotero MCP: " + permissionSummary(action),
       input: { action, ...args },
+      provider: config.provider,
     }),
   });
   if (!response.ok) return false;
@@ -624,18 +632,27 @@ export function runZoteroMcpStdioServer(argv: string[]): void {
   const config = parseBridgeConfig(argv);
   let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   let draining = false;
+  let drainRequested = false;
   process.stdin.on("data", (chunk: Buffer) => {
     buffer = Buffer.concat([buffer, chunk]);
     if (buffer.length > MAX_MCP_MESSAGE_BYTES) {
       buffer = Buffer.alloc(0);
+      drainRequested = false;
       process.stderr.write("Claudero MCP request exceeded 8 MB\n");
+      return;
+    }
+    if (draining) {
+      drainRequested = true;
       return;
     }
     void drain();
   });
 
   async function drain(): Promise<void> {
-    if (draining) return;
+    if (draining) {
+      drainRequested = true;
+      return;
+    }
     draining = true;
     try {
       while (buffer.length > 0) {
@@ -665,7 +682,10 @@ export function runZoteroMcpStdioServer(argv: string[]): void {
       }
     } finally {
       draining = false;
-      if (buffer.length > 0) void drain();
+      if (drainRequested) {
+        drainRequested = false;
+        if (buffer.length > 0) void drain();
+      }
     }
   }
 }

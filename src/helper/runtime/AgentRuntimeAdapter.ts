@@ -54,7 +54,7 @@ export interface AgentRuntimeAdapter {
   isActive: boolean;
   isBusy: boolean;
   workspacePath: string | null;
-  initialize(config: AgentRuntimeConfig): Promise<void>;
+  initialize(config: AgentRuntimeConfig, signal?: AbortSignal): Promise<void>;
   requiresRestart(config: AgentRuntimeRestartConfig): boolean;
   updateConfig(config: AgentRuntimeRestartConfig): void;
   setPermissionMode(mode: string | undefined): Promise<void>;
@@ -105,8 +105,8 @@ export class ClaudeRuntimeAdapter implements AgentRuntimeAdapter {
     return this.manager.workspacePath;
   }
 
-  initialize(config: AgentRuntimeConfig): Promise<void> {
-    return this.manager.initialize(config as PersistentQueryConfig);
+  initialize(config: AgentRuntimeConfig, signal?: AbortSignal): Promise<void> {
+    return this.manager.initialize(config as PersistentQueryConfig, signal);
   }
 
   requiresRestart(config: AgentRuntimeRestartConfig): boolean {
@@ -222,8 +222,8 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     return this.manager.workspacePath;
   }
 
-  initialize(config: AgentRuntimeConfig): Promise<void> {
-    return this.manager.initialize(config as CodexConfig);
+  initialize(config: AgentRuntimeConfig, signal?: AbortSignal): Promise<void> {
+    return this.manager.initialize(config as CodexConfig, signal);
   }
 
   requiresRestart(config: AgentRuntimeRestartConfig): boolean {
@@ -342,8 +342,8 @@ export class DeepSeekRuntimeAdapter implements AgentRuntimeAdapter {
     return this.manager.workspacePath;
   }
 
-  initialize(config: AgentRuntimeConfig): Promise<void> {
-    return this.manager.initialize(config as DeepSeekConfig);
+  initialize(config: AgentRuntimeConfig, signal?: AbortSignal): Promise<void> {
+    return this.manager.initialize(config as DeepSeekConfig, signal);
   }
 
   requiresRestart(config: AgentRuntimeRestartConfig): boolean {

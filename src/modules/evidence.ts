@@ -732,9 +732,15 @@ async function resolveEvidenceTarget(payload: {
   }
 
   if (!item.isRegularItem?.()) return { item, warnings };
-  const best = await (
-    item as unknown as { getBestAttachment?: () => Promise<Zotero.Item> }
-  ).getBestAttachment?.();
+  let best: Zotero.Item | undefined;
+  try {
+    best = await (
+      item as unknown as { getBestAttachment?: () => Promise<Zotero.Item> }
+    ).getBestAttachment?.();
+  } catch {
+    // A stale attachment should not prevent falling back to the remaining
+    // attachments below.
+  }
   if (best?.isAttachment?.()) return { item, attachment: best, warnings };
 
   const attachments = await Promise.all(
@@ -1588,7 +1594,26 @@ async function extractPdfJsParagraphEvidence(
       }
 
       const pageView = context.pages[pageIndex];
-      const textContent = await pageView?.pdfPage?.getTextContent?.();
+      let textContent: any;
+      try {
+        const pdfPage =
+          pageView?.pdfPage ||
+          (await context.app.pdfDocument?.getPage?.(pageIndex + 1));
+        if (typeof pdfPage?.getTextContent !== "function") {
+          warnings.push(
+            `PDF.js text extraction unavailable on page ${pageIndex + 1}.`,
+          );
+          continue;
+        }
+        textContent = await pdfPage.getTextContent();
+      } catch (error) {
+        warnings.push(
+          `PDF.js text extraction failed on page ${pageIndex + 1}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        continue;
+      }
       const rawItems = Array.isArray(textContent?.items)
         ? (textContent.items as PdfJsTextItem[])
         : [];
@@ -3074,26 +3099,59 @@ export async function verifyCitationClaims(payload: {
       })
       .sort((a, b) => (b.score || 0) - (a.score || 0));
     const evidence = candidates[0];
-    const confidence = evidence?.score || 0;
-    const exactClaimMatch =
+    let confidence = evidence?.score || 0;
+    const normalizedQuery = normalizeForMatch(query);
+    const exactQueryMatch =
       !!evidence?.text &&
-      normalizeForMatch(evidence.text).includes(normalizeForMatch(query));
+      !!normalizedQuery &&
+      normalizeForMatch(evidence.text).includes(normalizedQuery);
+    const requestedPageMismatch =
+      typeof claimInput.pageIndex === "number" &&
+      evidence?.locator.pageIndex !== claimInput.pageIndex;
+    if (requestedPageMismatch) {
+      // A page-qualified claim must be supported on that page. Keep the best
+      // lexical candidate for diagnostics, but never treat another page as
+      // verified evidence.
+      confidence = Math.min(confidence, 0.24);
+    }
     const contradictory = evidence?.matchReason?.startsWith(
       "possible contradiction:",
     );
-    const status: CitationVerification["status"] = contradictory
+    let status: CitationVerification["status"] = contradictory
       ? "unverified"
       : quote
-        ? confidence >= 0.75
+        ? exactQueryMatch && confidence >= 0.75
           ? "verified"
           : confidence >= 0.25
             ? "weak"
             : "unverified"
-        : exactClaimMatch && confidence >= 0.9
+        : exactQueryMatch && confidence >= 0.9
           ? "verified"
           : confidence >= 0.16
             ? "weak"
             : "unverified";
+    // Figure/table captions and surrounding prose cannot establish what is
+    // visibly rendered. Require the visual inspection step before accepting
+    // an otherwise strong textual match as verified.
+    if (visualInspection && status === "verified") status = "weak";
+    const verificationWarnings = [
+      ...(status === "verified"
+        ? []
+        : [
+            contradictory
+              ? "The closest evidence may contradict this claim."
+              : quote && !exactQueryMatch
+                ? "No exact quote match was found; the result is only a lexical candidate."
+                : requestedPageMismatch
+                  ? "The closest evidence is on a different page than requested."
+                  : "Available lexical evidence does not establish that this claim is supported.",
+          ]),
+      ...(visualInspection
+        ? [
+            "Figure/table claim requires visual inspection before final acceptance.",
+          ]
+        : []),
+    ];
     verifications.push({
       claim,
       quote: quote || undefined,
@@ -3101,23 +3159,7 @@ export async function verifyCitationClaims(payload: {
       confidence: Number(confidence.toFixed(3)),
       evidence: evidence && confidence > 0 ? evidence : undefined,
       visualInspection,
-      warnings:
-        status === "verified" && !visualInspection
-          ? []
-          : [
-              ...(status === "verified"
-                ? []
-                : [
-                    contradictory
-                      ? "The closest evidence may contradict this claim."
-                      : "Available lexical evidence does not establish that this claim is supported.",
-                  ]),
-              ...(visualInspection
-                ? [
-                    "Figure/table claim requires visual inspection before final acceptance.",
-                  ]
-                : []),
-            ],
+      warnings: verificationWarnings,
     });
     claimSourceMap[claim] =
       evidence && confidence > 0 ? evidence.locator : null;

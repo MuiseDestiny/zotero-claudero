@@ -1,5 +1,6 @@
 pref("enable", true);
 pref("nodePath", "");
+pref("autoDetectedPaths", "");
 pref("provider", "claude");
 pref("settingsProvider", "general");
 pref("providerConfigs", "");

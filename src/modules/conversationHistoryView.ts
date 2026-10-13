@@ -1,10 +1,11 @@
 import {
-  listConversations,
+  listConversationIndex,
   renameConversation,
   subscribeConversationTitleChanges,
-  type SavedConversation,
+  type ConversationIndexEntry,
 } from "./conversationStore";
 import { getString } from "../utils/locale";
+import { onElementRemoved } from "./elementLifecycle";
 
 const popupCleanups = new WeakMap<Element, () => void>();
 
@@ -15,15 +16,17 @@ export interface ConversationHistoryViewState {
 
 export interface ConversationHistoryHandlers {
   /** Restore the picked conversation into the chat view. */
-  onRestore: (conversation: SavedConversation) => void;
+  onRestore: (conversation: ConversationIndexEntry) => void | Promise<void>;
   /** Delete the conversation from disk; the caller decides whether to start a new chat. */
-  onDelete: (conversation: SavedConversation) => void | Promise<void>;
+  onDelete: (conversation: ConversationIndexEntry) => void | Promise<void>;
   /** Export the conversation to a user-selected JSON file. */
-  onExport: (conversation: SavedConversation) => void | Promise<void>;
+  onExport: (conversation: ConversationIndexEntry) => void | Promise<void>;
   /** Permanently remove every saved conversation. */
   onDeleteAll: () => void | Promise<void>;
   /** Ask Claude for a fresh title; resolves to the new title (already persisted) or null. */
-  onAutoRename: (conversation: SavedConversation) => Promise<string | null>;
+  onAutoRename: (
+    conversation: ConversationIndexEntry,
+  ) => Promise<string | null>;
 }
 
 function createEl<K extends keyof HTMLElementTagNameMap>(
@@ -149,18 +152,22 @@ export function showConversationHistoryPopup(
   const titleRows = new Map<
     string,
     {
-      conv: SavedConversation;
+      conv: ConversationIndexEntry;
       row: HTMLElement;
       name: HTMLElement;
       sub: HTMLElement;
     }
   >();
   let unsubscribeTitles = () => {};
-  const cleanup = () => {
+  const timers = new Set<ReturnType<typeof setInterval>>();
+  const cleanup = onElementRemoved(popup, () => {
     doc.removeEventListener("mousedown", closePopup, true);
     unsubscribeTitles();
+    for (const timer of timers) clearInterval(timer);
+    timers.clear();
+    titleRows.clear();
     popupCleanups.delete(popup);
-  };
+  });
   const closePopup = (ev: MouseEvent) => {
     const inside = popup.contains(ev.target as Node);
     ztoolkit.log(
@@ -196,7 +203,7 @@ export function showConversationHistoryPopup(
   });
   popupCleanups.set(popup, cleanup);
 
-  void listConversations()
+  void listConversationIndex(50)
     .then((convs) => {
       if (!popup.isConnected) return;
       popup.textContent = "";
@@ -214,7 +221,7 @@ export function showConversationHistoryPopup(
       }
 
       let selectedRow: HTMLElement | null = null;
-      for (const conv of convs.slice(0, 50)) {
+      for (const conv of convs) {
         const row = createEl(doc, "div", "claudero-permission-row");
         const check = createEl(doc, "span", "claudero-permission-check");
         check.textContent = conv.id === state.conversationId ? "✓" : "";
@@ -324,7 +331,9 @@ export function showConversationHistoryPopup(
                 args: { seconds },
               });
             }, 1000);
-            void Promise.resolve(handlers.onAutoRename(conv))
+            timers.add(timer);
+            void Promise.resolve()
+              .then(() => handlers.onAutoRename(conv))
               .then((title) => {
                 if (title && name.isConnected) {
                   conv.title = title;
@@ -363,6 +372,7 @@ export function showConversationHistoryPopup(
               })
               .finally(() => {
                 clearInterval(timer);
+                timers.delete(timer);
                 autoBtn.classList.remove("is-busy");
                 autoBtn.removeAttribute("aria-busy");
                 autoBtn.setAttribute(
@@ -382,7 +392,8 @@ export function showConversationHistoryPopup(
           () => {
             if (exportBtn.classList.contains("is-busy")) return;
             exportBtn.classList.add("is-busy");
-            void Promise.resolve(handlers.onExport(conv))
+            void Promise.resolve()
+              .then(() => handlers.onExport(conv))
               .catch((error: unknown) => {
                 sub.textContent =
                   error instanceof Error ? error.message : String(error);
@@ -408,8 +419,10 @@ export function showConversationHistoryPopup(
             );
             if (!confirmed) return;
             deleteBtn.classList.add("is-busy");
-            void Promise.resolve(handlers.onDelete(conv))
+            void Promise.resolve()
+              .then(() => handlers.onDelete(conv))
               .then(() => {
+                titleRows.delete(conv.id);
                 row.remove();
                 if (!popup.querySelector(".claudero-permission-row"))
                   showEmpty();
@@ -431,11 +444,24 @@ export function showConversationHistoryPopup(
         row.addEventListener("click", () => {
           if (
             row.classList.contains("is-editing") ||
-            autoBtn.classList.contains("is-busy")
+            autoBtn.classList.contains("is-busy") ||
+            row.classList.contains("is-loading")
           )
             return;
-          dismiss();
-          handlers.onRestore(conv);
+          row.classList.add("is-loading");
+          void Promise.resolve()
+            .then(() => handlers.onRestore(conv))
+            .then(dismiss)
+            .catch((error: unknown) => {
+              if (!popup.isConnected) return;
+              sub.textContent = getString("history-load-failed", {
+                args: {
+                  error: error instanceof Error ? error.message : String(error),
+                },
+              });
+              row.classList.add("has-rename-error");
+            })
+            .finally(() => row.classList.remove("is-loading"));
         });
         if (conv.id === state.conversationId) selectedRow = row;
         popup.appendChild(row);
@@ -455,8 +481,10 @@ export function showConversationHistoryPopup(
         );
         if (!confirmed) return;
         deleteAll.disabled = true;
-        void Promise.resolve(handlers.onDeleteAll())
+        void Promise.resolve()
+          .then(() => handlers.onDeleteAll())
           .then(() => {
+            titleRows.clear();
             popup.textContent = "";
             showEmpty();
           })

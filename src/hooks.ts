@@ -6,7 +6,11 @@ import {
   unregisterClauderoPane,
 } from "./modules/clauderoPane";
 import { shutdownClaudeHelper } from "./modules/claudeHelperClient";
-import { registerPrefsScripts } from "./modules/preferenceScript";
+import { flushSavedData } from "./modules/conversationStore";
+import {
+  registerPrefsScripts,
+  unregisterPrefsScripts,
+} from "./modules/preferenceScript";
 import {
   registerZoteroEndpoint,
   unregisterZoteroEndpoint,
@@ -52,11 +56,16 @@ async function onMainWindowUnload(win: Window): Promise<void> {
   unregisterClauderoPane(win);
 }
 
-function onShutdown(): void {
-  shutdownClaudeHelper();
+async function onShutdown(): Promise<void> {
+  addon.data.alive = false;
+  try {
+    unregisterPrefsScripts();
+    for (const win of Zotero.getMainWindows()) unregisterClauderoPane(win);
+  } finally {
+    await Promise.all([shutdownClaudeHelper(), flushSavedData()]);
+  }
   unregisterZoteroEndpoint();
   ztoolkit.unregisterAll();
-  addon.data.alive = false;
   // @ts-expect-error - Plugin instance is not typed
   delete Zotero[addon.data.config.addonInstance];
 }

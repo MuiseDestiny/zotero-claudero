@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { throwIfAborted } from "../../shared/helperStream";
 import type { ImageInput } from "./MessageChannel";
 import type { PermissionManager } from "./PermissionManager";
 import type { ClauderoPermissionMode } from "./QueryOptionsBuilder";
@@ -68,6 +69,10 @@ function failureDetail(stderr: string, nodePath: string | undefined): string {
     return `DeepSeek Harness requires Node.js 24 or newer. The selected runtime (${nodePath || process.execPath}) is incompatible. Install Node.js 24+, or set DSH_NODE_PATH in the DeepSeek provider environment.`;
   }
   return detail.slice(-4000);
+}
+
+function isChildRunning(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode === null && child.signalCode === null;
 }
 
 const DSH_STDIN_RUNNER = [
@@ -176,8 +181,13 @@ export class DeepSeekPersistentQueryManager {
     return [];
   }
 
-  async initialize(config: DeepSeekConfig): Promise<void> {
+  async initialize(
+    config: DeepSeekConfig,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    throwIfAborted(signal);
     await mkdir(config.workspacePath, { recursive: true });
+    throwIfAborted(signal);
     this.close();
     this.config = { ...config };
     this.sessionId = config.providerState?.sessionId || null;
@@ -248,11 +258,9 @@ export class DeepSeekPersistentQueryManager {
         let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
         const timeout = setTimeout(() => {
           timedOut = true;
-          if (spawnedChild.exitCode === null && !spawnedChild.killed)
-            spawnedChild.kill("SIGTERM");
+          if (isChildRunning(spawnedChild)) spawnedChild.kill("SIGTERM");
           forceKillTimer = setTimeout(() => {
-            if (spawnedChild.exitCode === null && !spawnedChild.killed)
-              spawnedChild.kill("SIGKILL");
+            if (isChildRunning(spawnedChild)) spawnedChild.kill("SIGKILL");
           }, 2_000);
         }, TURN_TIMEOUT_MS);
         const finish = (value: { stdout: string; code: number | null }) => {
@@ -268,8 +276,7 @@ export class DeepSeekPersistentQueryManager {
           if (stdout.length > MAX_STDOUT_CHARS) {
             outputExceeded = true;
             stdout = stdout.slice(0, MAX_STDOUT_CHARS);
-            if (spawnedChild.exitCode === null && !spawnedChild.killed)
-              spawnedChild.kill("SIGTERM");
+            if (isChildRunning(spawnedChild)) spawnedChild.kill("SIGTERM");
           }
         });
         spawnedChild.stderr.on("data", (chunk: Buffer | string) => {
@@ -311,8 +318,11 @@ export class DeepSeekPersistentQueryManager {
         usage: { outputTokens: 0, final: true },
       };
     } finally {
-      if (child && child.exitCode === null && !child.killed) {
+      if (child && isChildRunning(child)) {
         child.kill("SIGTERM");
+        setTimeout(() => {
+          if (isChildRunning(child!)) child!.kill("SIGKILL");
+        }, 2_000);
       }
       this.proc = null;
       this.turnStreamActive = false;
@@ -348,7 +358,7 @@ export class DeepSeekPersistentQueryManager {
   }
 
   cancelActiveTurn(): void {
-    if (this.proc && !this.proc.killed) this.proc.kill("SIGTERM");
+    if (this.proc && isChildRunning(this.proc)) this.proc.kill("SIGTERM");
   }
 
   supportedCommands(): Promise<

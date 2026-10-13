@@ -17,13 +17,5 @@ Le code source et les versions publiées sont disponibles sur
 
 Téléchargez le fichier `.xpi` depuis la page [Releases](https://github.com/MuiseDestiny/zotero-claudero/releases), puis installez-le dans Zotero avec **Outils -> Modules complémentaires -> Installer un module depuis un fichier**.
 
-Pour compiler depuis les sources, utilisez Node.js 20 ou une version ultérieure :
-
-```bash
-git clone https://github.com/MuiseDestiny/zotero-claudero.git
-cd zotero-claudero
-npm install
-npm run build
-```
-
-Le paquet produit se trouve dans `.scaffold/build/claudero.xpi`.
+Installez Node.js 20 ou une version ultérieure, puis configurez le fournisseur
+dans les préférences de Claudero. DeepSeek Harness nécessite Node.js 24 ou plus.

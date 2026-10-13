@@ -9,6 +9,7 @@ declare namespace _ZoteroTypes {
     PluginPrefsMap: {
       "enable": boolean;
       "nodePath": string;
+      "autoDetectedPaths": string;
       "provider": string;
       "settingsProvider": string;
       "providerConfigs": string;

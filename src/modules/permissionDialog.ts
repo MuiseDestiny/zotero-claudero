@@ -7,6 +7,8 @@ export interface PermissionDialogState {
   input: HTMLTextAreaElement;
   sendButton: HTMLButtonElement;
   running: boolean;
+  /** Request id that owns the currently displayed interaction. */
+  activeRequestId?: string;
   permissionDialog: HTMLElement | null;
   questionDialog: HTMLElement | null;
   _savedComposerChildren: {
@@ -21,6 +23,8 @@ export interface QuestionDialogState {
   input: HTMLTextAreaElement;
   sendButton: HTMLButtonElement;
   running: boolean;
+  /** Request id that owns the currently displayed interaction. */
+  activeRequestId?: string;
   questionDialog: HTMLElement | null;
   _savedComposerChildren: {
     chips: HTMLElement | null;
@@ -33,6 +37,7 @@ export interface PermissionRequestView {
   id: string;
   toolName: string;
   input: unknown;
+  ownerRequestId?: string;
 }
 
 function createEl<K extends keyof HTMLElementTagNameMap>(
@@ -262,6 +267,7 @@ export function showPermissionDialog(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          ownerRequestId: request.ownerRequestId || state.activeRequestId,
           requestId: request.id,
           allowed,
           remember: remember.checked,
@@ -305,11 +311,13 @@ export interface AskUserQuestionItem {
 export interface PendingQuestion {
   toolUseId: string;
   questions: AskUserQuestionItem[];
+  ownerRequestId?: string;
 }
 
 export interface PendingExitPlan {
   toolUseId: string;
   input: Record<string, unknown>;
+  ownerRequestId?: string;
 }
 
 function normalizeQuestionItem(
@@ -887,6 +895,7 @@ export function showQuestionDialog(
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
+            ownerRequestId: pending.ownerRequestId || state.activeRequestId,
             toolUseId: pending.toolUseId,
             answers,
             response: freeformResponse,
@@ -907,7 +916,13 @@ export function showQuestionDialog(
       const token = await readHelperToken();
       await fetch("http://127.0.0.1:" + port + "/cancel-question", {
         method: "POST",
-        headers: { Authorization: "Bearer " + token },
+        headers: {
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ownerRequestId: pending.ownerRequestId || state.activeRequestId,
+        }),
       });
     } finally {
       hideQuestionDialog(state);
@@ -1203,7 +1218,11 @@ export function showExitPlanDialog(
             Authorization: "Bearer " + token,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ toolUseId: pending.toolUseId, decision }),
+          body: JSON.stringify({
+            ownerRequestId: pending.ownerRequestId || state.activeRequestId,
+            toolUseId: pending.toolUseId,
+            decision,
+          }),
         },
       );
       if (!response.ok) throw new Error(getString("plan-decision-failed"));
@@ -1222,7 +1241,13 @@ export function showExitPlanDialog(
       const token = await readHelperToken();
       await fetch("http://127.0.0.1:" + port + "/cancel-exit-plan", {
         method: "POST",
-        headers: { Authorization: "Bearer " + token },
+        headers: {
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ownerRequestId: pending.ownerRequestId || state.activeRequestId,
+        }),
       });
     } finally {
       hideQuestionDialog(state);

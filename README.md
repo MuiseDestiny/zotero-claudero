@@ -2,306 +2,143 @@
 
 [English](README.md) | [简体中文](doc/README-zhCN.md)
 
-Claudero is a Zotero plugin that puts three agent runtimes in the Zotero
-workspace: **Claude Code**, **Codex**, and **DeepSeek Harness**. It is designed
-for research conversations that need access to the selected Zotero item, PDF
-reader state, annotations, notes, and local attachments.
+**An AI research assistant inside Zotero, powered by Claude Code, Codex, and
+DeepSeek Harness.**
 
-The plugin runs a local Node.js helper and sends requests to the provider CLI
-selected in Zotero preferences:
+Ask questions about papers, compare selected references, work with annotations,
+and follow answers back to the source without leaving Zotero.
+
+## Features
+
+- Read selected papers, metadata, notes, PDF selections, and annotations.
+- Retrieve evidence, locate quotes, inspect figures and tables, and follow
+  clickable links to the corresponding Zotero source.
+- Summarize papers, extract methods, build literature matrices, and check
+  citations with academic workflows.
+- Save and reopen conversations, edit or retry messages, and insert answers
+  into Zotero notes.
+- Choose models, reasoning effort, permissions, and external MCP tools.
+
+## Install and Start
+
+Claudero supports **Zotero 7–10** on macOS, Windows, and Linux.
+
+1. Download `claudero.xpi` from
+   [GitHub Releases](https://github.com/MuiseDestiny/zotero-claudero/releases).
+2. In Zotero, open **Tools -> Plugins -> gear menu -> Install Plugin From File**
+   and select the XPI.
+3. Install **Node.js 20+** and at least one provider below. Node.js 24 LTS is
+   recommended; DeepSeek requires Node.js 24+.
+4. Open **Zotero Preferences -> Claudero**, choose a provider, and use
+   **Check details** to complete setup. Existing programs are discovered
+   automatically, so most users can leave executable paths empty.
+5. Select a paper or open its PDF, open the Claudero pane, and ask a question.
+
+| Provider         | Required program | Authentication                                 |
+| ---------------- | ---------------- | ---------------------------------------------- |
+| Claude           | Claude Code CLI  | Existing CLI login or `ANTHROPIC_API_KEY`      |
+| Codex            | Codex CLI        | Existing CLI login or `OPENAI_API_KEY`         |
+| DeepSeek Harness | `dsh`            | Existing dsh credentials or `DEEPSEEK_API_KEY` |
+
+Install and authenticate Claude Code or Codex using the provider's setup
+instructions. If DeepSeek is missing, use **Install DeepSeek Harness** in
+Claudero, or install it with `npm install -g @deepseek-ai/dsh@latest`.
+DeepSeek support is experimental.
+
+On Windows, Codex can also run in WSL. Select **WSL** in Codex settings and
+complete login inside the selected distribution.
+
+Model access, usage limits, and charges depend on your provider. Claudero does
+not include provider credentials or model access.
+
+## How It Works
+
+Claudero connects Zotero to a locally installed agent runtime through a
+separate Node.js helper. It does not train a model or operate its own AI backend.
 
 ```text
-Zotero pane -> local helper -> provider adapter -> Claude / Codex / DeepSeek
+Zotero: your question + selected research context
+    -> local Node.js helper
+        -> Claude Agent SDK -> Claude Code
+        -> Codex app-server
+        -> DeepSeek Harness headless CLI
+    -> configured AI provider
+
+Claude / Codex -> Zotero MCP tools -> library, reader, and evidence
 ```
 
-## Supported Platforms
+When you submit a question, Claudero collects lightweight context from the
+current selection and PDF reader, rather than automatically uploading the
+entire library. Claude and Codex can use **MCP (Model Context Protocol)** tools
+to retrieve additional item information, notes, annotations, and PDF evidence.
 
-Claudero targets **Zotero 7 and later** (the current manifest accepts Zotero
-7 through 10) on the operating systems supported by Zotero:
+For paper questions, tools return source passages and locations. Long documents
+can be explored by section or page range; figure and table questions can use
+rendered PDF pages. Source links in the answer open the corresponding Zotero
+item, annotation, or PDF page. These links help you check the answer, but do not
+guarantee that the model's interpretation is correct.
 
-| Host    | Claude Code                   | Codex             | DeepSeek Harness       |
-| ------- | ----------------------------- | ----------------- | ---------------------- |
-| macOS   | Native CLI                    | Native CLI        | Native `dsh`           |
-| Windows | Native CLI or executable path | Native CLI or WSL | Native `dsh.cmd`/`dsh` |
-| Linux   | Native CLI                    | Native CLI        | Native `dsh`           |
+Academic skills turn common requests into structured workflows, such as a paper
+summary or literature matrix. Imported skills are disabled until you review and
+enable them.
 
-The same plugin build is used on all three host operating systems. Executable
-paths are auto-detected from common locations and can be overridden per device
-in Preferences. On Windows, Codex can be run in WSL; set the installation mode
-to **WSL** and optionally provide the distribution name.
+Conversations are saved locally. Claude and Codex can resume native sessions
+when available; DeepSeek replays recent conversation text on each turn. After
+an interruption, you can explicitly retry from saved history. Retrying does not
+undo any tool action that has already completed.
 
-### Runtime requirements
+## Provider Differences
 
-- Zotero 7 or newer.
-- Node.js 20 or newer for the local helper. Node.js LTS is recommended.
-- A network connection and valid credentials for the provider you use.
-- The provider CLI you select, except that DeepSeek can be installed from the
-  missing-CLI warning inside Claudero.
-- DeepSeek Harness `0.1.0-rc.6` requires Node.js 24 APIs. Claudero searches
-  for a compatible Node runtime automatically; set `DSH_NODE_PATH` in the
-  DeepSeek environment to override it.
+| Capability              | Claude         | Codex                 | DeepSeek Harness   |
+| ----------------------- | -------------- | --------------------- | ------------------ |
+| Text conversations      | Yes            | Yes                   | Yes                |
+| Live streaming          | Yes            | Yes                   | Final answer only  |
+| Image input             | Yes            | Yes                   | No                 |
+| Zotero / external MCP   | Yes            | Yes                   | No                 |
+| Plan mode               | Yes            | Yes                   | No                 |
+| Session continuation    | Native session | Native thread         | Recent text replay |
+| Conversation fork       | History replay | Native fork or replay | No                 |
+| Compact                 | Yes            | Yes                   | No                 |
+| Provider slash commands | Yes            | No                    | No                 |
+| Reasoning effort        | Yes            | Model-dependent       | No                 |
 
-## Install
+## Settings
 
-### Use a release package
+Most users only need to choose a provider. Optional **Advanced** settings include:
 
-Download the `.xpi` for your Zotero version from the project's Releases page,
-then install it from **Tools -> Plugins -> gear menu -> Install Plugin From
-File**. Restart Zotero after installation if it asks you to do so.
-
-### Build from source
-
-```bash
-git clone https://github.com/MuiseDestiny/zotero-claudero.git
-cd zotero-claudero
-npm install
-npm run build
-```
-
-The production package is written to `.scaffold/build/claudero.xpi`. Install
-that file in Zotero using the same plugin installer.
-
-For development, `npm start` starts the scaffold server and launches Zotero
-with the development build. Copy `.env.example` to `.env` first and set
-`ZOTERO_PLUGIN_ZOTERO_BIN_PATH` and, when needed,
-`ZOTERO_PLUGIN_PROFILE_PATH`.
-
-## Choose a Provider
-
-Open **Zotero Preferences -> Claudero** and select a default provider. Each
-provider has its own CLI path and environment-variable panel. Leave a path
-empty to use auto-detection, or enter an absolute path.
-
-Environment fields accept `NAME=value` lines, optional `export`, and comments.
-General values apply to all providers; provider values override them. Variables
-such as `$PATH` and `${PATH}` expand in unquoted or double-quoted values. Use
-single quotes for literal credentials containing dollar signs: `KEY='secret$value'`.
-
-### Claude Code
-
-Install and authenticate the official Claude Code CLI using its normal setup,
-or provide the following variables in the Claude provider environment:
-
-```dotenv
-ANTHROPIC_API_KEY=...
-# Optional:
-# ANTHROPIC_BASE_URL=https://your-compatible-endpoint.example
-```
-
-The Claude integration supports streaming responses, native provider sessions,
-image attachments, Zotero MCP tools, plan mode, provider commands, compact,
-fork, rollback, permission prompts, and the Claude model/effort controls.
-
-### Codex
-
-Install and authenticate the Codex CLI using its normal setup, or configure an
-API-compatible environment:
-
-```dotenv
-OPENAI_API_KEY=...
-# Optional:
-# OPENAI_BASE_URL=https://your-compatible-endpoint.example
-# OPENAI_MODEL=...
-```
-
-In the Codex preferences panel choose **Native** or **WSL** on Windows. The
-Codex integration supports streaming, native threads, image attachments,
-Zotero MCP tools, plan mode, fork, rollback, compact, permission prompts, and
-model-specific reasoning effort. Its safety setting can be **Workspace write**
-or **Read only**.
-
-### DeepSeek Harness
-
-DeepSeek is integrated through the official headless command
-`dsh --profile headless`. It is a developer-preview integration and currently
-does not expose an interactive login command.
-
-Configure the DeepSeek provider environment with:
-
-```dotenv
-DEEPSEEK_API_KEY=...
-# Optional:
-# DEEPSEEK_BASE_URL=https://api.deepseek.com
-# DSH_MODEL=deepseek-v4-flash
-# DSH_HOME=/path/to/.dsh
-# DSH_NODE_PATH=/path/to/node24
-```
-
-You can either install it yourself:
-
-```bash
-npm install -g @deepseek-ai/dsh@latest
-```
-
-or send a request with DeepSeek selected. If `dsh` is missing, Claudero shows
-a warning with an **Install DeepSeek Harness** action. That action installs a
-managed copy into `~/.claudero/deepseek` on macOS, Windows, and Linux, then
-saves the discovered CLI path. Installation is user-triggered; Claudero does
-not silently install packages. The command `dsh web` only opens the browser
-UI and is not sufficient for Claudero.
-
-DeepSeek supports text conversations and the `deepseek-v4-flash` and
-`deepseek-v4-pro` model options. It currently does not support image
-attachments, Zotero MCP, provider slash commands, plan approval, fork,
-rollback, compact, or native session resume. Each headless turn is a separate
-process, so Claudero replays the visible conversation history itself. The
-latest 16 non-empty messages are replayed, and saved conversations are
-replayed after Zotero restarts.
-
-## What Claudero Can Do
-
-### Zotero-aware research chat
-
-The composer can use:
-
-- Selected library items and collections.
-- Item metadata, creators, abstract, tags, child notes, and attachment paths.
-- The active PDF attachment and reader selection.
-- Selected text and Zotero annotations, including page information.
-- Local PDF files and Zotero full-text caches when available.
-
-The current context is attached automatically. Claude and Codex can request
-fresher or more detailed data through Zotero tools when the selected context is
-missing or stale. DeepSeek receives the serialized context and replayed text,
-but does not have the Zotero MCP tool bridge.
-
-### Evidence and citations
-
-Claude and Codex can use the built-in Zotero MCP evidence tools to:
-
-- Search a paper and return numbered evidence.
-- Locate and verify exact quotes.
-- Expand a document map into relevant page ranges.
-- Inspect figures and tables using rendered PDF pages when available.
-- Verify claims and surface contradictory evidence.
-
-Evidence markers become quiet clickable links in the response and open the
-corresponding Zotero PDF page, annotation, or item. DeepSeek can still answer
-from the prompt and replayed text, but it does not have the MCP evidence bridge
-in this integration.
-
-### Academic workflows and skills
-
-Normal language requests are routed to built-in workflows when appropriate:
-
-- Summarize a paper.
-- Extract methods.
-- Build a literature matrix.
-- Verify citations.
-
-Skills can require specific Zotero context, define an output format, and apply a
-tool policy. Imported `SKILL.md`, MCP prompt, Markdown, and JSON skills are
-disabled by default until reviewed. Academic skills default to read-only Zotero
-access and do not allow web search or scripts unless explicitly configured.
-
-### Conversation and interaction features
-
-- Streaming assistant output, thinking blocks, tool cards, and usage activity.
-- Persistent conversation history with reopen-after-restart support.
-- Cross-provider history replay when a provider cannot resume a native session.
-- Editable user turns, retry, copy, conversation search, rename, and delete.
-- Provider-specific model and reasoning-effort controls.
-- Permission dialogs for interactive tool actions.
-- Optional insertion of the final response into a Zotero note.
-- Diagnostics, helper health, runtime status, and event-trace export.
-
-## Preferences
-
-The General tab contains settings shared by providers:
-
-- **Default provider**: Claude, Codex, or DeepSeek Harness.
-- **Node.js path**: leave empty for auto-detection or provide an absolute path.
-- **Workspace path**: working directory for provider processes. Empty uses
+- **Executable paths:** leave empty for automatic discovery, or set an absolute
+  path for a custom installation.
+- **Workspace:** the working directory used by the agent. Empty uses
   `<Zotero profile>/claudero/workspace`.
-- **Helper port**: local HTTP port used by the Node helper, default `38660`.
-- **Proxy**: optional HTTP/HTTPS proxy for provider network requests. An explicit
-  proxy is always passed to the provider; connection failures do not silently
-  switch to a direct connection.
-- **Environment variables**: one `KEY=VALUE` per line. Provider-specific
-  variables should normally be entered in that provider's panel.
+- **Proxy:** leave empty to inherit the process environment, or set an HTTP/HTTPS
+  proxy for provider connections.
+- **Environment variables:** enter one `KEY=VALUE` per line in the selected
+  provider's settings. Provider values override general values.
 
-The MCP tab can enable the built-in Zotero server and configure external stdio
-or HTTP/SSE MCP servers. The Skills tab manages built-in and imported academic
-skills. The Diagnostics tab can refresh runtime state, export diagnostics, and
-restart provider services.
+The **MCP** tab manages Zotero and external tools; **Skills** manages academic
+workflows; **Diagnostics** shows connection state and offers service restart.
 
-The composer permission modes are **Auto**, **Ask permissions**,
-**Accept edits**, **Plan**, **Don't ask**, and **Bypass permissions**. The
-available modes and tool actions are still limited by the selected provider's
-capabilities.
+## Privacy and Permissions
 
-Do not commit API keys or other secrets to this repository. Prefer the provider
-environment fields or the provider's own credential store.
+The helper runs locally, but the selected provider may send your questions,
+paper text, notes, conversation history, and images to its configured remote API.
+External MCP servers receive their tool arguments. Claudero adds no product
+telemetry.
 
-## Safety Model
+Built-in Zotero write tools require your approval, or a matching approval you
+explicitly chose to remember. Review file, shell, and external-tool permissions
+before granting access. Conversation history stays under
+`<Zotero profile>/claudero`; API keys entered in Preferences are stored with
+Zotero preferences. Prefer the provider's own credential store when available.
 
-The plugin UI and local helper communicate over loopback only. Provider tools
-are subject to the selected permission mode and provider safety settings.
-Academic workflows are read-only by default. Zotero write tools require user
-approval, and supported writes are tracked for undo. The assistant response is
-shown in the pane before the user chooses to insert it as a note.
+See [Privacy](PRIVACY.md) and [Security](SECURITY.md) for details.
 
-See [SECURITY.md](SECURITY.md) for vulnerability reporting and security
-boundaries, and [PRIVACY.md](PRIVACY.md) for provider data flow, local storage,
-and diagnostic-export details.
+## AI-Assisted Development
 
-## Troubleshooting
-
-### Provider CLI not found
-
-Leave the path empty and restart the panel so auto-detection can run, or set an
-absolute path in the provider tab. For DeepSeek, use the **Install DeepSeek
-Harness** action in the warning card and then retry.
-
-### DeepSeek reports a Node.js compatibility error
-
-Install Node.js 24 or newer and set `DSH_NODE_PATH` to its executable if it is
-not in a standard location. `dsh web` is unrelated to the headless CLI used by
-Claudero.
-
-### Authentication or network errors
-
-Check the provider's API key/login state, base URL, proxy, and the helper
-diagnostics panel. Environment values are passed to the provider subprocess;
-changing them may require restarting the provider runtime.
-
-### PDF evidence is incomplete
-
-Open the attachment in Zotero Reader and make sure Zotero has indexed it. For
-figure/table inspection, keep the PDF open so page rendering is available.
-
-## Development and Verification
-
-```bash
-npm install
-npm run check:release
-npm test
-npm run lint:check
-npm run audit:all
-npm run test:runtime
-npm run test:helper:mock
-npm run test:evidence:ci
-```
-
-The helper smoke test checks the local HTTP protocol and can be run for the
-providers available on the current machine:
-
-```bash
-npm run test:helper:quick
-npm run test:helper -- --providers deepseek
-```
-
-`npm test` runs Zotero browser tests and therefore requires a local Zotero
-binary/profile. The mock helper test does not require a provider login. Before
-publishing a release, run the complete CI workflow and install the generated
-XPI in a clean Zotero profile.
-
-The complete manual and automated release gate is documented in
-[docs/release-checklist.md](docs/release-checklist.md).
-
-See [doc/agent-architecture.md](doc/agent-architecture.md) for the provider
-adapter, helper protocol, event trace, academic skills, and MCP architecture.
+Claudero is developed with AI assistance, including code, refactoring, tests,
+and documentation. AI assistance does not replace maintainer responsibility or
+human review. Check important research answers against the original papers.
 
 ## License
 
-Claudero is licensed under [AGPL-3.0-or-later](LICENSE).
+[AGPL-3.0-or-later](LICENSE).

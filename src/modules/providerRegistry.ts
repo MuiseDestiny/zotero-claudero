@@ -19,7 +19,9 @@ export interface ProviderCapabilities {
   supportsPersistentRuntime: boolean;
   supportsNativeHistory: boolean;
   supportsPlanMode: boolean;
+  /** Local child conversations are available even without native history fork. */
   supportsFork: boolean;
+  supportsNativeFork: boolean;
   supportsRollback: boolean;
   supportsCompact: boolean;
   supportsProviderCommands: boolean;
@@ -100,7 +102,8 @@ export const PROVIDER_REGISTRY: Record<AiProvider, ProviderRegistration> = {
       supportsNativeHistory: true,
       supportsPlanMode: true,
       supportsFork: true,
-      supportsRollback: true,
+      supportsNativeFork: false,
+      supportsRollback: false,
       supportsCompact: true,
       supportsProviderCommands: true,
       supportsImageAttachments: true,
@@ -125,6 +128,7 @@ export const PROVIDER_REGISTRY: Record<AiProvider, ProviderRegistration> = {
       supportsNativeHistory: true,
       supportsPlanMode: true,
       supportsFork: true,
+      supportsNativeFork: true,
       supportsRollback: true,
       supportsCompact: true,
       supportsProviderCommands: false,
@@ -150,6 +154,7 @@ export const PROVIDER_REGISTRY: Record<AiProvider, ProviderRegistration> = {
       supportsNativeHistory: false,
       supportsPlanMode: false,
       supportsFork: false,
+      supportsNativeFork: false,
       supportsRollback: false,
       supportsCompact: false,
       supportsProviderCommands: false,
@@ -458,7 +463,7 @@ export function getProviderRuntimePrefs(
 ): ProviderRuntimePrefs {
   return {
     provider,
-    cliPath: getProviderCliPath(provider) || undefined,
+    cliPath: getProviderCliPath(provider),
     environmentVariables: getProviderEnvironment(provider),
     model: defaultModelForProvider(provider),
     effort: defaultEffortForProvider(provider),

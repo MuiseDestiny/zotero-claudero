@@ -10,10 +10,6 @@
   onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
 >
   <vbox class="claudero-pref-stack">
-    <html:div class="claudero-pref-heading">
-      <html:h2>Claudero</html:h2>
-      <html:p data-l10n-id="pref-heading-description"></html:p>
-    </html:div>
     <html:div class="claudero-pref-card">
       <html:div class="claudero-pref-tabs-wrapper">
         <html:button
@@ -111,26 +107,6 @@
           >
             <html:label
               class="claudero-pref-row-label"
-              for="zotero-prefpane-__addonRef__-nodePath"
-              data-l10n-id="pref-node-path"
-            ></html:label>
-            <html:input
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              type="text"
-              id="zotero-prefpane-__addonRef__-nodePath"
-              preference="nodePath"
-              data-l10n-id="pref-node-path-placeholder"
-              placeholder="/opt/homebrew/bin/node"
-            ></html:input>
-          </hbox>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
               for="zotero-prefpane-__addonRef__-provider"
               data-l10n-id="pref-provider"
             ></html:label>
@@ -143,91 +119,23 @@
               preference="provider"
             >
               <menupopup>
-                <menuitem value="claude" label="Claude Code" />
-                <menuitem value="codex" label="Codex" />
-                <menuitem value="deepseek" label="DeepSeek Harness" />
+                <menuitem
+                  value="claude"
+                  label="Claude Code"
+                  data-l10n-id="pref-provider-claude"
+                />
+                <menuitem
+                  value="codex"
+                  label="Codex"
+                  data-l10n-id="pref-provider-codex"
+                />
+                <menuitem
+                  value="deepseek"
+                  label="DeepSeek Harness"
+                  data-l10n-id="pref-provider-deepseek"
+                />
               </menupopup>
             </menulist>
-          </hbox>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="zotero-prefpane-__addonRef__-workspacePath"
-              data-l10n-id="pref-workspace-path"
-            ></html:label>
-            <html:input
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              type="text"
-              id="zotero-prefpane-__addonRef__-workspacePath"
-              preference="workspacePath"
-              data-l10n-id="pref-workspace-path-placeholder"
-              placeholder="Leave empty to use the Zotero profile"
-            ></html:input>
-          </hbox>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="zotero-prefpane-__addonRef__-helperPort"
-              data-l10n-id="pref-helper-port"
-            ></html:label>
-            <html:input
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              type="number"
-              id="zotero-prefpane-__addonRef__-helperPort"
-              preference="helperPort"
-              min="1024"
-              max="65535"
-            ></html:input>
-          </hbox>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="zotero-prefpane-__addonRef__-proxy"
-              data-l10n-id="pref-proxy"
-            ></html:label>
-            <html:input
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              type="text"
-              id="zotero-prefpane-__addonRef__-proxy"
-              preference="proxy"
-              data-l10n-id="pref-proxy-placeholder"
-              placeholder="http://127.0.0.1:7890 (leave empty to disable)"
-            ></html:input>
-          </hbox>
-          <hbox
-            class="claudero-pref-row claudero-pref-row-tall"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="zotero-prefpane-__addonRef__-environmentVariables"
-              data-l10n-id="pref-env"
-            ></html:label>
-            <html:textarea
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              id="zotero-prefpane-__addonRef__-environmentVariables"
-              preference="environmentVariables"
-              rows="5"
-              data-l10n-id="pref-env-placeholder"
-              placeholder="PATH=/opt/homebrew/bin:/usr/local/bin:$PATH"
-            ></html:textarea>
           </hbox>
           <html:div class="claudero-pref-setup-panel">
             <html:div class="claudero-pref-setup-head">
@@ -244,11 +152,111 @@
               role="status"
               aria-live="polite"
             ></html:div>
-            <html:div
-              id="claudero-pref-setup-details"
-              class="claudero-pref-setup-details"
-            ></html:div>
+            <html:details
+              id="claudero-pref-setup-disclosure"
+              class="claudero-pref-disclosure"
+            >
+              <html:summary data-l10n-id="pref-setup-details"></html:summary>
+              <html:div class="claudero-pref-disclosure-body">
+                <html:div
+                  id="claudero-pref-setup-details"
+                  class="claudero-pref-setup-details"
+                ></html:div>
+              </html:div>
+            </html:details>
           </html:div>
+          <html:details
+            id="claudero-pref-general-advanced"
+            class="claudero-pref-disclosure"
+          >
+            <html:summary data-l10n-id="pref-advanced"></html:summary>
+            <html:div class="claudero-pref-disclosure-body">
+              <html:p
+                class="claudero-pref-hint"
+                data-l10n-id="pref-advanced-description"
+              ></html:p>
+              <hbox
+                class="claudero-pref-row"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="zotero-prefpane-__addonRef__-workspacePath"
+                  data-l10n-id="pref-workspace-path"
+                ></html:label>
+                <html:input
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  type="text"
+                  id="zotero-prefpane-__addonRef__-workspacePath"
+                  preference="workspacePath"
+                  data-l10n-id="pref-workspace-path-placeholder"
+                  placeholder="Leave empty to use the Zotero profile"
+                ></html:input>
+              </hbox>
+              <hbox
+                class="claudero-pref-row"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="zotero-prefpane-__addonRef__-nodePath"
+                  data-l10n-id="pref-node-path"
+                ></html:label>
+                <html:input
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  type="text"
+                  id="zotero-prefpane-__addonRef__-nodePath"
+                  preference="nodePath"
+                  data-l10n-id="pref-node-path-placeholder"
+                  placeholder="Detected automatically"
+                ></html:input>
+              </hbox>
+              <hbox
+                class="claudero-pref-row"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="zotero-prefpane-__addonRef__-proxy"
+                  data-l10n-id="pref-proxy"
+                ></html:label>
+                <html:input
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  type="text"
+                  id="zotero-prefpane-__addonRef__-proxy"
+                  preference="proxy"
+                  data-l10n-id="pref-proxy-placeholder"
+                  placeholder="Leave empty to inherit proxy environment variables"
+                ></html:input>
+              </hbox>
+              <hbox
+                class="claudero-pref-row claudero-pref-row-tall"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="zotero-prefpane-__addonRef__-environmentVariables"
+                  data-l10n-id="pref-env"
+                ></html:label>
+                <html:textarea
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  id="zotero-prefpane-__addonRef__-environmentVariables"
+                  preference="environmentVariables"
+                  rows="5"
+                  data-l10n-id="pref-env-placeholder"
+                  placeholder="PATH=/opt/homebrew/bin:/usr/local/bin:$PATH"
+                ></html:textarea>
+              </hbox>
+            </html:div>
+          </html:details>
         </vbox>
         <vbox
           id="claudero-pref-panel-claude"
@@ -259,59 +267,62 @@
             <html:strong data-l10n-id="pref-intro-claude-title"></html:strong>
             <html:p data-l10n-id="pref-intro-claude-description"></html:p>
           </html:div>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
+          <html:div
+            id="claudero-pref-claude-detected"
+            class="claudero-pref-status"
+            role="status"
+            aria-live="polite"
+          ></html:div>
+          <html:details
+            id="claudero-pref-claude-advanced"
+            class="claudero-pref-disclosure"
           >
-            <html:label
-              class="claudero-pref-row-label"
-              data-l10n-id="pref-current-host"
-            ></html:label>
-            <html:code
-              id="claudero-pref-host-key"
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-            ></html:code>
-          </hbox>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="claudero-pref-claude-path"
-              data-l10n-id="pref-claude-path"
-            ></html:label>
-            <html:input
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              type="text"
-              id="claudero-pref-claude-path"
-              data-l10n-id="pref-claude-path-placeholder"
-              placeholder="/Users/you/.claude/local/claude"
-            ></html:input>
-          </hbox>
-          <hbox
-            class="claudero-pref-row claudero-pref-row-tall"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="claudero-pref-claude-env"
-              data-l10n-id="pref-provider-env"
-            ></html:label>
-            <html:textarea
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              id="claudero-pref-claude-env"
-              rows="5"
-              data-l10n-id="pref-claude-env-placeholder"
-              placeholder="ANTHROPIC_API_KEY=..."
-            ></html:textarea>
-          </hbox>
+            <html:summary data-l10n-id="pref-advanced"></html:summary>
+            <html:div class="claudero-pref-disclosure-body">
+              <html:p
+                class="claudero-pref-hint"
+                data-l10n-id="pref-provider-advanced-description"
+              ></html:p>
+              <hbox
+                class="claudero-pref-row"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="claudero-pref-claude-path"
+                  data-l10n-id="pref-claude-path"
+                ></html:label>
+                <html:input
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  type="text"
+                  id="claudero-pref-claude-path"
+                  data-l10n-id="pref-claude-path-placeholder"
+                  placeholder="Leave empty to detect Claude Code"
+                ></html:input>
+              </hbox>
+              <hbox
+                class="claudero-pref-row claudero-pref-row-tall"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="claudero-pref-claude-env"
+                  data-l10n-id="pref-provider-env"
+                ></html:label>
+                <html:textarea
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  id="claudero-pref-claude-env"
+                  rows="5"
+                  data-l10n-id="pref-claude-env-placeholder"
+                  placeholder="ANTHROPIC_API_KEY=..."
+                ></html:textarea>
+              </hbox>
+            </html:div>
+          </html:details>
         </vbox>
         <vbox
           id="claudero-pref-panel-codex"
@@ -322,87 +333,12 @@
             <html:strong data-l10n-id="pref-intro-codex-title"></html:strong>
             <html:p data-l10n-id="pref-intro-codex-description"></html:p>
           </html:div>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              data-l10n-id="pref-current-host"
-            ></html:label>
-            <html:code
-              id="claudero-pref-host-key-codex"
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-            ></html:code>
-          </hbox>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="claudero-pref-codex-path"
-              data-l10n-id="pref-codex-path"
-            ></html:label>
-            <html:input
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              type="text"
-              id="claudero-pref-codex-path"
-              data-l10n-id="pref-codex-path-placeholder"
-              placeholder="/opt/homebrew/bin/codex"
-            ></html:input>
-          </hbox>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="claudero-pref-codex-installation"
-              data-l10n-id="pref-codex-installation"
-            ></html:label>
-            <menulist
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              native="true"
-              id="claudero-pref-codex-installation"
-            >
-              <menupopup>
-                <menuitem
-                  value="native"
-                  data-l10n-id="pref-codex-installation-native"
-                />
-                <menuitem
-                  value="wsl"
-                  data-l10n-id="pref-codex-installation-wsl"
-                />
-              </menupopup>
-            </menulist>
-          </hbox>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="claudero-pref-codex-wsl-distro"
-              data-l10n-id="pref-codex-wsl-distro"
-            ></html:label>
-            <html:input
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              type="text"
-              id="claudero-pref-codex-wsl-distro"
-              data-l10n-id="pref-codex-wsl-placeholder"
-              placeholder="Ubuntu"
-            ></html:input>
-          </hbox>
+          <html:div
+            id="claudero-pref-codex-detected"
+            class="claudero-pref-status"
+            role="status"
+            aria-live="polite"
+          ></html:div>
           <hbox
             class="claudero-pref-row"
             style="display: flex; align-items: center; width: 100%"
@@ -431,25 +367,107 @@
               </menupopup>
             </menulist>
           </hbox>
-          <hbox
-            class="claudero-pref-row claudero-pref-row-tall"
-            style="display: flex; align-items: center; width: 100%"
+          <html:details
+            id="claudero-pref-codex-advanced"
+            class="claudero-pref-disclosure"
           >
-            <html:label
-              class="claudero-pref-row-label"
-              for="claudero-pref-codex-env"
-              data-l10n-id="pref-provider-env"
-            ></html:label>
-            <html:textarea
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              id="claudero-pref-codex-env"
-              rows="5"
-              data-l10n-id="pref-codex-env-placeholder"
-              placeholder="OPENAI_API_KEY=..."
-            ></html:textarea>
-          </hbox>
+            <html:summary data-l10n-id="pref-advanced"></html:summary>
+            <html:div class="claudero-pref-disclosure-body">
+              <html:p
+                class="claudero-pref-hint"
+                data-l10n-id="pref-provider-advanced-description"
+              ></html:p>
+              <hbox
+                class="claudero-pref-row"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="claudero-pref-codex-path"
+                  data-l10n-id="pref-codex-path"
+                ></html:label>
+                <html:input
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  type="text"
+                  id="claudero-pref-codex-path"
+                  data-l10n-id="pref-codex-path-placeholder"
+                  placeholder="Leave empty to detect Codex"
+                ></html:input>
+              </hbox>
+              <hbox
+                id="claudero-pref-codex-installation-row"
+                hidden="true"
+                class="claudero-pref-row"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="claudero-pref-codex-installation"
+                  data-l10n-id="pref-codex-installation"
+                ></html:label>
+                <menulist
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  native="true"
+                  id="claudero-pref-codex-installation"
+                >
+                  <menupopup>
+                    <menuitem
+                      value="native"
+                      data-l10n-id="pref-codex-installation-native"
+                    />
+                    <menuitem
+                      value="wsl"
+                      data-l10n-id="pref-codex-installation-wsl"
+                    />
+                  </menupopup>
+                </menulist>
+              </hbox>
+              <hbox
+                id="claudero-pref-codex-wsl-distro-row"
+                hidden="true"
+                class="claudero-pref-row"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="claudero-pref-codex-wsl-distro"
+                  data-l10n-id="pref-codex-wsl-distro"
+                ></html:label>
+                <html:input
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  type="text"
+                  id="claudero-pref-codex-wsl-distro"
+                  data-l10n-id="pref-codex-wsl-placeholder"
+                  placeholder="Use the default distribution"
+                ></html:input>
+              </hbox>
+              <hbox
+                class="claudero-pref-row claudero-pref-row-tall"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="claudero-pref-codex-env"
+                  data-l10n-id="pref-provider-env"
+                ></html:label>
+                <html:textarea
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  id="claudero-pref-codex-env"
+                  rows="5"
+                  data-l10n-id="pref-codex-env-placeholder"
+                  placeholder="OPENAI_API_KEY=..."
+                ></html:textarea>
+              </hbox>
+            </html:div>
+          </html:details>
         </vbox>
         <vbox
           id="claudero-pref-panel-deepseek"
@@ -460,59 +478,62 @@
             <html:strong data-l10n-id="pref-intro-deepseek-title"></html:strong>
             <html:p data-l10n-id="pref-intro-deepseek-description"></html:p>
           </html:div>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
+          <html:div
+            id="claudero-pref-deepseek-detected"
+            class="claudero-pref-status"
+            role="status"
+            aria-live="polite"
+          ></html:div>
+          <html:details
+            id="claudero-pref-deepseek-advanced"
+            class="claudero-pref-disclosure"
           >
-            <html:label
-              class="claudero-pref-row-label"
-              data-l10n-id="pref-current-host"
-            ></html:label>
-            <html:code
-              id="claudero-pref-host-key-deepseek"
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-            ></html:code>
-          </hbox>
-          <hbox
-            class="claudero-pref-row"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="claudero-pref-deepseek-path"
-              data-l10n-id="pref-deepseek-path"
-            ></html:label>
-            <html:input
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              type="text"
-              id="claudero-pref-deepseek-path"
-              data-l10n-id="pref-deepseek-path-placeholder"
-              placeholder="/opt/homebrew/bin/dsh"
-            ></html:input>
-          </hbox>
-          <hbox
-            class="claudero-pref-row claudero-pref-row-tall"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="claudero-pref-deepseek-env"
-              data-l10n-id="pref-provider-env"
-            ></html:label>
-            <html:textarea
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              id="claudero-pref-deepseek-env"
-              rows="5"
-              data-l10n-id="pref-deepseek-env-placeholder"
-              placeholder="DEEPSEEK_API_KEY=...&#10;DEEPSEEK_BASE_URL=https://api.deepseek.com"
-            ></html:textarea>
-          </hbox>
+            <html:summary data-l10n-id="pref-advanced"></html:summary>
+            <html:div class="claudero-pref-disclosure-body">
+              <html:p
+                class="claudero-pref-hint"
+                data-l10n-id="pref-provider-advanced-description"
+              ></html:p>
+              <hbox
+                class="claudero-pref-row"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="claudero-pref-deepseek-path"
+                  data-l10n-id="pref-deepseek-path"
+                ></html:label>
+                <html:input
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  type="text"
+                  id="claudero-pref-deepseek-path"
+                  data-l10n-id="pref-deepseek-path-placeholder"
+                  placeholder="Leave empty to detect DeepSeek Harness"
+                ></html:input>
+              </hbox>
+              <hbox
+                class="claudero-pref-row claudero-pref-row-tall"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="claudero-pref-deepseek-env"
+                  data-l10n-id="pref-provider-env"
+                ></html:label>
+                <html:textarea
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  id="claudero-pref-deepseek-env"
+                  rows="5"
+                  data-l10n-id="pref-deepseek-env-placeholder"
+                  placeholder="DEEPSEEK_API_KEY=..."
+                ></html:textarea>
+              </hbox>
+            </html:div>
+          </html:details>
         </vbox>
         <vbox
           id="claudero-pref-panel-mcp"
@@ -523,25 +544,6 @@
             <html:strong data-l10n-id="pref-intro-mcp-title"></html:strong>
             <html:p data-l10n-id="pref-intro-mcp-description"></html:p>
           </html:div>
-          <hbox
-            class="claudero-pref-row claudero-pref-row-tall"
-            style="display: flex; align-items: center; width: 100%"
-          >
-            <html:label
-              class="claudero-pref-row-label"
-              for="claudero-pref-mcp-servers"
-              data-l10n-id="pref-mcp-servers"
-            ></html:label>
-            <html:textarea
-              class="claudero-pref-control"
-              style="flex: 1"
-              flex="1"
-              id="claudero-pref-mcp-servers"
-              rows="12"
-              data-l10n-id="pref-mcp-servers-placeholder"
-              placeholder='{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]}}}'
-            ></html:textarea>
-          </hbox>
           <hbox class="claudero-pref-mcp-actions">
             <html:button
               type="button"
@@ -569,6 +571,33 @@
             role="status"
             aria-live="polite"
           ></html:div>
+          <html:details
+            id="claudero-pref-mcp-advanced"
+            class="claudero-pref-disclosure"
+          >
+            <html:summary data-l10n-id="pref-mcp-advanced"></html:summary>
+            <html:div class="claudero-pref-disclosure-body">
+              <hbox
+                class="claudero-pref-row claudero-pref-row-tall"
+                style="display: flex; align-items: center; width: 100%"
+              >
+                <html:label
+                  class="claudero-pref-row-label"
+                  for="claudero-pref-mcp-servers"
+                  data-l10n-id="pref-mcp-servers"
+                ></html:label>
+                <html:textarea
+                  class="claudero-pref-control"
+                  style="flex: 1"
+                  flex="1"
+                  id="claudero-pref-mcp-servers"
+                  rows="12"
+                  data-l10n-id="pref-mcp-servers-placeholder"
+                  placeholder='{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]}}}'
+                ></html:textarea>
+              </hbox>
+            </html:div>
+          </html:details>
         </vbox>
         <vbox
           id="claudero-pref-panel-skills"

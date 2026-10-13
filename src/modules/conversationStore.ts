@@ -1,6 +1,13 @@
 export type MessageRole = "user" | "assistant";
 
 import { getPref, setPref } from "../utils/prefs";
+import { validateConversationData } from "./conversationValidation";
+import {
+  applyMetadataPatch,
+  snapshotConversationValue,
+  snapshotMetadataPatch,
+  type ConversationMetadataPatch,
+} from "./conversationSnapshot";
 
 export interface ConversationImage {
   id: string;
@@ -61,7 +68,14 @@ export type ConversationBlock =
       partialInput?: string;
     }
   | { type: "tool_result"; id: string; content: string; isError?: boolean }
-  | { type: "notice"; kind?: string; title: string; text: string };
+  | {
+      type: "notice";
+      kind?: string;
+      title: string;
+      text: string;
+      /** Raw failure retained so restored history can offer localized repair actions. */
+      failureMessage?: string;
+    };
 
 export interface SavedConversation {
   schemaVersion: number;
@@ -76,6 +90,7 @@ export interface SavedConversation {
   parentConversationId?: string;
   forkedAtTurnIndex?: number;
   compactedAt?: number;
+  recoveryManifest?: import("./conversationRecovery").RecoveryManifest;
 }
 
 export type PromptIcon =
@@ -102,6 +117,8 @@ export interface ConversationIndexEntry {
   titleSource?: "fallback" | "ai" | "user";
   schemaVersion?: number;
   byteSize?: number;
+  /** Primary and backup stat signature; absent for legacy or unreadable files. */
+  fileStamp?: string;
 }
 
 interface ConversationIndexDocument {
@@ -134,6 +151,15 @@ export class ConversationStorageError extends Error {
   ) {
     super(message);
     this.name = "ConversationStorageError";
+  }
+}
+
+class UnsupportedConversationSchemaError extends ConversationStorageError {
+  constructor(version: number) {
+    super(
+      "read",
+      `Conversation schema ${version} requires a newer Claudero version. Original data has been preserved.`,
+    );
   }
 }
 
@@ -239,6 +265,37 @@ async function conversationDiskSize(filePath: string): Promise<number> {
   return (await fileSize(filePath)) + (await fileSize(backupPath(filePath)));
 }
 
+async function conversationFileState(filePath: string): Promise<{
+  byteSize: number;
+  fileStamp?: string;
+}> {
+  const stat = async (path: string) => {
+    try {
+      return await IOUtils.stat(path);
+    } catch {
+      return null;
+    }
+  };
+  const [primary, backup] = await Promise.all([
+    stat(filePath),
+    stat(backupPath(filePath)),
+  ]);
+  return {
+    byteSize: (primary?.size || 0) + (backup?.size || 0),
+    fileStamp:
+      primary &&
+      Number.isFinite(primary.lastModified) &&
+      (!backup || Number.isFinite(backup.lastModified))
+        ? JSON.stringify([
+            primary.size,
+            primary.lastModified,
+            backup?.size ?? null,
+            backup?.lastModified ?? null,
+          ])
+        : undefined,
+  };
+}
+
 async function removeIfPresent(filePath: string): Promise<void> {
   if (await IOUtils.exists(filePath)) await IOUtils.remove(filePath);
 }
@@ -251,7 +308,12 @@ async function removeConversationFiles(id: string): Promise<void> {
   const quarantineDir = PathUtils.join(getHistoryDir(), "corrupt");
   if (await IOUtils.exists(quarantineDir)) {
     for (const candidate of await IOUtils.getChildren(quarantineDir)) {
-      if (PathUtils.filename(candidate).startsWith(`${id}-`)) {
+      const name = PathUtils.filename(candidate);
+      const prefix = `${id}-`;
+      if (
+        name.startsWith(prefix) &&
+        /^\d+-(?:primary|backup)\.json$/.test(name.slice(prefix.length))
+      ) {
         await removeIfPresent(candidate);
       }
     }
@@ -308,9 +370,15 @@ function normalizeConversation(
     typeof raw.schemaVersion === "number" &&
     raw.schemaVersion > CONVERSATION_SCHEMA_VERSION
   ) {
-    return null;
+    throw new UnsupportedConversationSchemaError(raw.schemaVersion);
   }
-  if (!Array.isArray(raw.turns) || raw.turns.length === 0) return null;
+  if (
+    raw.schemaVersion !== undefined &&
+    (!Number.isInteger(raw.schemaVersion) || raw.schemaVersion < 0)
+  )
+    return null;
+  if (validateConversationData(value)) return null;
+  if (raw.id !== undefined && raw.id !== fallbackId) return null;
   const id = typeof raw.id === "string" && raw.id ? raw.id : fallbackId;
   try {
     assertConversationId(id);
@@ -320,7 +388,7 @@ function normalizeConversation(
   const createdAt =
     typeof raw.createdAt === "number" && Number.isFinite(raw.createdAt)
       ? raw.createdAt
-      : raw.turns[0]?.ts || Date.now();
+      : raw.turns![0]?.ts || Date.now();
   const updatedAt =
     typeof raw.updatedAt === "number" && Number.isFinite(raw.updatedAt)
       ? raw.updatedAt
@@ -332,7 +400,7 @@ function normalizeConversation(
     title:
       typeof raw.title === "string" && raw.title.trim()
         ? raw.title.trim().slice(0, 80)
-        : conversationTitle(raw.turns),
+        : conversationTitle(raw.turns!),
     createdAt,
     updatedAt,
     turns: raw.turns,
@@ -374,6 +442,7 @@ function normalizeIndexEntries(
         typeof raw.byteSize === "number"
           ? Math.max(0, raw.byteSize)
           : undefined,
+      fileStamp: typeof raw.fileStamp === "string" ? raw.fileStamp : undefined,
     });
   }
   return entries;
@@ -412,6 +481,7 @@ async function readConversationFile(
       }
       return normalized;
     } catch (error) {
+      if (error instanceof UnsupportedConversationSchemaError) throw error;
       historyLog(
         `[History] failed to read ${candidatePath}: ${describeStorageError(error)}`,
       );
@@ -476,10 +546,9 @@ async function writeConversationIndex(
   );
 }
 
-function entryFromConversation(
+async function entryFromConversation(
   conversation: SavedConversation,
-  byteSize: number,
-): ConversationIndexEntry {
+): Promise<ConversationIndexEntry> {
   return {
     id: conversation.id,
     title: conversation.title,
@@ -488,7 +557,7 @@ function entryFromConversation(
     turnCount: conversation.turns.length,
     titleSource: conversation.titleSource,
     schemaVersion: conversation.schemaVersion,
-    byteSize,
+    ...(await conversationFileState(getConversationPath(conversation.id))),
   };
 }
 
@@ -533,24 +602,36 @@ export function selectRetainedConversationEntries(
   return { retained, removed };
 }
 
-async function scanConversationDirectory(): Promise<ConversationIndexEntry[]> {
+async function scanConversationDirectory(
+  cached: ConversationIndexEntry[] = [],
+): Promise<ConversationIndexEntry[]> {
   const dir = getHistoryDir();
   if (!(await IOUtils.exists(dir))) return [];
   const children = await IOUtils.getChildren(dir);
   const entries: ConversationIndexEntry[] = [];
+  const seen = new Set<string>();
+  const cachedById = new Map(cached.map((entry) => [entry.id, entry]));
   for (const filePath of children) {
     const leafName = PathUtils.filename(filePath);
-    if (!leafName.endsWith(".json")) continue;
-    const id = leafName.slice(0, -".json".length);
+    if (!/\.json(?:\.bak)?$/.test(leafName)) continue;
+    const id = leafName.replace(/\.json(?:\.bak)?$/, "");
+    if (seen.has(id)) continue;
+    seen.add(id);
     try {
+      const previous = cachedById.get(id);
+      if (
+        previous?.fileStamp &&
+        previous.schemaVersion === CONVERSATION_SCHEMA_VERSION
+      ) {
+        const disk = await conversationFileState(getConversationPath(id));
+        if (disk.fileStamp === previous.fileStamp) {
+          entries.push({ ...previous, ...disk });
+          continue;
+        }
+      }
       const conversation = await readConversationFile(id);
       if (!conversation) continue;
-      entries.push(
-        entryFromConversation(
-          conversation,
-          await conversationDiskSize(getConversationPath(id)),
-        ),
-      );
+      entries.push(await entryFromConversation(conversation));
     } catch (error) {
       historyLog(
         `[History] skipped invalid conversation file ${leafName}: ${describeStorageError(error)}`,
@@ -598,15 +679,42 @@ async function ensureConversationIndex(): Promise<ConversationIndexEntry[]> {
     return current.entries;
   }
 
-  const scanned = await scanConversationDirectory();
-  const merged = new Map<string, ConversationIndexEntry>();
-  for (const entry of current.entries) merged.set(entry.id, entry);
-  for (const entry of scanned) merged.set(entry.id, entry);
+  // Files, not stale index entries, are authoritative after partial deletion.
+  const scanned = await scanConversationDirectory(current.entries);
+  await writeConversationIndex(scanned);
   conversationIndexInitialized = true;
-  return applyRetentionPolicy(
-    [...merged.values()],
-    DEFAULT_CONVERSATION_STORAGE_POLICY,
-  );
+  return scanned;
+}
+
+export interface ConversationSaveResult {
+  committed: true;
+  warning?: string;
+}
+
+async function repairDerivedIndex(error: unknown): Promise<string> {
+  conversationIndexInitialized = false;
+  // Invalidate both primary and backup; an old backup must not resurrect entries.
+  for (const path of [
+    getConversationIndexPath(),
+    backupPath(getConversationIndexPath()),
+  ]) {
+    try {
+      await removeIfPresent(path);
+    } catch {
+      /* Startup always scans files. */
+    }
+  }
+  try {
+    await writeConversationIndex(await scanConversationDirectory(), {
+      backup: false,
+    });
+    conversationIndexInitialized = true;
+  } catch (repairError) {
+    historyLog(
+      `[History] index repair deferred: ${describeStorageError(repairError)}`,
+    );
+  }
+  return `Conversation saved. History index or retention maintenance needs repair: ${describeStorageError(error)}`;
 }
 
 export function enforceConversationRetention(
@@ -614,7 +722,12 @@ export function enforceConversationRetention(
 ): Promise<void> {
   return runStorageTask(async () => {
     const entries = await ensureConversationIndex();
-    await applyRetentionPolicy(entries, policy);
+    try {
+      await applyRetentionPolicy(entries, policy);
+    } catch (error) {
+      await repairDerivedIndex(error);
+      throw error;
+    }
   });
 }
 
@@ -625,46 +738,47 @@ export function newConversationId(): string {
 export async function saveConversationData(
   id: string,
   turns: ConversationTurn[],
-  metadata: Partial<
-    Pick<
-      SavedConversation,
-      | "providerState"
-      | "parentConversationId"
-      | "forkedAtTurnIndex"
-      | "compactedAt"
-    >
-  > = {},
-): Promise<void> {
-  if (turns.length === 0) return;
+  metadata: ConversationMetadataPatch = {},
+): Promise<ConversationSaveResult> {
+  const snapshot = snapshotConversationValue(turns);
+  const patch = snapshotMetadataPatch(metadata);
   return runStorageTask(async () => {
     try {
       assertConversationId(id);
       const dir = getHistoryDir();
       await IOUtils.makeDirectory(dir, { createAncestors: true });
-      const index = await ensureConversationIndex();
+      const index = (await readConversationIndexDocument()).entries;
       const existing = await readConversationFile(id);
+      if (
+        !existing &&
+        ((await IOUtils.exists(getConversationPath(id))) ||
+          (await IOUtils.exists(backupPath(getConversationPath(id)))))
+      ) {
+        throw new ConversationStorageError(
+          "save",
+          "The existing conversation is unreadable. Original files were preserved; recover it or save to a new conversation.",
+        );
+      }
       const indexEntry = index.find((entry) => entry.id === id);
       const existingTitle = existing?.title?.trim() || indexEntry?.title || "";
-      const title = existingTitle || conversationTitle(turns);
+      const title = existingTitle || conversationTitle(snapshot);
       const data: SavedConversation = {
         schemaVersion: CONVERSATION_SCHEMA_VERSION,
         id,
         title,
-        createdAt: existing?.createdAt ?? turns[0]?.ts ?? Date.now(),
+        createdAt: existing?.createdAt ?? snapshot[0]?.ts ?? Date.now(),
         updatedAt: Date.now(),
-        turns,
+        turns: snapshot,
         titleSource:
           existing?.titleSource ||
           indexEntry?.titleSource ||
           (existingTitle ? undefined : "fallback"),
-        providerState: metadata.providerState ?? existing?.providerState,
-        parentConversationId:
-          metadata.parentConversationId ?? existing?.parentConversationId,
-        forkedAtTurnIndex:
-          metadata.forkedAtTurnIndex ?? existing?.forkedAtTurnIndex,
-        compactedAt: metadata.compactedAt ?? existing?.compactedAt,
+        ...applyMetadataPatch(existing, patch),
       };
       const serialized = JSON.stringify(data, null, 2);
+      const validationError = validateConversationData(data);
+      if (validationError)
+        throw new ConversationStorageError("save", validationError);
       const encodedBytes = new TextEncoder().encode(serialized).byteLength;
       if (
         encodedBytes > DEFAULT_CONVERSATION_STORAGE_POLICY.maxConversationBytes
@@ -676,15 +790,23 @@ export async function saveConversationData(
       }
       const filePath = getConversationPath(id);
       await atomicWriteUTF8(filePath, serialized);
-      const nextIndex = index.filter((entry) => entry.id !== id);
-      nextIndex.unshift(
-        entryFromConversation(data, await conversationDiskSize(filePath)),
-      );
-      await applyRetentionPolicy(
-        nextIndex,
-        DEFAULT_CONVERSATION_STORAGE_POLICY,
-        id,
-      );
+      try {
+        const nextIndex = (await ensureConversationIndex()).filter(
+          (entry) => entry.id !== id,
+        );
+        nextIndex.unshift(await entryFromConversation(data));
+        await applyRetentionPolicy(
+          nextIndex,
+          DEFAULT_CONVERSATION_STORAGE_POLICY,
+          id,
+        );
+        return { committed: true as const };
+      } catch (error) {
+        return {
+          committed: true as const,
+          warning: await repairDerivedIndex(error),
+        };
+      }
     } catch (error) {
       if (error instanceof ConversationStorageError) throw error;
       throw new ConversationStorageError(
@@ -731,10 +853,12 @@ export async function renameConversation(
       const index = (await ensureConversationIndex()).filter(
         (entry) => entry.id !== id,
       );
-      index.unshift(
-        entryFromConversation(data, await conversationDiskSize(filePath)),
-      );
-      await writeConversationIndex(index);
+      index.unshift(await entryFromConversation(data));
+      try {
+        await writeConversationIndex(index);
+      } catch (error) {
+        await repairDerivedIndex(error);
+      }
       emitConversationTitleChange({
         id,
         title: cleanTitle,
@@ -752,20 +876,22 @@ export async function renameConversation(
 
 export async function getConversationTitle(id: string): Promise<string | null> {
   if (!id) return null;
-  try {
-    const data = await readConversationFile(id);
-    if (data?.title.trim()) return data.title.trim();
-    return (
-      (await readConversationIndexDocument()).entries.find(
-        (entry) => entry.id === id,
-      )?.title || null
-    );
-  } catch (error) {
-    historyLog(
-      `[History] failed to read latest title id=${id}: ${String(error)}`,
-    );
-    return null;
-  }
+  return runStorageTask(async () => {
+    try {
+      const data = await readConversationFile(id);
+      if (data?.title.trim()) return data.title.trim();
+      return (
+        (await readConversationIndexDocument()).entries.find(
+          (entry) => entry.id === id,
+        )?.title || null
+      );
+    } catch (error) {
+      historyLog(
+        `[History] failed to read latest title id=${id}: ${String(error)}`,
+      );
+      return null;
+    }
+  });
 }
 
 export async function deleteConversation(id: string): Promise<void> {
@@ -776,8 +902,13 @@ export async function deleteConversation(id: string): Promise<void> {
       const index = (await ensureConversationIndex()).filter(
         (entry) => entry.id !== id,
       );
-      await writeConversationIndex(index);
+      try {
+        await writeConversationIndex(index);
+      } catch (error) {
+        await repairDerivedIndex(error);
+      }
     } catch (error) {
+      await repairDerivedIndex(error);
       throw new ConversationStorageError(
         "delete",
         `Claudero could not permanently delete this conversation: ${describeStorageError(error)}`,
@@ -799,6 +930,7 @@ export function deleteAllConversations(): Promise<void> {
       await writeConversationIndex([]);
       conversationIndexInitialized = true;
     } catch (error) {
+      await repairDerivedIndex(error);
       throw new ConversationStorageError(
         "delete-all",
         `Claudero could not permanently delete all conversations: ${describeStorageError(error)}`,
@@ -841,14 +973,33 @@ export function exportConversationToFile(
   });
 }
 
-export async function listConversationIndex(): Promise<
-  ConversationIndexEntry[]
-> {
+export async function listConversationIndex(
+  limit = Infinity,
+): Promise<ConversationIndexEntry[]> {
   return runStorageTask(async () =>
-    (await ensureConversationIndex()).sort(
-      (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
-    ),
+    (await ensureConversationIndex())
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      .slice(0, Math.max(0, limit)),
   );
+}
+
+export function loadConversationById(
+  id: string,
+): Promise<SavedConversation | null> {
+  return runStorageTask(() => readConversationFile(id));
+}
+
+export function loadLatestSavedConversation(): Promise<SavedConversation | null> {
+  return runStorageTask(async () => {
+    const index = (await ensureConversationIndex()).sort(
+      (a, b) => b.updatedAt - a.updatedAt,
+    );
+    for (const entry of index) {
+      const conversation = await readConversationFile(entry.id);
+      if (conversation) return conversation;
+    }
+    return null;
+  });
 }
 
 export async function listConversations(): Promise<SavedConversation[]> {
@@ -878,33 +1029,156 @@ export async function listConversations(): Promise<SavedConversation[]> {
   });
 }
 
-export async function loadCustomPrompts(): Promise<CustomPrompt[]> {
-  try {
-    const filePath = getCustomPromptsPath();
-    if (!(await IOUtils.exists(filePath))) return [];
-    const parsed = JSON.parse(
-      await IOUtils.readUTF8(filePath),
-    ) as CustomPrompt[];
-    const normalized = normalizePrompts(Array.isArray(parsed) ? parsed : []);
-    if (normalized.changed) await saveCustomPrompts(normalized.prompts);
+let promptQueue: Promise<void> = Promise.resolve();
+
+/** Wait for snapshots already enqueued by pane/editor disposal before unloading. */
+export async function flushSavedData(): Promise<void> {
+  await Promise.all([storageQueue, promptQueue]);
+}
+
+function runPromptTask<T>(task: () => Promise<T>): Promise<T> {
+  const result = promptQueue.then(task);
+  promptQueue = result.then(
+    () => {},
+    () => {},
+  );
+  return result;
+}
+
+function parsePromptList(value: unknown): CustomPrompt[] {
+  const ids = new Set<string>();
+  if (
+    !Array.isArray(value) ||
+    !value.every((prompt) => {
+      if (
+        !prompt ||
+        typeof prompt !== "object" ||
+        typeof prompt.id !== "string" ||
+        !prompt.id ||
+        ids.has(prompt.id) ||
+        typeof prompt.label !== "string" ||
+        typeof prompt.text !== "string" ||
+        (prompt.description !== undefined &&
+          typeof prompt.description !== "string")
+      )
+        return false;
+      const icon = prompt.icon;
+      if (
+        icon !== undefined &&
+        (!icon ||
+          typeof icon !== "object" ||
+          (icon.type === "upload"
+            ? typeof icon.attachmentKey !== "string"
+            : !["emoji", "iconify"].includes(icon.type) ||
+              typeof icon.value !== "string" ||
+              (icon.color !== undefined && typeof icon.color !== "string")))
+      )
+        return false;
+      ids.add(prompt.id);
+      return true;
+    })
+  )
+    throw new Error(
+      "Prompt data is invalid. Original files have been preserved.",
+    );
+  return value as CustomPrompt[];
+}
+
+async function readCustomPrompts(): Promise<CustomPrompt[]> {
+  const path = getCustomPromptsPath();
+  let failure: unknown;
+  for (const [candidate, recovered] of [
+    [path, false],
+    [backupPath(path), true],
+  ] as const) {
+    let normalized: ReturnType<typeof normalizePrompts>;
+    try {
+      if (!(await IOUtils.exists(candidate))) continue;
+      normalized = normalizePrompts(
+        parsePromptList(await readJsonFile(candidate)),
+      );
+    } catch (error) {
+      failure = error;
+      continue;
+    }
+    // Once a valid version is found, a failed repair must not select older data.
+    if (recovered || normalized.changed) {
+      await atomicWriteUTF8(path, JSON.stringify(normalized.prompts, null, 2), {
+        backup: !recovered,
+      });
+    }
     return normalized.prompts;
-  } catch {
-    return [];
+  }
+  if (failure)
+    throw new ConversationStorageError(
+      "read-prompts",
+      `Could not read saved prompts: ${describeStorageError(failure)}`,
+      failure,
+    );
+  return [];
+}
+
+async function writeCustomPrompts(prompts: CustomPrompt[]): Promise<void> {
+  parsePromptList(prompts);
+  await IOUtils.makeDirectory(getClauderoDir(), { createAncestors: true });
+  await atomicWriteUTF8(
+    getCustomPromptsPath(),
+    JSON.stringify(prompts, null, 2),
+  );
+}
+
+export function loadCustomPrompts(): Promise<CustomPrompt[]> {
+  return runPromptTask(readCustomPrompts);
+}
+
+export function saveCustomPrompts(prompts: CustomPrompt[]): Promise<void> {
+  const snapshot = snapshotConversationValue(prompts);
+  return runPromptTask(async () => {
+    await readCustomPrompts();
+    await writeCustomPrompts(snapshot);
+  });
+}
+
+/** Compare the editor's original record inside the serialized read/modify/write. */
+export function assertPromptUnchanged(
+  current: CustomPrompt | undefined,
+  expected: CustomPrompt | undefined,
+): void {
+  if (JSON.stringify(current) !== JSON.stringify(expected)) {
+    throw new Error(
+      "This prompt changed or was deleted elsewhere. Copy your draft and reopen the editor.",
+    );
   }
 }
 
-export async function saveCustomPrompts(
-  prompts: CustomPrompt[],
+export function saveCustomPrompt(
+  prompt: CustomPrompt,
+  expected?: CustomPrompt,
 ): Promise<void> {
-  try {
-    await IOUtils.makeDirectory(getClauderoDir(), { createAncestors: true });
-    await IOUtils.writeUTF8(
-      getCustomPromptsPath(),
-      JSON.stringify(prompts, null, 2),
+  const snapshot = snapshotConversationValue(prompt);
+  const original = expected && snapshotConversationValue(expected);
+  return runPromptTask(async () => {
+    const prompts = await readCustomPrompts();
+    const index = prompts.findIndex((entry) => entry.id === snapshot.id);
+    assertPromptUnchanged(prompts[index], original);
+    if (index >= 0) prompts[index] = snapshot;
+    else prompts.push(snapshot);
+    await writeCustomPrompts(prompts);
+  });
+}
+
+export function deleteCustomPrompt(prompt: CustomPrompt): Promise<void> {
+  const original = snapshotConversationValue(prompt);
+  return runPromptTask(async () => {
+    const prompts = await readCustomPrompts();
+    assertPromptUnchanged(
+      prompts.find((entry) => entry.id === original.id),
+      original,
     );
-  } catch {
-    // Best effort.
-  }
+    await writeCustomPrompts(
+      prompts.filter((entry) => entry.id !== original.id),
+    );
+  });
 }
 
 const LEGACY_ICON_MAP: Record<string, string> = {
@@ -1027,15 +1301,16 @@ export function getDefaultPrompts(): CustomPrompt[] {
   try {
     const raw = getPref("defaultPrompts");
     if (raw) {
-      const parsed = JSON.parse(raw) as CustomPrompt[];
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      const parsed = parsePromptList(JSON.parse(raw));
+      if (Array.isArray(parsed)) {
         const normalized = normalizePrompts(parsed);
         if (normalized.changed) saveDefaultPrompts(normalized.prompts);
         return normalized.prompts;
       }
     }
   } catch {
-    // Ignore corrupt pref.
+    // Render defaults without replacing an unreadable preference.
+    return normalizePrompts(BUILTIN_DEFAULT_PROMPTS).prompts;
   }
   const normalized = normalizePrompts(BUILTIN_DEFAULT_PROMPTS);
   saveDefaultPrompts(normalized.prompts);
@@ -1043,9 +1318,6 @@ export function getDefaultPrompts(): CustomPrompt[] {
 }
 
 export function saveDefaultPrompts(prompts: CustomPrompt[]): void {
-  try {
-    setPref("defaultPrompts", JSON.stringify(prompts));
-  } catch {
-    // Best effort.
-  }
+  parsePromptList(prompts);
+  setPref("defaultPrompts", JSON.stringify(prompts));
 }

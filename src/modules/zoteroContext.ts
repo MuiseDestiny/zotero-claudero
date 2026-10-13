@@ -238,7 +238,12 @@ function getCurrentReaderStats(targetWindow?: Window | null): {
 async function getAttachmentContext(
   attachmentID: number,
 ): Promise<ClauderoAttachmentContext | null> {
-  const attachment = (await Zotero.Items.getAsync(attachmentID)) as Zotero.Item;
+  let attachment: Zotero.Item | undefined;
+  try {
+    attachment = (await Zotero.Items.getAsync(attachmentID)) as Zotero.Item;
+  } catch {
+    return null;
+  }
   if (!attachment) {
     return null;
   }
@@ -274,7 +279,11 @@ export async function getSelectedZoteroContext(
   const win = contextWindow(targetWindow) as Window & {
     ZoteroPane?: ReturnType<typeof Zotero.getActiveZoteroPane>;
   };
-  const pane = win.ZoteroPane || Zotero.getActiveZoteroPane();
+  const pane =
+    win.ZoteroPane ||
+    (typeof Zotero.getActiveZoteroPane === "function"
+      ? Zotero.getActiveZoteroPane()
+      : null);
   const tabs = (
     win as Window & {
       Zotero_Tabs?: { selectedType?: string; selectedID?: string };
@@ -282,51 +291,76 @@ export async function getSelectedZoteroContext(
   ).Zotero_Tabs;
   const selectedType = tabs?.selectedType || "";
   const selectedTabID = tabs?.selectedID || "";
-  const selected = selectedType === "library" ? pane.getSelectedItems() : [];
+  // A reader or a transient window can exist before ZoteroPane is ready.
+  // Context collection should still return the available reader state.
+  const selected =
+    selectedType === "library" && typeof pane?.getSelectedItems === "function"
+      ? (() => {
+          try {
+            return pane.getSelectedItems() || [];
+          } catch {
+            return [];
+          }
+        })()
+      : [];
   const resolvedItems: Zotero.Item[] = [];
   for (const item of selected) {
-    if (item.isRegularItem()) {
-      resolvedItems.push(item);
-    } else if (item.isAttachment?.()) {
-      const parent = item.parentItem;
-      if (
-        parent &&
-        parent.isRegularItem() &&
-        !resolvedItems.some((i) => i.id === parent.id)
-      ) {
-        resolvedItems.push(parent);
+    try {
+      if (item.isRegularItem()) {
+        resolvedItems.push(item);
+      } else if (item.isAttachment?.()) {
+        const parent = item.parentItem;
+        if (
+          parent &&
+          parent.isRegularItem() &&
+          !resolvedItems.some((i) => i.id === parent.id)
+        ) {
+          resolvedItems.push(parent);
+        }
       }
+    } catch {
+      // Selection can contain an item deleted between the UI query and read.
     }
   }
   const items: ClauderoItemContext[] = [];
 
   for (const item of resolvedItems) {
-    const attachmentIDs = item.getAttachments();
-    const attachments = (
-      await Promise.all(attachmentIDs.map((id) => getAttachmentContext(id)))
-    ).filter(Boolean) as ClauderoAttachmentContext[];
+    try {
+      const attachmentIDs =
+        typeof item.getAttachments === "function" ? item.getAttachments() : [];
+      const attachments = (
+        await Promise.all(
+          (Array.isArray(attachmentIDs) ? attachmentIDs : []).map((id) =>
+            getAttachmentContext(id),
+          ),
+        )
+      ).filter(Boolean) as ClauderoAttachmentContext[];
 
-    items.push({
-      id: item.id,
-      key: item.key,
-      itemType: item.itemType,
-      title: item.getField("title") as string,
-      creators: item.getCreators().map(getCreatorName).filter(Boolean),
-      date: (item.getField("date", true, true) as string) || "",
-      publicationTitle:
-        (item.getField("publicationTitle", false, true) as string) || "",
-      abstractNote: stripHtml(
-        (item.getField("abstractNote") as string) || "",
-      ).slice(0, 800),
-      url: (item.getField("url") as string) || "",
-      DOI: (item.getField("DOI") as string) || "",
-      tags: item
-        .getTags()
-        .map((tag) => tag.tag)
-        .slice(0, 30),
-      attachments,
-      collections: getItemCollections(item),
-    });
+      items.push({
+        id: item.id,
+        key: item.key,
+        itemType: item.itemType,
+        title: item.getField("title") as string,
+        creators: item.getCreators().map(getCreatorName).filter(Boolean),
+        date: (item.getField("date", true, true) as string) || "",
+        publicationTitle:
+          (item.getField("publicationTitle", false, true) as string) || "",
+        abstractNote: stripHtml(
+          (item.getField("abstractNote") as string) || "",
+        ).slice(0, 800),
+        url: (item.getField("url") as string) || "",
+        DOI: (item.getField("DOI") as string) || "",
+        tags: item
+          .getTags()
+          .map((tag) => tag.tag)
+          .slice(0, 30),
+        attachments,
+        collections: getItemCollections(item),
+      });
+    } catch {
+      // Ignore a deleted or partially-loaded item while preserving context
+      // from the remaining selection.
+    }
   }
 
   return {
@@ -357,10 +391,9 @@ function getCurrentReaderAttachmentContext(
   if (!item) return undefined;
   const parent = item.parentItem;
   const stats = getCurrentReaderStats(targetWindow);
-  return {
+  const attachmentContext: ClauderoAttachmentContext = {
     id: typeof item.id === "number" ? item.id : 0,
     key: typeof item.key === "string" ? item.key : "",
-    _item: item,
     iconName:
       (
         item as unknown as { getItemTypeIconName?: () => string }
@@ -380,6 +413,11 @@ function getCurrentReaderAttachmentContext(
     pageLabel: stats.pageLabel,
     pagesCount: stats.pagesCount,
   };
+  Object.defineProperty(attachmentContext, "_item", {
+    value: item,
+    enumerable: false,
+  });
+  return attachmentContext;
 }
 
 export function getCurrentReaderItem(
@@ -458,15 +496,25 @@ export function getSelectedReaderAnnotations(
           key,
         ) as any;
         if (!item) return [];
+        let pageIndex: number | undefined;
+        if (item.annotationPosition) {
+          try {
+            const parsed = JSON.parse(item.annotationPosition);
+            if (typeof parsed?.pageIndex === "number") {
+              pageIndex = parsed.pageIndex;
+            }
+          } catch {
+            // Keep the annotation text even when its optional position is
+            // malformed in an older Zotero database.
+          }
+        }
         return [
           {
             text: (item.annotationText || "").trim(),
             comment: item.annotationComment || undefined,
             type: item.annotationType || "highlight",
             color: item.annotationColor || undefined,
-            pageIndex: item.annotationPosition
-              ? JSON.parse(item.annotationPosition).pageIndex
-              : undefined,
+            pageIndex,
           },
         ];
       } catch {
@@ -483,6 +531,20 @@ export function buildPromptWithZoteroContext(
   context: ClauderoSelectionContext,
   apiPrompt: string,
 ): string {
+  // `_item` is retained for UI icon lookups, not prompt data. The privileged
+  // Zotero object can contain wrappers/cycles and unrelated item state.
+  const promptContext = {
+    ...context,
+    items: context.items.map((item) => ({
+      ...item,
+      attachments: item.attachments.map(
+        ({ _item: _ignored, ...attachment }) => attachment,
+      ),
+    })),
+    reader: context.reader
+      ? (({ _item: _ignored, ...reader }) => reader)(context.reader)
+      : undefined,
+  };
   return [
     "You are Claudero, a Claude Code-powered research assistant embedded in Zotero.",
     "A lightweight Zotero current context is included in <zotero_current_context>. It contains selected library items, active collection, item collections, the active reader attachment path/page state (pageIndex is 0-based; pageNumber is 1-based), selected reader text, and selected annotations only when present.",
@@ -492,7 +554,7 @@ export function buildPromptWithZoteroContext(
     apiPrompt,
     "",
     "<zotero_current_context>",
-    JSON.stringify(context, null, 2),
+    JSON.stringify(promptContext, null, 2),
     "</zotero_current_context>",
     "",
     "<user_request>",

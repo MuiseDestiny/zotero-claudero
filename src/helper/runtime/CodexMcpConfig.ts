@@ -17,6 +17,7 @@ export interface CodexMcpPathMapper {
 }
 
 export interface ZoteroBridgeMcpConfig {
+  provider?: "claude" | "codex" | "deepseek";
   endpoint: string;
   helperUrl: string;
   token: string;
@@ -224,6 +225,7 @@ export function buildZoteroBridgeMcpServer(
       config.helperUrl,
       "--token",
       config.token,
+      ...(config.provider ? ["--provider", config.provider] : []),
     ],
     startup_timeout_sec: 20,
     tool_timeout_sec: 120,

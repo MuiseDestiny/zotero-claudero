@@ -1,17 +1,15 @@
 import { getPref, setPref } from "../utils/prefs";
+import {
+  parseMcpServersJson,
+  validateMcpServers,
+} from "../shared/mcpConfigValidation";
 
-export interface ManagedMcpServerConfig {
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  url?: string;
-  type?: string;
-  enabled?: boolean;
-  description?: string;
-  contextSaving?: boolean;
-  disabledTools?: string[];
-  [key: string]: unknown;
-}
+export {
+  validateMcpServerConfig,
+  validateMcpServers,
+} from "../shared/mcpConfigValidation";
+import type { ManagedMcpServerConfig } from "../shared/mcpConfigValidation";
+export type { ManagedMcpServerConfig } from "../shared/mcpConfigValidation";
 
 export function isZoteroMcpEnabled(): boolean {
   return true;
@@ -27,6 +25,7 @@ export function getCustomMcpServersRaw(): string {
 }
 
 export function setCustomMcpServersRaw(raw: string): void {
+  parseMcpServersJson(raw);
   setPref("mcpServers", raw.trim());
 }
 
@@ -87,33 +86,7 @@ export function getDisabledMcpTools(
 export function parseManagedMcpServers(
   raw = getCustomMcpServersRaw(),
 ): Record<string, ManagedMcpServerConfig> {
-  if (!raw.trim()) return {};
-  const parsed: unknown = JSON.parse(raw);
-  const isRecord = (value: unknown): value is Record<string, unknown> =>
-    !!value && typeof value === "object" && !Array.isArray(value);
-  if (!isRecord(parsed))
-    throw new Error("MCP configuration must be a JSON object.");
-  const root = "mcpServers" in parsed ? parsed.mcpServers : parsed;
-  if (!isRecord(root)) throw new Error("mcpServers must be a JSON object.");
-  const entries: Array<[string, ManagedMcpServerConfig]> = [];
-  for (const [name, config] of Object.entries(root)) {
-    if (!name.trim() || !isRecord(config)) {
-      throw new Error(
-        "Each MCP server needs a name and a configuration object.",
-      );
-    }
-    for (const key of ["args", "disabledTools"]) {
-      if (
-        config[key] !== undefined &&
-        (!Array.isArray(config[key]) ||
-          !config[key].every((value: unknown) => typeof value === "string"))
-      ) {
-        throw new Error(`MCP ${key} must be an array of strings.`);
-      }
-    }
-    entries.push([name.trim(), config as ManagedMcpServerConfig]);
-  }
-  return Object.fromEntries(entries);
+  return parseMcpServersJson(raw);
 }
 
 /** Parse CLI arguments without invoking a shell, preserving quoted paths. */
@@ -154,6 +127,8 @@ export function parseMcpArguments(text: string): string[] {
 export function serializeManagedMcpServers(
   servers: Record<string, ManagedMcpServerConfig>,
 ): string {
+  const error = validateMcpServers(servers);
+  if (error) throw new Error(error);
   return JSON.stringify({ mcpServers: servers }, null, 2);
 }
 

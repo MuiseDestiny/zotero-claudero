@@ -1,5 +1,13 @@
-# dot files
+# Local editor and AI workspace files
 .DS_Store
+.vscode/
+.claude/
+.codex/
+.agents/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+zotero-cmd.json
 
 # Node.js
 node_modules
@@ -10,13 +18,23 @@ yarn.lock
 __pycache__
 
 # TSC
-tsconfig.tsbuildinfo
+*.tsbuildinfo
 
 # Scaffold
 .env
+.env.*
+!.env.example
 .scaffold
 build
 logs
+*.log
+.cache/
+coverage/
+*.xpi
 
-# Local real-PDF evaluation reports
+# Maintainer-only notes and local evaluation reports
+doc/agent-architecture.md
+docs/release-checklist.md
+docs/pdf-golden-eval.md
+docs/pre-release-check-*.md
 .claudero-eval

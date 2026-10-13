@@ -5,6 +5,7 @@
 // "Low": the only way to surface the model in one collapsed widget was to
 // rewrite the menuitem label. Decoupling display from value fixes that.
 import { getString } from "../utils/locale";
+import { onElementRemoved } from "./elementLifecycle";
 
 export interface DivSelect {
   value: string;
@@ -59,6 +60,7 @@ export interface ComposerView<S> {
   textChip: HTMLElement;
   annotationChip: HTMLElement;
   setStateRef: (state: S) => void;
+  dispose(): void;
 }
 
 function createEl<K extends keyof HTMLElementTagNameMap>(
@@ -209,7 +211,10 @@ interface SelectConfig {
   };
 }
 
-function confirmDangerousPermissionMode(doc: Document): Promise<boolean> {
+function confirmDangerousPermissionMode(
+  doc: Document,
+  signal: AbortSignal,
+): Promise<boolean> {
   return new Promise((resolve) => {
     const overlay = createEl(doc, "div", "claudero-danger-confirm-backdrop");
     const card = createEl(doc, "div", "claudero-danger-confirm-card");
@@ -247,11 +252,16 @@ function confirmDangerousPermissionMode(doc: Document): Promise<boolean> {
     card.append(closeBtn, title, body, actions);
     overlay.appendChild(card);
 
+    let settled = false;
     const cleanup = (value: boolean) => {
+      if (settled) return;
+      settled = true;
       doc.removeEventListener("keydown", onKey, true);
+      signal.removeEventListener("abort", onAbort);
       overlay.remove();
       resolve(value);
     };
+    const onAbort = () => cleanup(false);
     function onKey(event: KeyboardEvent): void {
       if (event.key === "Escape") cleanup(false);
     }
@@ -264,15 +274,19 @@ function confirmDangerousPermissionMode(doc: Document): Promise<boolean> {
     confirm.addEventListener("click", () => cleanup(true));
     doc.addEventListener("keydown", onKey, true);
     doc.documentElement.appendChild(overlay);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
   });
 }
+
+const openSelects = new WeakMap<Document, () => void>();
 
 function buildSelect(
   doc: Document,
   config: SelectConfig,
   onChange: (value: string) => void,
   onSubChange?: (value: string) => void,
-): { primary: DivSelect; secondary: DivSelect | null } {
+): { primary: DivSelect; secondary: DivSelect | null; dispose(): void } {
   const button = createEl(doc, "div", `claudero-select ${config.className}`);
   const labelEl = createEl(doc, "span", "claudero-select-label");
   button.append(labelEl, caretSvg(doc));
@@ -280,6 +294,8 @@ function buildSelect(
   let cur = config.defaultValue;
   let curSub = config.sub?.defaultSub ?? "";
   let disabled = false;
+  let disposed = false;
+  let confirmation: AbortController | null = null;
   // The main dropdown panel. A model sub-menu (when config.sub is set) opens as
   // a separate flyout element positioned beside this panel on hover, mirroring a
   // native cascading menu — rather than replacing the panel's contents.
@@ -326,13 +342,13 @@ function buildSelect(
 
   const closePopover = () => {
     removeFlyout();
-    if (!popover) return;
-    popover.remove();
+    popover?.remove();
     popover = null;
     button.setAttribute("aria-expanded", "false");
     button.classList.remove("is-open");
     doc.removeEventListener("mousedown", onOutside, true);
     doc.removeEventListener("keydown", onKey, true);
+    if (openSelects.get(doc) === closePopover) openSelects.delete(doc);
   };
 
   function onOutside(ev: MouseEvent): void {
@@ -383,6 +399,7 @@ function buildSelect(
     for (const it of config.sub.items) {
       const row = makeRow(it, it.value === curSub);
       row.addEventListener("click", () => {
+        if (disposed || disabled) return;
         curSub = it.value;
         onSubChange?.(it.value);
         setCollapsedLabel();
@@ -420,12 +437,18 @@ function buildSelect(
     for (const it of config.items) {
       const row = makeRow(it, it.value === cur);
       row.addEventListener("click", async () => {
-        if (
-          it.danger &&
-          it.value !== cur &&
-          !(await confirmDangerousPermissionMode(doc))
-        )
-          return;
+        if (disposed || disabled || confirmation) return;
+        if (it.danger && it.value !== cur) {
+          closePopover();
+          const controller = new AbortController();
+          confirmation = controller;
+          const approved = await confirmDangerousPermissionMode(
+            doc,
+            controller.signal,
+          );
+          if (confirmation === controller) confirmation = null;
+          if (!approved || disposed || disabled || !button.isConnected) return;
+        }
         cur = it.value;
         setCollapsedLabel();
         onChange(it.value);
@@ -456,12 +479,10 @@ function buildSelect(
   };
 
   const open = () => {
-    if (disabled) return;
+    if (disabled || disposed || confirmation) return;
     closePopover();
-    // Close any other claudero popovers first (single surface at a time).
-    doc
-      .querySelectorAll(".claudero-select-popover")
-      .forEach((el) => el.remove());
+    openSelects.get(doc)?.();
+    openSelects.set(doc, closePopover);
     popover = createEl(doc, "div", "claudero-select-popover");
     popover.style.zIndex = "2147483646";
     button.setAttribute("aria-expanded", "true");
@@ -469,10 +490,8 @@ function buildSelect(
     doc.documentElement.appendChild(popover);
     showPrimary();
     placePopover(doc, popover, button);
-    setTimeout(() => {
-      doc.addEventListener("mousedown", onOutside, true);
-      doc.addEventListener("keydown", onKey, true);
-    }, 0);
+    doc.addEventListener("mousedown", onOutside, true);
+    doc.addEventListener("keydown", onKey, true);
   };
 
   button.addEventListener("click", (ev) => {
@@ -498,7 +517,10 @@ function buildSelect(
     set disabled(v: boolean) {
       disabled = v;
       button.classList.toggle("is-disabled", v);
-      if (v) closePopover();
+      if (v) {
+        confirmation?.abort();
+        closePopover();
+      }
     },
     setItems(items: DivSelectItem[], preferredValue?: string) {
       config.items = items;
@@ -545,7 +567,17 @@ function buildSelect(
       }
     : null;
 
-  return { primary, secondary };
+  return {
+    primary,
+    secondary,
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      confirmation?.abort();
+      confirmation = null;
+      closePopover();
+    },
+  };
 }
 
 export function createComposerView<S>(
@@ -555,7 +587,7 @@ export function createComposerView<S>(
   const stateRef: ComposerViewStateRef<S> = { current: null };
 
   // ── Provider dropdown ───────────────────────────────────────────────────
-  const providerSelect = buildSelect(
+  const providerDropdown = buildSelect(
     doc,
     {
       className: "provider",
@@ -563,7 +595,8 @@ export function createComposerView<S>(
       defaultValue: options.defaultProvider,
     },
     options.onProviderChange,
-  ).primary;
+  );
+  const providerSelect = providerDropdown.primary;
 
   // ── Effort + model dropdown (cascading, div-based) ───────────────────────
   const effortModel = buildSelect(
@@ -584,7 +617,7 @@ export function createComposerView<S>(
   );
 
   // ── Permission mode dropdown ─────────────────────────────────────────────
-  const permissionSelect = buildSelect(
+  const permissionDropdown = buildSelect(
     doc,
     {
       className: "permission",
@@ -592,7 +625,8 @@ export function createComposerView<S>(
       defaultValue: options.defaultPermission,
     },
     options.onPermissionChange,
-  ).primary;
+  );
+  const permissionSelect = permissionDropdown.primary;
 
   // ── Rest of composer ───────────────────────────────────────────────────
   const composer = createEl(doc, "div", "claudero-composer");
@@ -640,12 +674,20 @@ export function createComposerView<S>(
   // Hide selects when the full toolbar is too narrow to keep action buttons visible.
   const ro = new (doc.defaultView as any).ResizeObserver(
     (entries: ResizeObserverEntry[]) => {
+      if (!entries.length) return;
       const w = entries[0].contentRect.width;
       permissionSelect.element.style.display = w < 360 ? "none" : "";
       effortModel.primary.element.style.display = w < 220 ? "none" : "";
     },
   );
   ro.observe(toolbar);
+  const dispose = onElementRemoved(composer, () => {
+    ro.disconnect();
+    providerDropdown.dispose();
+    effortModel.dispose();
+    permissionDropdown.dispose();
+    stateRef.current = null;
+  });
 
   atBtn.addEventListener("click", () => {
     if (stateRef.current) options.onAtClick(stateRef.current);
@@ -695,6 +737,7 @@ export function createComposerView<S>(
     readerChip,
     textChip,
     annotationChip,
+    dispose,
     setStateRef: (state: S) => {
       stateRef.current = state;
     },

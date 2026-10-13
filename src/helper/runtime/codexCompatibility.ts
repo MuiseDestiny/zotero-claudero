@@ -24,20 +24,7 @@ export function userFacingCodexStderr(value: string): string {
     .trim();
 }
 
-export function bundledCodexCandidates(
-  platform: NodeJS.Platform,
-  home: string,
-): string[] {
-  if (platform === "darwin") {
-    return [
-      "/Applications/ChatGPT.app/Contents/Resources/codex",
-      "/Applications/Codex.app/Contents/Resources/codex",
-      `${home}/Applications/ChatGPT.app/Contents/Resources/codex`,
-      `${home}/Applications/Codex.app/Contents/Resources/codex`,
-    ];
-  }
-  return [];
-}
+export { bundledCodexCandidates } from "../../shared/bundledExecutablePaths";
 
 export function modelsCacheRequiresNewerCodex(cacheText: string): boolean {
   try {

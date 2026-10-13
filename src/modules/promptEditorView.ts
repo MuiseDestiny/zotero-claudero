@@ -1,6 +1,7 @@
 import type { CustomPrompt, PromptIcon } from "./conversationStore";
 import { showIconPicker, renderPromptIcon } from "./iconPickerView";
 import { getString } from "../utils/locale";
+import { onElementRemoved } from "./elementLifecycle";
 
 export interface PromptEditorOptions {
   prompt?: CustomPrompt;
@@ -175,7 +176,16 @@ export function showPromptEditor(
         doc.removeEventListener("mousedown", onOutside, true);
       }
     };
-    setTimeout(() => doc.addEventListener("mousedown", onOutside, true), 0);
+    doc.addEventListener("mousedown", onOutside, true);
+    const picker = activePicker;
+    onElementRemoved(
+      picker,
+      () => {
+        picker.remove();
+        doc.removeEventListener("mousedown", onOutside, true);
+      },
+      modal,
+    );
   });
 
   // Name field
@@ -349,13 +359,19 @@ export function showPromptEditor(
   };
   doc.addEventListener("keydown", onKeyDown, true);
 
-  setTimeout(() => {
+  const focusTimer = setTimeout(() => {
     try {
+      if (closed || !modal.isConnected) return;
       nameInput.focus();
     } catch {
       /* */
     }
   }, 50);
+  onElementRemoved(modal, () => {
+    doc.removeEventListener("keydown", onKeyDown, true);
+    clearTimeout(focusTimer);
+    close("cancel");
+  });
 
   return modal;
 }

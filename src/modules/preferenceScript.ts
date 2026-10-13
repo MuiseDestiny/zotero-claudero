@@ -1,3 +1,4 @@
+import { bindSetupWizard } from "./preferenceSetup";
 import {
   getCodexInstallationMethod,
   getCodexSafeMode,
@@ -19,46 +20,39 @@ import {
   parseCustomMcpServers,
   serializeManagedMcpServers,
   setCustomMcpServersRaw,
+  validateMcpServerConfig,
   type ManagedMcpServerConfig,
 } from "./mcpSettings";
 import {
   deleteCustomAcademicSkill,
   getAcademicSkillRecords,
+  getAcademicSkillStore,
   importAcademicSkillFromText,
   matchAcademicSkillIntent,
   resetAcademicSkillToBuiltin,
   saveAcademicSkillOverride,
   setAcademicSkillEnabled,
   updateAcademicSkillToBuiltin,
-  type AcademicSkill,
   type AcademicSkillRecord,
 } from "./academicSkills";
-import {
-  ensureClaudeHelper,
-  fetchProviderModels,
-  requestHelperJson,
-} from "./claudeHelperClient";
+import { requestHelperJson } from "./claudeHelperClient";
+import { saveAcademicSkillEdit } from "./academicSkillEditing";
 import { exportDiagnosticLog } from "./diagnosticLog";
-import { autoDetectSettings } from "./settingsAutoDetect";
+import { PreferenceLifetime, PreferenceTask } from "./preferenceLifetime";
 import { getPref, setPref } from "../utils/prefs";
 import { getString } from "../utils/locale";
 import { initializePreferenceTabs } from "./preferenceTabs";
-import { buildRuntimeEnvironment } from "../shared/runtimeEnvironment";
 
 const initializedPreferenceRoots = new WeakSet<HTMLElement>();
+const preferenceLifetimes = new Set<PreferenceLifetime>();
+
+export function unregisterPrefsScripts(): void {
+  for (const lifetime of preferenceLifetimes) lifetime.dispose();
+}
 
 type XulValueElement = HTMLElement & {
   value: string;
   disabled?: boolean;
-};
-
-type MonacoWindow = Window & {
-  loadMonaco?: (options: Record<string, unknown>) => Promise<{
-    editor: {
-      getValue: () => string;
-      setValue: (value: string) => void;
-    };
-  }>;
 };
 
 export async function registerPrefsScripts(window: Window) {
@@ -66,252 +60,67 @@ export async function registerPrefsScripts(window: Window) {
   const root = doc.querySelector<HTMLElement>(".claudero-pref-stack");
   if (!root || initializedPreferenceRoots.has(root)) return;
   initializedPreferenceRoots.add(root);
+  const lifetime = new PreferenceLifetime(root, window);
+  preferenceLifetimes.add(lifetime);
+  lifetime.onDispose(() => {
+    preferenceLifetimes.delete(lifetime);
+    initializedPreferenceRoots.delete(root);
+  });
 
-  const hostKey = getHostKey();
-  doc.querySelector<HTMLElement>("#claudero-pref-host-key")!.textContent =
-    hostKey;
-  doc.querySelector<HTMLElement>("#claudero-pref-host-key-codex")!.textContent =
-    hostKey;
-  doc.querySelector<HTMLElement>(
-    "#claudero-pref-host-key-deepseek",
-  )!.textContent = hostKey;
-
-  bindProviderPath(doc, "claude");
-  bindProviderPath(doc, "codex");
-  bindProviderPath(doc, "deepseek");
-  bindProviderEnvironment(doc, "claude");
-  bindProviderEnvironment(doc, "codex");
-  bindProviderEnvironment(doc, "deepseek");
-  bindCodexSettings(doc);
-  bindMcpSettings(doc);
-  bindAcademicSkills(doc);
-  bindSetupWizard(doc);
-  bindDiagnostics(doc);
-  initializePreferenceTabs(
-    root,
-    window,
-    String(getPref("settingsProvider") || "general"),
-    (panel) => setPref("settingsProvider", panel),
+  bindProviderPath(doc, "claude", lifetime);
+  bindProviderPath(doc, "codex", lifetime);
+  bindProviderPath(doc, "deepseek", lifetime);
+  bindProviderEnvironment(doc, "claude", lifetime);
+  bindProviderEnvironment(doc, "codex", lifetime);
+  bindProviderEnvironment(doc, "deepseek", lifetime);
+  bindCodexSettings(doc, lifetime);
+  bindMcpSettings(doc, lifetime);
+  bindAcademicSkills(doc, lifetime);
+  bindSetupWizard(doc, lifetime);
+  bindDiagnostics(doc, lifetime);
+  lifetime.onDispose(
+    initializePreferenceTabs(
+      root,
+      window,
+      String(getPref("settingsProvider") || "general"),
+      (panel) => setPref("settingsProvider", panel),
+    ),
   );
-  // Keep navigation and manual configuration available when detection fails.
-  void autoDetectSettings()
-    .then(() => syncDetectedPaths(doc))
-    .catch((error) => {
-      ztoolkit.log("[Claudero] Settings auto-detection failed", error);
-    });
 }
 
-function syncDetectedPaths(doc: Document): void {
-  for (const provider of ["claude", "codex", "deepseek"] as AiProvider[]) {
-    const input = doc.querySelector<HTMLInputElement>(
-      `#claudero-pref-${provider}-path`,
-    );
-    if (input && !input.value.trim() && doc.activeElement !== input) {
-      input.value = getProviderCliPath(provider);
-    }
-  }
-  const node = doc.querySelector<HTMLInputElement>(
-    "#zotero-prefpane-claudero-nodePath",
-  );
-  if (node && !node.value.trim() && doc.activeElement !== node) {
-    node.value = String(getPref("nodePath") || "");
-  }
-}
-
-function setupFileExists(value: string): boolean {
-  const candidate = value.trim();
-  if (!candidate) return false;
-  try {
-    const file = (Components.classes as any)[
-      "@mozilla.org/file/local;1"
-    ].createInstance(Components.interfaces.nsIFile) as nsIFile;
-    file.initWithPath(candidate);
-    return file.exists() && file.isFile();
-  } catch {
-    return false;
-  }
-}
-
-function bindSetupWizard(doc: Document): void {
-  const runButton = doc.querySelector<HTMLButtonElement>(
-    "#claudero-pref-setup-run",
-  );
-  const status = doc.querySelector<HTMLElement>("#claudero-pref-setup-status");
-  const details = doc.querySelector<HTMLElement>(
-    "#claudero-pref-setup-details",
-  );
-  if (!runButton || !status || !details) return;
-
-  type SetupRowState = "success" | "error" | "info";
-  const createRow = (
-    label: string,
-    rowState: SetupRowState,
-    detail: string,
-  ): HTMLElement => {
-    const row = doc.createElementNS(
-      "http://www.w3.org/1999/xhtml",
-      "div",
-    ) as HTMLElement;
-    row.className = `claudero-pref-setup-row ${rowState}`;
-    const marker = doc.createElementNS(
-      "http://www.w3.org/1999/xhtml",
-      "span",
-    ) as HTMLElement;
-    marker.textContent =
-      rowState === "success" ? "✓" : rowState === "error" ? "!" : "i";
-    const text = doc.createElementNS(
-      "http://www.w3.org/1999/xhtml",
-      "span",
-    ) as HTMLElement;
-    text.textContent = `${label}: ${detail}`;
-    row.append(marker, text);
-    return row;
-  };
-
-  const run = async () => {
-    runButton.disabled = true;
-    status.classList.remove("error", "success");
-    status.textContent = getString("pref-setup-running");
-    details.replaceChildren();
-    try {
-      const detected = await autoDetectSettings();
-      syncDetectedPaths(doc);
-      const provider = String(getPref("provider") || "claude") as AiProvider;
-      const nodePath = String(getPref("nodePath") || "");
-      const cliPath = getProviderCliPath(provider);
-      const envKeys = Object.keys(
-        buildRuntimeEnvironment(
-          String(getPref("proxy") || ""),
-          String(getPref("environmentVariables") || ""),
-          getProviderEnvironment(provider),
-          (name) => Services.env.get(name),
-        ),
-      );
-      const usesWsl =
-        provider === "codex" && getCodexInstallationMethod() === "wsl";
-      let helperReady = false;
-      let helperError = "";
-      try {
-        await ensureClaudeHelper();
-        helperReady = true;
-      } catch (error) {
-        helperError = error instanceof Error ? error.message : String(error);
-      }
-      const nodeOk = setupFileExists(nodePath);
-      const cliOk = usesWsl || setupFileExists(cliPath);
-      let runtimeState: SetupRowState = "info";
-      let runtimeDetail = getString("pref-setup-runtime-not-checked");
-      if (provider === "deepseek") {
-        if (nodeOk && cliOk && helperReady) {
-          try {
-            // /models runs the same DeepSeek Node/entrypoint resolution used by
-            // a real request, without contacting the model API.
-            await fetchProviderModels("deepseek");
-            runtimeState = "success";
-            runtimeDetail = getString("pref-setup-runtime-ready");
-          } catch (error) {
-            runtimeState = "error";
-            runtimeDetail =
-              error instanceof Error ? error.message : String(error);
-          }
-        }
-      }
-      details.append(
-        createRow(
-          getString("pref-setup-node"),
-          nodeOk ? "success" : "error",
-          nodeOk ? nodePath : getString("pref-setup-missing"),
-        ),
-        createRow(
-          getString("pref-setup-cli", { args: { provider } }),
-          usesWsl ? "info" : cliOk ? "success" : "error",
-          usesWsl
-            ? getString("pref-setup-wsl-cli")
-            : cliOk
-              ? cliPath
-              : getString("pref-setup-missing"),
-        ),
-        createRow(
-          getString("pref-setup-env"),
-          envKeys.length > 0 ? "success" : "info",
-          envKeys.length > 0
-            ? envKeys.join(", ")
-            : getString("pref-setup-env-empty"),
-        ),
-        createRow(
-          getString("pref-setup-helper"),
-          helperReady ? "success" : "error",
-          helperReady ? getString("pref-setup-ready") : helperError,
-        ),
-      );
-      if (provider === "deepseek") {
-        details.append(
-          createRow(
-            getString("pref-setup-runtime"),
-            runtimeState,
-            runtimeDetail,
-          ),
-        );
-      }
-      const allRuntimeChecksPassed =
-        provider !== "deepseek" || runtimeState === "success";
-      const allOk = nodeOk && cliOk && helperReady && allRuntimeChecksPassed;
-      status.textContent = allOk
-        ? getString("pref-setup-complete")
-        : getString("pref-setup-action-needed");
-      status.classList.add(allOk ? "success" : "error");
-      setPref("setupChecked", true);
-      if (
-        detected.nodePath ||
-        detected.claudePath ||
-        detected.codexPath ||
-        detected.deepseekPath
-      ) {
-        status.textContent = `${status.textContent} ${getString("pref-setup-auto-detected")}`;
-      }
-    } catch (error) {
-      status.textContent = getString("pref-setup-failed", {
-        args: { error: error instanceof Error ? error.message : String(error) },
-      });
-      status.classList.add("error");
-    } finally {
-      runButton.disabled = false;
-    }
-  };
-
-  runButton.addEventListener("click", () => void run());
-  if (getPref("setupChecked") !== true) void run();
-}
-
-function bindProviderPath(doc: Document, provider: AiProvider): void {
+function bindProviderPath(
+  doc: Document,
+  provider: AiProvider,
+  lifetime: PreferenceLifetime,
+): void {
   const input = doc.querySelector<HTMLInputElement>(
     `#claudero-pref-${provider}-path`,
   );
   if (!input) return;
   input.value = getProviderCliPath(provider);
-  input.addEventListener("change", () => {
-    setProviderCliPath(provider, input.value);
-  });
-  input.addEventListener("blur", () => {
-    setProviderCliPath(provider, input.value);
+  lifetime.listen(input, "change", () => {
+    if (input.value.trim() !== getProviderCliPath(provider))
+      setProviderCliPath(provider, input.value);
   });
 }
 
-function bindProviderEnvironment(doc: Document, provider: AiProvider): void {
+function bindProviderEnvironment(
+  doc: Document,
+  provider: AiProvider,
+  lifetime: PreferenceLifetime,
+): void {
   const input = doc.querySelector<HTMLTextAreaElement>(
     `#claudero-pref-${provider}-env`,
   );
   if (!input) return;
   input.value = getProviderEnvironment(provider);
-  input.addEventListener("change", () => {
-    setProviderEnvironment(provider, input.value);
-  });
-  input.addEventListener("blur", () => {
-    setProviderEnvironment(provider, input.value);
+  lifetime.listen(input, "change", () => {
+    if (input.value !== getProviderEnvironment(provider))
+      setProviderEnvironment(provider, input.value);
   });
 }
 
-function bindCodexSettings(doc: Document): void {
+function bindCodexSettings(doc: Document, lifetime: PreferenceLifetime): void {
   const installation = doc.querySelector<XulValueElement>(
     "#claudero-pref-codex-installation",
   );
@@ -321,26 +130,50 @@ function bindCodexSettings(doc: Document): void {
   const safeMode = doc.querySelector<XulValueElement>(
     "#claudero-pref-codex-safe-mode",
   );
+  const wslOption = doc.querySelector<XulValueElement>(
+    '#claudero-pref-codex-installation menuitem[value="wsl"]',
+  );
+  const installationRow = doc.querySelector<HTMLElement>(
+    "#claudero-pref-codex-installation-row",
+  );
+  const distroRow = doc.querySelector<HTMLElement>(
+    "#claudero-pref-codex-wsl-distro-row",
+  );
+  // WSL is only available on Windows. Keep stale preferences from making the
+  // setup wizard report a usable runtime on macOS/Linux.
+  const isWindows = Boolean(
+    typeof Zotero !== "undefined" && (Zotero as typeof Zotero).isWin,
+  );
+  if (wslOption) wslOption.disabled = !isWindows;
+  if (installationRow) installationRow.hidden = !isWindows;
+  const syncDistro = () => {
+    const usesWsl = isWindows && installation?.value === "wsl";
+    if (distro) distro.disabled = !usesWsl;
+    if (distroRow) distroRow.hidden = !usesWsl;
+  };
   const bindValueCommit = (
     element: XulValueElement,
     handler: () => void,
   ): void => {
-    element.addEventListener("command", handler);
-    element.addEventListener("change", handler);
+    lifetime.listen(element, "command", handler);
+    lifetime.listen(element, "change", handler);
   };
 
   if (installation) {
     installation.value = getCodexInstallationMethod();
+    if (!isWindows && installation.value === "wsl") {
+      installation.value = "native";
+      setCodexInstallationMethod("native");
+    }
     bindValueCommit(installation, () => {
       setCodexInstallationMethod(installation.value);
-      if (distro) distro.disabled = installation.value !== "wsl";
+      syncDistro();
     });
   }
   if (distro) {
     distro.value = getCodexWslDistro();
-    distro.disabled = installation?.value !== "wsl";
-    distro.addEventListener("change", () => setCodexWslDistro(distro.value));
-    distro.addEventListener("blur", () => setCodexWslDistro(distro.value));
+    syncDistro();
+    lifetime.listen(distro, "change", () => setCodexWslDistro(distro.value));
   }
   if (safeMode) {
     safeMode.value = getCodexSafeMode();
@@ -350,7 +183,7 @@ function bindCodexSettings(doc: Document): void {
   }
 }
 
-function bindMcpSettings(doc: Document): void {
+function bindMcpSettings(doc: Document, lifetime: PreferenceLifetime): void {
   const servers = doc.querySelector<HTMLTextAreaElement>(
     "#claudero-pref-mcp-servers",
   );
@@ -378,8 +211,19 @@ function bindMcpSettings(doc: Document): void {
     return el;
   };
 
+  const connectionTest = new PreferenceTask(lifetime);
+  let cancelRender = () => {};
+  const setTesting = (pending: boolean) => {
+    list
+      ?.querySelectorAll<HTMLButtonElement>("[data-mcp-test]")
+      .forEach((button) => {
+        button.disabled = pending;
+      });
+  };
+
   const testMcpServer = async (
     config: ManagedMcpServerConfig,
+    signal: AbortSignal,
   ): Promise<{
     success: boolean;
     serverName?: string;
@@ -392,9 +236,12 @@ function bindMcpSettings(doc: Document): void {
     }>;
     error?: string;
   }> => {
+    const error = validateMcpServerConfig(config);
+    if (error) throw new Error(error);
     return requestHelperJson("/test-mcp", {
       method: "POST",
       body: JSON.stringify({ config }),
+      signal,
     });
   };
 
@@ -411,9 +258,13 @@ function bindMcpSettings(doc: Document): void {
       status.textContent = getString("mcp-saved", { args: { count } });
       status.classList.add("success");
     } catch (error) {
+      const advanced = doc.querySelector<HTMLDetailsElement>(
+        "#claudero-pref-mcp-advanced",
+      );
+      if (advanced) advanced.open = true;
       status.textContent =
         error instanceof Error
-          ? `Invalid MCP JSON: ${error.message}`
+          ? `${getString("mcp-invalid")}: ${error.message}`
           : getString("mcp-invalid");
       status.classList.add("error");
     }
@@ -429,8 +280,9 @@ function bindMcpSettings(doc: Document): void {
 
   const saveManaged = (value: Record<string, ManagedMcpServerConfig>): void => {
     if (!servers) return;
-    servers.value = serializeManagedMcpServers(value);
-    setCustomMcpServersRaw(servers.value);
+    const raw = serializeManagedMcpServers(value);
+    setCustomMcpServersRaw(raw);
+    servers.value = raw;
     renderStatus(servers.value);
     renderList();
   };
@@ -451,7 +303,10 @@ function bindMcpSettings(doc: Document): void {
   };
 
   const renderList = () => {
-    if (!list) return;
+    cancelRender();
+    connectionTest.cancel();
+    if (!list || !lifetime.active) return;
+    list.removeAttribute("inert");
     list.replaceChildren();
     const managed = readManaged();
     if (!managed) return;
@@ -464,6 +319,7 @@ function bindMcpSettings(doc: Document): void {
       return;
     }
     for (const [name, config] of entries) {
+      const renderedRaw = servers?.value;
       const card = createHtml("div");
       card.className =
         "claudero-pref-mcp-card" +
@@ -493,75 +349,93 @@ function bindMcpSettings(doc: Document): void {
         const button = createHtml("button") as HTMLButtonElement;
         button.type = "button";
         button.textContent = label;
-        button.addEventListener("click", onClick);
+        button.addEventListener("click", () => {
+          if (
+            lifetime.active &&
+            card.isConnected &&
+            servers?.value === renderedRaw
+          )
+            onClick();
+        });
         return button;
       };
-      actions.append(
-        makeButton(getString("mcp-test-connection"), () => {
-          toolsPanel.textContent = getString("mcp-testing");
-          void testMcpServer(config)
-            .then((result) => {
-              toolsPanel.replaceChildren();
-              if (!result.success) {
-                toolsPanel.textContent = result.error || getString("ui-failed");
-                toolsPanel.classList.add("error");
-                return;
-              }
-              toolsPanel.classList.remove("error");
-              const heading = createHtml("div", "claudero-pref-mcp-tools-head");
-              const label = [result.serverName, result.serverVersion]
-                .filter(Boolean)
-                .join(" ");
-              heading.textContent = label
-                ? `${label} ${getString("ui-available-tools")}`
-                : getString("ui-available-tools");
-              toolsPanel.appendChild(heading);
-              const toolRows = result.tools || [];
-              if (toolRows.length === 0) {
-                const empty = createHtml("div", "claudero-pref-mcp-tool-row");
-                empty.textContent = getString("mcp-no-tools");
-                toolsPanel.appendChild(empty);
-                return;
-              }
-              for (const tool of toolRows) {
-                const toolRow = createHtml("div", "claudero-pref-mcp-tool-row");
-                const body = createHtml("div", "claudero-pref-mcp-tool-body");
-                const toolName = createHtml(
-                  "div",
-                  "claudero-pref-mcp-tool-name",
-                );
-                toolName.textContent = tool.name;
-                const desc = createHtml("div", "claudero-pref-mcp-tool-desc");
-                desc.textContent = tool.description || "";
-                body.append(toolName, desc);
-                const toggle = makeButton(
-                  tool.enabled
-                    ? getString("ui-disable")
-                    : getString("ui-enable"),
-                  () => {
-                    const next = readManaged();
-                    if (!next) return;
-                    const current = next[name] || {};
-                    const disabled = new Set(current.disabledTools || []);
-                    if (disabled.has(tool.name)) disabled.delete(tool.name);
-                    else disabled.add(tool.name);
-                    next[name] = {
-                      ...current,
-                      disabledTools: [...disabled].sort(),
-                    };
-                    saveManaged(next);
-                  },
-                );
-                toolRow.append(body, toggle);
-                toolsPanel.appendChild(toolRow);
-              }
-            })
-            .catch((error) => {
-              toolsPanel.textContent =
-                error instanceof Error ? error.message : String(error);
+      const testButton = makeButton(getString("mcp-test-connection"), () => {
+        if (connectionTest.pending) return;
+        const testedRaw = servers?.value;
+        toolsPanel.textContent = getString("mcp-testing");
+        toolsPanel.classList.remove("error");
+        setTesting(true);
+        void connectionTest.run(async (signal) => {
+          const isCurrent = () =>
+            lifetime.active &&
+            !signal.aborted &&
+            card.isConnected &&
+            servers?.value === testedRaw;
+          try {
+            const result = await testMcpServer(config, signal);
+            if (!isCurrent()) return;
+            toolsPanel.replaceChildren();
+            if (!result.success) {
+              toolsPanel.textContent = result.error || getString("ui-failed");
               toolsPanel.classList.add("error");
-            });
-        }),
+              return;
+            }
+            toolsPanel.classList.remove("error");
+            const heading = createHtml("div", "claudero-pref-mcp-tools-head");
+            const label = [result.serverName, result.serverVersion]
+              .filter(Boolean)
+              .join(" ");
+            heading.textContent = label
+              ? `${label} ${getString("ui-available-tools")}`
+              : getString("ui-available-tools");
+            toolsPanel.appendChild(heading);
+            const toolRows = result.tools || [];
+            if (toolRows.length === 0) {
+              const empty = createHtml("div", "claudero-pref-mcp-tool-row");
+              empty.textContent = getString("mcp-no-tools");
+              toolsPanel.appendChild(empty);
+              return;
+            }
+            for (const tool of toolRows) {
+              const toolRow = createHtml("div", "claudero-pref-mcp-tool-row");
+              const body = createHtml("div", "claudero-pref-mcp-tool-body");
+              const toolName = createHtml("div", "claudero-pref-mcp-tool-name");
+              toolName.textContent = tool.name;
+              const desc = createHtml("div", "claudero-pref-mcp-tool-desc");
+              desc.textContent = tool.description || "";
+              body.append(toolName, desc);
+              const toggle = makeButton(
+                tool.enabled ? getString("ui-disable") : getString("ui-enable"),
+                () => {
+                  const next = readManaged();
+                  if (!next) return;
+                  const current = next[name] || {};
+                  const disabled = new Set(current.disabledTools || []);
+                  if (disabled.has(tool.name)) disabled.delete(tool.name);
+                  else disabled.add(tool.name);
+                  next[name] = {
+                    ...current,
+                    disabledTools: [...disabled].sort(),
+                  };
+                  saveManaged(next);
+                },
+              );
+              toolRow.append(body, toggle);
+              toolsPanel.appendChild(toolRow);
+            }
+          } catch (error) {
+            if (!isCurrent()) return;
+            toolsPanel.textContent =
+              error instanceof Error ? error.message : String(error);
+            toolsPanel.classList.add("error");
+          } finally {
+            if (isCurrent()) setTesting(false);
+          }
+        });
+      });
+      testButton.dataset.mcpTest = "true";
+      actions.append(
+        testButton,
         makeButton(
           config.enabled === false
             ? getString("ui-enable")
@@ -573,7 +447,7 @@ function bindMcpSettings(doc: Document): void {
             saveManaged(next);
           },
         ),
-        makeButton(config.contextSaving ? "Always" : "@", () => {
+        makeButton(config.contextSaving ? getString("mcp-always") : "@", () => {
           const next = readManaged();
           if (!next) return;
           next[name] = { ...next[name], contextSaving: !config.contextSaving };
@@ -628,16 +502,22 @@ function bindMcpSettings(doc: Document): void {
       renderStatus(servers.value);
       renderList();
     };
-    servers.addEventListener("change", save);
-    servers.addEventListener("blur", save);
-    servers.addEventListener("input", () => {
-      renderStatus(servers.value);
-      renderList();
+    lifetime.listen(servers, "change", save);
+    lifetime.listen(servers, "input", () => {
+      connectionTest.cancel();
+      setTesting(false);
+      // Debounced cards must not expose actions based on the previous JSON.
+      list?.setAttribute("inert", "");
+      cancelRender();
+      cancelRender = lifetime.defer(() => {
+        renderStatus(servers.value);
+        renderList();
+      }, 150);
     });
     renderList();
   }
 
-  addStdio?.addEventListener("click", () => {
+  lifetime.listen(addStdio, "click", () => {
     const name = win
       ?.prompt(getString("mcp-server-name"), "filesystem")
       ?.trim();
@@ -698,11 +578,11 @@ function bindMcpSettings(doc: Document): void {
       );
     }
   };
-  addHttp?.addEventListener("click", () => addRemote("http"));
-  addSse?.addEventListener("click", () => addRemote("sse"));
+  lifetime.listen(addHttp, "click", () => addRemote("http"));
+  lifetime.listen(addSse, "click", () => addRemote("sse"));
 }
 
-function bindAcademicSkills(doc: Document): void {
+function bindAcademicSkills(doc: Document, lifetime: PreferenceLifetime): void {
   const list = doc.querySelector<HTMLElement>("#claudero-pref-skills-list");
   const status = doc.querySelector<HTMLElement>("#claudero-pref-skills-status");
   const testInput = doc.querySelector<HTMLInputElement>(
@@ -768,78 +648,113 @@ function bindAcademicSkills(doc: Document): void {
     return enabled.length ? enabled.join(", ") : "read-only prompt";
   };
 
-  const waitForMonaco = async (editorWin: MonacoWindow): Promise<void> => {
-    for (let i = 0; i < 100; i++) {
-      if (typeof editorWin.loadMonaco === "function") return;
-      await new Promise<void>((resolve) => {
-        win?.setTimeout(() => resolve(), 50);
-      });
-    }
-    throw new Error("Monaco editor did not load.");
-  };
+  const editors = new Map<
+    string,
+    { panel: HTMLElement; input: HTMLTextAreaElement }
+  >();
+  lifetime.onDispose(() => {
+    for (const { panel } of editors.values()) panel.remove();
+    editors.clear();
+  });
 
-  const editSkill = async (record: AcademicSkillRecord) => {
-    if (!win) return;
-    const editorWin = win.openDialog(
-      "chrome://scaffold/content/monaco/monaco.html",
-      "claudero-skill-editor",
-      "chrome,centerscreen,dialog=no,resizable,scrollbars=yes,width=760,height=560",
-    ) as MonacoWindow | undefined;
-    if (!editorWin) return;
-    let saved = false;
-    try {
-      await waitForMonaco(editorWin);
-      const isDark = win.matchMedia?.("(prefers-color-scheme: dark)")?.matches;
-      const result = await editorWin.loadMonaco?.({
-        language: "json",
-        theme: `vs-${isDark ? "dark" : "light"}`,
-      });
-      const editor = result?.editor;
-      if (!editor) throw new Error("Monaco editor is unavailable.");
-      editor.setValue(JSON.stringify(record.skill, null, 2));
-      editorWin.addEventListener("unload", () => {
-        if (saved) return;
-        saved = true;
-        try {
-          const parsed = JSON.parse(editor.getValue()) as AcademicSkill;
-          if (!parsed.id || !parsed.title) {
-            throw new Error("Skill JSON must include id and title.");
-          }
-          saveAcademicSkillOverride(parsed, record.enabled);
-          setStatus(`Saved ${parsed.title}`, "success");
-          renderList();
-        } catch (error) {
-          setStatus(
-            error instanceof Error
-              ? `Invalid skill JSON: ${error.message}`
-              : "Invalid skill JSON",
-            "error",
-          );
-        }
-      });
-      editorWin.focus();
-    } catch (error) {
-      setStatus(
-        error instanceof Error
-          ? `Could not open skill editor: ${error.message}`
-          : "Could not open skill editor",
-        "error",
-      );
-      editorWin.close();
+  const editSkill = (record: AcademicSkillRecord) => {
+    const existing = editors.get(record.id);
+    if (existing) {
+      existing.panel.scrollIntoView({ block: "nearest" });
+      existing.input.focus();
+      return;
     }
+    const panel = createHtml(
+      "div",
+      "claudero-pref-skill-editor claudero-pref-skill-import-panel",
+    );
+    panel.dataset.skillId = record.id;
+    const heading = createHtml("label", "claudero-pref-skill-import-title");
+    const input = createHtml("textarea", "claudero-pref-skill-import-textarea");
+    input.id = `claudero-skill-draft-${record.id}`;
+    input.rows = 16;
+    input.spellcheck = false;
+    heading.htmlFor = input.id;
+    heading.textContent = getString("skills-editor-title", {
+      args: { title: record.skill.title },
+    });
+    const rawStored = record.rawStored;
+    const editable =
+      record.validationError &&
+      rawStored &&
+      typeof rawStored === "object" &&
+      "skill" in rawStored
+        ? (rawStored as { skill: unknown }).skill
+        : record.validationError && rawStored !== undefined
+          ? rawStored
+          : record.skill;
+    input.value = JSON.stringify(editable, null, 2);
+    const error = createHtml("div", "claudero-pref-status error");
+    error.setAttribute("role", "status");
+    error.setAttribute("aria-live", "polite");
+    const actions = createHtml("div", "claudero-pref-skill-import-actions");
+    const close = () => {
+      editors.delete(record.id);
+      panel.remove();
+      const edit = Array.from<HTMLButtonElement>(
+        list.querySelectorAll<HTMLButtonElement>("[data-skill-edit]"),
+      ).find((button) => button.dataset.skillEdit === record.id);
+      edit?.focus();
+    };
+    const save = makeButton(getString("ui-save"), () => {
+      try {
+        const skill = saveAcademicSkillEdit(record, input.value);
+        setStatus(
+          getString("skills-editor-saved", { args: { title: skill.title } }),
+          "success",
+        );
+        renderList();
+        close();
+      } catch (cause) {
+        error.textContent = getString("skills-editor-error", {
+          args: {
+            error: cause instanceof Error ? cause.message : String(cause),
+          },
+        });
+      }
+    });
+    save.dataset.skillSave = record.id;
+    const cancel = makeButton(getString("ui-cancel"), close);
+    cancel.dataset.skillCancel = record.id;
+    actions.append(save, cancel);
+    panel.append(heading, input, error, actions);
+    list.before(panel);
+    editors.set(record.id, { panel, input });
+    panel.scrollIntoView({ block: "nearest" });
+    input.focus();
   };
 
   const makeButton = (label: string, onClick: () => void) => {
     const button = createHtml("button") as HTMLButtonElement;
     button.type = "button";
     button.textContent = label;
-    button.addEventListener("click", onClick);
+    button.addEventListener("click", () => {
+      if (lifetime.active) onClick();
+    });
     return button;
   };
 
   const renderList = () => {
     list.replaceChildren();
-    const records = getAcademicSkillRecords();
+    const store = getAcademicSkillStore();
+    const records = getAcademicSkillRecords(store);
+    if (store.validationError) {
+      setStatus(
+        `Invalid skill store: ${store.validationError} Original data is preserved; repair the academicSkills preference JSON.`,
+        "error",
+      );
+      const raw = createHtml("textarea");
+      raw.readOnly = true;
+      raw.value = store.rawDocument || "";
+      raw.setAttribute("aria-label", "Original invalid skill store JSON");
+      list.appendChild(raw);
+      return;
+    }
     const shell = createHtml("div", "claudero-pref-skills-table-shell");
     const headerTable = createHtml(
       "table",
@@ -890,7 +805,9 @@ function bindAcademicSkills(doc: Document): void {
       enabledBadge.textContent = record.enabled ? "enabled" : "disabled";
       const badge = createHtml("span", "claudero-pref-skill-badge");
       badge.classList.add(record.status);
-      badge.textContent = record.status.replace("-", " ");
+      badge.textContent = record.validationError
+        ? "invalid — repair required"
+        : record.status.replace("-", " ");
       statusCell.append(enabledBadge, badge);
 
       const categoryCell = createHtml("td");
@@ -907,14 +824,23 @@ function bindAcademicSkills(doc: Document): void {
 
       const actionsCell = createHtml("td", "claudero-pref-skill-actions-cell");
       const actions = createHtml("div", "claudero-pref-skill-actions");
+      const edit = makeButton(getString("ui-edit"), () => editSkill(record));
+      edit.dataset.skillEdit = record.id;
       actions.append(
         makeButton(record.enabled ? "Disable" : "Enable", () => {
+          if (record.validationError) {
+            setStatus(
+              `Repair this skill first: ${record.validationError}`,
+              "error",
+            );
+            return;
+          }
           setAcademicSkillEnabled(record.id, !record.enabled);
           renderList();
         }),
-        makeButton(getString("ui-edit"), () => editSkill(record)),
+        edit,
       );
-      if (record.stored) {
+      if (record.builtin && (record.stored || record.validationError)) {
         actions.append(
           makeButton("Reset", () => {
             if (!win?.confirm(`Reset "${record.skill.title}" to builtin?`))
@@ -971,7 +897,7 @@ function bindAcademicSkills(doc: Document): void {
       const detailCell = createHtml("td", "claudero-pref-skill-detail-cell");
       detailCell.colSpan = 7;
       const desc = createHtml("div", "claudero-pref-skill-desc");
-      desc.textContent = record.skill.description;
+      desc.textContent = record.validationError || record.skill.description;
       const examples = createHtml("div", "claudero-pref-skill-meta");
       examples.textContent = getString("skills-examples", {
         args: { values: shortList(record.skill.intentExamples.slice(0, 3)) },
@@ -986,7 +912,7 @@ function bindAcademicSkills(doc: Document): void {
     list.appendChild(shell);
   };
 
-  testButton?.addEventListener("click", () => {
+  lifetime.listen(testButton, "click", () => {
     const query = testInput?.value.trim() || "";
     if (!testResult) return;
     if (!query) {
@@ -1013,7 +939,7 @@ function bindAcademicSkills(doc: Document): void {
     });
   });
 
-  importButton?.addEventListener("click", () => {
+  lifetime.listen(importButton, "click", () => {
     const raw = importText?.value.trim() || "";
     if (!raw) {
       setStatus("Paste skill content before importing.", "error");
@@ -1087,7 +1013,7 @@ interface DiagnosticsPayload {
   debugLog?: unknown[];
 }
 
-function bindDiagnostics(doc: Document): void {
+function bindDiagnostics(doc: Document, lifetime: PreferenceLifetime): void {
   const refresh = doc.querySelector<HTMLButtonElement>(
     "#claudero-pref-diagnostics-refresh",
   );
@@ -1107,6 +1033,24 @@ function bindDiagnostics(doc: Document): void {
     "#claudero-pref-diagnostics-trace",
   );
   if (!summary && !trace) return;
+
+  const task = new PreferenceTask(lifetime);
+  const runAction = (action: (signal: AbortSignal) => Promise<void>) => {
+    void task.run(async (signal) => {
+      const buttons = [refresh, restartButton, exportButton];
+      buttons.forEach((button) => {
+        if (button) button.disabled = true;
+      });
+      try {
+        await action(signal);
+      } finally {
+        if (lifetime.active && !signal.aborted)
+          buttons.forEach((button) => {
+            if (button) button.disabled = false;
+          });
+      }
+    });
+  };
 
   const createHtml = <K extends keyof HTMLElementTagNameMap>(
     tag: K,
@@ -1147,15 +1091,19 @@ function bindDiagnostics(doc: Document): void {
     return card;
   };
 
-  const load = async () => {
+  const load = async (signal: AbortSignal) => {
     if (status) {
       status.classList.remove("error", "success");
       status.textContent = getString("diagnostics-loading");
     }
     try {
-      const data = await requestHelperJson<DiagnosticsPayload>("/diagnostics");
+      const data = await requestHelperJson<DiagnosticsPayload>("/diagnostics", {
+        signal,
+      });
+      if (!lifetime.active || signal.aborted) return;
       summary?.replaceChildren(
         renderCard("Helper", [
+          ["Device", getHostKey()],
           ["Version", data.helper?.version],
           ["Active provider", data.helper?.activeProvider],
           ["Runtime active", data.helper?.runtimeActive],
@@ -1206,6 +1154,7 @@ function bindDiagnostics(doc: Document): void {
         status.classList.add("success");
       }
     } catch (error) {
+      if (!lifetime.active || signal.aborted) return;
       summary?.replaceChildren();
       if (trace) trace.textContent = "";
       if (status) {
@@ -1217,54 +1166,60 @@ function bindDiagnostics(doc: Document): void {
     }
   };
 
-  refresh?.addEventListener("click", () => void load());
-  restartButton?.addEventListener("click", () => {
-    if (status) {
-      status.classList.remove("error", "success");
-      status.textContent = getString("diagnostics-restarting");
-    }
-    const restart = async () => {
-      await requestHelperJson("/restart-runtimes", { method: "POST" });
+  lifetime.listen(refresh, "click", () => runAction(load));
+  lifetime.listen(restartButton, "click", () =>
+    runAction(async (signal) => {
       if (status) {
-        status.textContent = getString("diagnostics-restarted");
-        status.classList.add("success");
+        status.classList.remove("error", "success");
+        status.textContent = getString("diagnostics-restarting");
       }
-      await load();
-    };
-    void restart().catch((error) => {
-      if (status) {
-        status.textContent = getString("diagnostics-restart-failed", {
-          args: { error: error instanceof Error ? error.message : "" },
+      try {
+        await requestHelperJson("/restart-runtimes", {
+          method: "POST",
+          signal,
         });
-        status.classList.add("error");
+        if (!lifetime.active || signal.aborted) return;
+        await load(signal);
+      } catch (error) {
+        if (!lifetime.active || signal.aborted) return;
+        if (status) {
+          status.textContent = getString("diagnostics-restart-failed", {
+            args: { error: error instanceof Error ? error.message : "" },
+          });
+          status.classList.add("error");
+        }
       }
-    });
-  });
-  exportButton?.addEventListener("click", () => {
-    if (status) {
-      status.classList.remove("error", "success");
-      status.textContent = getString("diagnostics-exporting");
-    }
-    void exportDiagnosticLog()
-      .then((path) => {
+    }),
+  );
+  lifetime.listen(exportButton, "click", () =>
+    runAction(async (signal) => {
+      if (status) {
+        status.classList.remove("error", "success");
+        status.textContent = getString("diagnostics-exporting");
+      }
+      try {
+        const path = await exportDiagnosticLog(signal);
+        if (!lifetime.active || signal.aborted) return;
         if (status) {
           status.textContent = getString("diagnostics-saved", {
             args: { path },
           });
           status.classList.add("success");
         }
-      })
-      .catch((error) => {
+      } catch (error) {
+        if (!lifetime.active || signal.aborted) return;
         if (status) {
           status.textContent = getString("diagnostics-export-failed", {
             args: { error: error instanceof Error ? error.message : "" },
           });
           status.classList.add("error");
         }
-      });
-  });
+      }
+    }),
+  );
   const root = doc.querySelector<HTMLElement>(".claudero-pref-stack");
-  root?.addEventListener("claudero-preference-panel-selected", (event) => {
-    if ((event as CustomEvent<string>).detail === "diagnostics") void load();
+  lifetime.listen(root, "claudero-preference-panel-selected", (event) => {
+    if ((event as CustomEvent<string>).detail === "diagnostics")
+      runAction(load);
   });
 }

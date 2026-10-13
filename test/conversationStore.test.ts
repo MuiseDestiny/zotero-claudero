@@ -5,6 +5,9 @@ import {
   deleteConversation,
   exportConversationToFile,
   getClauderoDir,
+  getConversationTitle,
+  flushSavedData,
+  loadConversationById,
   listConversations,
   saveConversationData,
   selectRetainedConversationEntries,
@@ -14,6 +17,151 @@ import {
 } from "../src/modules/conversationStore";
 
 describe("conversation store provider metadata", function () {
+  it("recovers invalid message structures and mismatched IDs from the matching backup", async function () {
+    const id = `structure-recovery-${Date.now()}`;
+    const filePath = PathUtils.join(getClauderoDir(), "history", `${id}.json`);
+    const turns: ConversationTurn[] = [
+      { role: "user", text: "safe backup", ts: 100 },
+    ];
+    try {
+      await saveConversationData(id, turns);
+      const valid = JSON.parse(await IOUtils.readUTF8(filePath));
+      await IOUtils.writeUTF8(`${filePath}.bak`, JSON.stringify(valid));
+      const invalids = [
+        { ...valid, turns: [null] },
+        { ...valid, turns: [{ ...turns[0], text: 12 }] },
+        { ...valid, turns: [{ ...turns[0], images: [null] }] },
+        {
+          ...valid,
+          turns: [{ ...turns[0], contextSnapshot: { items: [null] } }],
+        },
+        {
+          ...valid,
+          turns: [{ ...turns[0], blocks: [{ type: "text", text: null }] }],
+        },
+        { ...valid, id: `${id}-other` },
+      ];
+      for (const invalid of invalids) {
+        await IOUtils.writeUTF8(filePath, JSON.stringify(invalid));
+        const recovered = await loadConversationById(id);
+        assert.equal(recovered?.id, id);
+        assert.deepEqual(recovered?.turns, turns);
+      }
+    } finally {
+      await deleteConversation(id);
+    }
+  });
+
+  it("never downgrades future-schema data or overwrites an unrecoverable conversation", async function () {
+    const id = `future-schema-${Date.now()}`;
+    const filePath = PathUtils.join(getClauderoDir(), "history", `${id}.json`);
+    const turns: ConversationTurn[] = [
+      { role: "user", text: "original", ts: 100 },
+    ];
+    try {
+      await saveConversationData(id, turns);
+      const valid = JSON.parse(await IOUtils.readUTF8(filePath));
+      await IOUtils.writeUTF8(`${filePath}.bak`, JSON.stringify(valid));
+      const future = JSON.stringify({
+        ...valid,
+        schemaVersion: CONVERSATION_SCHEMA_VERSION + 1,
+        title: "future data",
+      });
+      await IOUtils.writeUTF8(filePath, future);
+      const error = await loadConversationById(id).catch((error) => error);
+      assert.include(error.message, "requires a newer");
+      const saveError = await saveConversationData(id, turns).catch(
+        (error) => error,
+      );
+      assert.include(saveError.message, "requires a newer");
+      assert.equal(await IOUtils.readUTF8(filePath), future);
+      await IOUtils.remove(`${filePath}.bak`);
+      await IOUtils.writeUTF8(filePath, "{broken");
+      const corruptError = await saveConversationData(id, turns).catch(
+        (error) => error,
+      );
+      assert.include(corruptError.message, "unreadable");
+      assert.equal(await IOUtils.readUTF8(filePath), "{broken");
+    } finally {
+      await deleteConversation(id);
+    }
+  });
+
+  it("serializes title reads with a pending atomic save", async function () {
+    const id = `queued-title-${Date.now()}`;
+    const filePath = PathUtils.join(getClauderoDir(), "history", `${id}.json`);
+    const originalWrite = IOUtils.writeUTF8;
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let write: Promise<unknown> | undefined;
+    try {
+      IOUtils.writeUTF8 = async (...args) => {
+        if (args[0] === filePath) {
+          entered();
+          await gate;
+        }
+        return originalWrite.apply(IOUtils, args);
+      };
+      write = saveConversationData(id, [
+        { role: "user", text: "queued title", ts: Date.now() },
+      ]);
+      await waiting;
+      let resolved = false;
+      const title = getConversationTitle(id).then((value) => {
+        resolved = true;
+        return value;
+      });
+      let flushed = false;
+      const flushing = flushSavedData().then(() => {
+        flushed = true;
+      });
+      await Zotero.Promise.delay(10);
+      assert.isFalse(
+        resolved,
+        "Reads must wait for the in-flight atomic write",
+      );
+      assert.isFalse(
+        flushed,
+        "Shutdown must wait for pending snapshots to reach disk",
+      );
+      release();
+      await write;
+      assert.equal(await title, "queued title");
+      await flushing;
+      assert.isTrue(flushed);
+    } finally {
+      release();
+      await write?.catch(() => {});
+      IOUtils.writeUTF8 = originalWrite;
+      await deleteConversation(id);
+    }
+  });
+
+  it("deletes quarantined copies only for the exact conversation ID", async function () {
+    const id = `quarantine-prefix-${Date.now()}`;
+    const sibling = `${id}-other`;
+    const dir = PathUtils.join(getClauderoDir(), "history", "corrupt");
+    const own = PathUtils.join(dir, `${id}-123-primary.json`);
+    const other = PathUtils.join(dir, `${sibling}-123-primary.json`);
+    try {
+      await IOUtils.makeDirectory(dir, { createAncestors: true });
+      await IOUtils.writeUTF8(own, "own backup");
+      await IOUtils.writeUTF8(other, "other backup");
+      await deleteConversation(id);
+      assert.isFalse(await IOUtils.exists(own));
+      assert.equal(await IOUtils.readUTF8(other), "other backup");
+    } finally {
+      await deleteConversation(id);
+      await deleteConversation(sibling);
+    }
+  });
+
   it("persists and preserves provider session metadata", async function () {
     const id = `provider-state-${Date.now()}`;
     const turns: ConversationTurn[] = [

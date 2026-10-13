@@ -1,4 +1,5 @@
 import { defineConfig } from "zotero-plugin-scaffold";
+import { readFileSync } from "node:fs";
 import pkg from "./package.json";
 
 export default defineConfig({
@@ -52,6 +53,12 @@ export default defineConfig({
 
   test: {
     waitForPlugin: `() => Zotero.${pkg.config.addonInstance}.data.initialized`,
+  },
+
+  release: {
+    github: {
+      releaseNote: () => readFileSync("CHANGELOG.md", "utf8"),
+    },
   },
 
   // If you need to see a more detailed log, uncomment the following line:

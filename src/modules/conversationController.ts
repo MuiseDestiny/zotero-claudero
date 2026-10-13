@@ -1,13 +1,23 @@
 import {
-  listConversations,
+  loadLatestSavedConversation,
   newConversationId,
   saveConversationData,
+  type ConversationSaveResult,
   type ConversationProviderState,
   type ConversationTurn,
   type SavedConversation,
+  type ConversationImage,
 } from "./conversationStore";
 
-export interface ConversationState {
+import {
+  invalidateConversation,
+  type ConversationGenerationState,
+} from "./conversationTransition";
+import { snapshotConversationValue } from "./conversationSnapshot";
+import type { RecoveryManifest } from "./conversationRecovery";
+import { replaceImageDraft } from "./imageDraft";
+
+export interface ConversationState extends ConversationGenerationState {
   transcript: HTMLElement;
   toolCards: Map<string, unknown>;
   conversationId: string;
@@ -18,26 +28,42 @@ export interface ConversationState {
   currentAssistantCard: HTMLElement | null;
   thinkingCard: unknown | null;
   lastAssistantText: string;
-  pendingImages?: unknown[];
+  pendingImages?: ConversationImage[];
   providerState?: ConversationProviderState;
   parentConversationId?: string;
   forkedAtTurnIndex?: number;
   compactedAt?: number;
+  recoveryManifest?: RecoveryManifest;
   currentProviderTurnId?: string;
 }
 
 export async function saveCurrentConversation(
   state: ConversationState,
-): Promise<void> {
-  await saveConversationData(state.conversationId, state.conversationTurns, {
+): Promise<ConversationSaveResult> {
+  // Older records were written before per-turn session ids were persisted.
+  // Backfill missing ids from the provider state at save time so Codex native
+  // forks can verify that the retained turns belong to one thread.
+  const turns = state.conversationTurns.map((turn) => {
+    if (turn.sessionId || !turn.provider) return turn;
+    const sessionId =
+      turn.provider === "codex"
+        ? state.providerState?.codex?.threadId
+        : turn.provider === "deepseek"
+          ? state.providerState?.deepseek?.sessionId
+          : state.providerState?.claude?.sessionId;
+    return sessionId ? { ...turn, sessionId } : turn;
+  });
+  return saveConversationData(state.conversationId, turns, {
     providerState: state.providerState,
     parentConversationId: state.parentConversationId,
     forkedAtTurnIndex: state.forkedAtTurnIndex,
     compactedAt: state.compactedAt,
+    recoveryManifest: state.recoveryManifest,
   });
 }
 
 export function clearConversationState(state: ConversationState): void {
+  invalidateConversation(state);
   state.transcript.textContent = "";
   state.toolCards.clear();
   state.lastAssistantText = "";
@@ -48,11 +74,12 @@ export function clearConversationState(state: ConversationState): void {
   state.currentAssistantBody = null;
   state.currentAssistantCard = null;
   state.thinkingCard = null;
-  if (state.pendingImages) state.pendingImages = [];
+  if (state.pendingImages) replaceImageDraft(state);
   state.providerState = undefined;
   state.parentConversationId = undefined;
   state.forkedAtTurnIndex = undefined;
   state.compactedAt = undefined;
+  state.recoveryManifest = undefined;
   state.currentProviderTurnId = undefined;
 }
 
@@ -60,6 +87,9 @@ export function applyConversation(
   state: ConversationState,
   conv: SavedConversation,
 ): void {
+  invalidateConversation(state);
+  conv = snapshotConversationValue(conv);
+  if (state.pendingImages) replaceImageDraft(state);
   state.conversationId = conv.id;
   state.conversationTurns = Array.isArray(conv.turns) ? conv.turns : [];
   if (state.currentAssistantBlocks) state.currentAssistantBlocks = [];
@@ -72,10 +102,10 @@ export function applyConversation(
   state.parentConversationId = conv.parentConversationId;
   state.forkedAtTurnIndex = conv.forkedAtTurnIndex;
   state.compactedAt = conv.compactedAt;
+  state.recoveryManifest = conv.recoveryManifest;
   state.currentProviderTurnId = undefined;
 }
 
 export async function loadLatestConversation(): Promise<SavedConversation | null> {
-  const conversations = await listConversations();
-  return conversations[0] || null;
+  return loadLatestSavedConversation();
 }

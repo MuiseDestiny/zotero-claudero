@@ -68,7 +68,11 @@ export type AgentStreamEvent =
   | { type: "error"; error: string }
   | { type: "commands_changed"; commands: CommandDefinition[] };
 
-export type AgentControlEvent = { type: "ready" } | { type: "done" };
+export type AgentRequestOutcome = "success" | "error" | "cancelled";
+
+export type AgentControlEvent =
+  | { type: "ready"; requestId: string }
+  | { type: "done"; requestId: string; outcome: AgentRequestOutcome };
 
 export type AgentEventPayload = AgentStreamEvent | AgentControlEvent;
 
@@ -99,6 +103,13 @@ export interface AgentEventTrace {
   startedAt: number;
   source: AgentEventSource;
   events: AgentEventEnvelope[];
+  retention?: {
+    totalEvents: number;
+    droppedEvents: number;
+    retainedBytes: number;
+    maxEvents: number;
+    maxBytes: number;
+  };
 }
 
 const EVENT_TYPES = new Set<string>([
@@ -160,11 +171,23 @@ export function createAgentEventEnvelope<T extends AgentEventPayload>(
 export class AgentEventRecorder {
   private sequence = 0;
   private readonly trace: AgentEventTrace;
+  private readonly sizes: number[] = [];
+  private retainedBytes = 0;
+  private droppedEvents = 0;
+  private readonly maxEvents: number;
+  private readonly maxBytes: number;
 
   constructor(
     source: AgentEventSource = {},
-    options: { traceId?: string; startedAt?: number } = {},
+    options: {
+      traceId?: string;
+      startedAt?: number;
+      maxEvents?: number;
+      maxBytes?: number;
+    } = {},
   ) {
+    this.maxEvents = Math.max(1, options.maxEvents ?? 2048);
+    this.maxBytes = Math.max(1, options.maxBytes ?? 4 * 1024 * 1024);
     const startedAt = options.startedAt ?? Date.now();
     const traceId =
       options.traceId ||
@@ -187,7 +210,23 @@ export class AgentEventRecorder {
       timestamp: Date.now(),
       source: { ...this.trace.source, ...source },
     });
-    this.trace.events.push(envelope);
+    const serialized = JSON.stringify(envelope);
+    const bytes = new TextEncoder().encode(serialized).byteLength;
+    if (bytes > this.maxBytes) {
+      this.droppedEvents++;
+      return envelope;
+    }
+    while (
+      this.trace.events.length >= this.maxEvents ||
+      this.retainedBytes + bytes > this.maxBytes
+    ) {
+      this.trace.events.shift();
+      this.retainedBytes -= this.sizes.shift()!;
+      this.droppedEvents++;
+    }
+    this.trace.events.push(JSON.parse(serialized) as AgentEventEnvelope);
+    this.sizes.push(bytes);
+    this.retainedBytes += bytes;
     return envelope;
   }
 
@@ -195,10 +234,16 @@ export class AgentEventRecorder {
     return {
       ...this.trace,
       source: { ...this.trace.source },
-      events: this.trace.events.map((event) => ({
-        ...event,
-        source: { ...event.source },
-      })),
+      events: JSON.parse(
+        JSON.stringify(this.trace.events),
+      ) as AgentEventEnvelope[],
+      retention: {
+        totalEvents: this.sequence,
+        droppedEvents: this.droppedEvents,
+        retainedBytes: this.retainedBytes,
+        maxEvents: this.maxEvents,
+        maxBytes: this.maxBytes,
+      },
     };
   }
 }
