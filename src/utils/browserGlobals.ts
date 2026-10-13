@@ -2,14 +2,18 @@ export function resolveBrowserGlobal(
   name: string,
   mainWindow: Window | null = Zotero.getMainWindow(),
 ): unknown {
-  const sources = [
-    mainWindow,
-    (
-      Services as unknown as {
-        appShell?: { hiddenDOMWindow?: Window };
-      }
-    ).appShell?.hiddenDOMWindow,
-  ];
+  const sources: Array<Window | null | undefined> = [mainWindow];
+  try {
+    sources.push(
+      (
+        Services as unknown as {
+          appShell?: { hiddenDOMWindow?: Window };
+        }
+      ).appShell?.hiddenDOMWindow,
+    );
+  } catch {
+    // hiddenDOMWindow itself can throw NS_ERROR_NOT_AVAILABLE on headless Linux.
+  }
   for (const source of sources) {
     try {
       const value = (source as (Window & Record<string, unknown>) | null)?.[
