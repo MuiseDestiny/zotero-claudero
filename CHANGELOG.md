@@ -16,6 +16,8 @@ DeepSeek Harness support is experimental.
 
 ### Fixes
 
+- Resolve required Web APIs in windowless Zotero environments so secure helper
+  tokens and request cancellation initialize correctly without a main window.
 - Preserve missing MCP executable errors on Windows instead of reporting only
   a closed connection, and canonicalize Windows workspace paths in runtime tests.
 - Resolve all reported dependency advisories, including MCP SDK OAuth,
