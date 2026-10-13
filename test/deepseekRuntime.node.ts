@@ -15,14 +15,21 @@ describe("DeepSeek Harness runtime", function () {
   it("runs the official headless command shape and emits the final answer", async function () {
     const root = await mkdtemp(path.join(os.tmpdir(), "claudero-dsh-"));
     const script = path.join(root, "mock-dsh.mjs");
-    const realRoot = await realpath(root);
+    const canonicalRoot = await realpath(root);
+    const realRoot =
+      process.platform === "win32"
+        ? canonicalRoot.toLowerCase()
+        : canonicalRoot;
     await writeFile(
       script,
       [
         "#!/usr/bin/env node",
+        "import { realpathSync } from 'node:fs';",
+        "const canonicalCwd = realpathSync.native(process.cwd());",
+        "const cwd = process.platform === 'win32' ? canonicalCwd.toLowerCase() : canonicalCwd;",
         "if (process.argv.slice(2, 4).join(' ') !== '--profile headless') process.exit(3);",
-        "if (process.cwd() !== process.env.EXPECTED_CWD) process.exit(4);",
-        "process.stdout.write(JSON.stringify({ model: process.env.DSH_MODEL || '', dshHome: process.env.DSH_HOME || '', cwd: process.cwd(), prompt: process.argv.at(-1) || '' }));",
+        "if (cwd !== process.env.EXPECTED_CWD) process.exit(4);",
+        "process.stdout.write(JSON.stringify({ model: process.env.DSH_MODEL || '', dshHome: process.env.DSH_HOME || '', cwd, prompt: process.argv.at(-1) || '' }));",
       ].join("\n"),
     );
     const manager = new DeepSeekPersistentQueryManager(new PermissionManager());

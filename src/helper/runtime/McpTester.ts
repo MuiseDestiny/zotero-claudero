@@ -61,6 +61,14 @@ export async function testMcpServer(
   timeoutMs = 12_000,
 ): Promise<McpTestResult> {
   const client = new Client({ name: "claudero-mcp-tester", version: "0.1.0" });
+  let missingExecutableError: Error | undefined;
+  // Windows shims can spawn successfully before reporting ENOENT. Preserve
+  // that cause when the pending handshake rejects with "Connection closed".
+  client.onerror = (error) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      missingExecutableError = error;
+    }
+  };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const transport = createTransport(config);
@@ -113,7 +121,9 @@ export async function testMcpServer(
     return {
       success: false,
       tools: [],
-      error: error instanceof Error ? error.message : String(error),
+      error:
+        missingExecutableError?.message ||
+        (error instanceof Error ? error.message : String(error)),
     };
   } finally {
     clearTimeout(timer);

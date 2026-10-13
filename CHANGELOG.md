@@ -16,6 +16,8 @@ DeepSeek Harness support is experimental.
 
 ### Fixes
 
+- Preserve missing MCP executable errors on Windows instead of reporting only
+  a closed connection, and canonicalize Windows workspace paths in runtime tests.
 - Resolve all reported dependency advisories, including MCP SDK OAuth,
   proxy-addr, markdown-it linkification, KaTeX prototype pollution, ip-address,
   and development-only brace expansion dependencies.
