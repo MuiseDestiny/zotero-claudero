@@ -1,4 +1,5 @@
 import { buildAuthenticatedZoteroPayload } from "../shared/zoteroEndpointAuth";
+import { registerContextMenu } from "../utils/contextMenu";
 import { getString } from "../utils/locale";
 import { getPref, setPref } from "../utils/prefs";
 import {
@@ -2497,7 +2498,8 @@ export function registerClauderoStyles(win: _ZoteroTypes.MainWindow): void {
 }
 
 export function registerClauderoMenu(): void {
-  ztoolkit.Menu.register("item", {
+  // Zotero 11+ registers via Zotero.MenuManager; Zotero 10 keeps ztoolkit.
+  registerContextMenu("item", {
     tag: "menuitem",
     id: "zotero-itemmenu-claudero-ask",
     label: getString("pane-ask-claudero"),
