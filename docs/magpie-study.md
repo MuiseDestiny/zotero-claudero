@@ -12,7 +12,7 @@ This is an architectural study, not a copy of Magpie's gateway or UI.
 | 2     | Bound and validate streamed messages              | Validate event fields, limit each NDJSON frame, reject truncated or invalid streams                            | Done    |
 | 3     | Tie stream lifetime to its consumer               | Honor writable backpressure and release waits on disconnect, cancellation, or timeout                          | Done    |
 | 4     | Compare configuration by meaning                  | Ignore object-key order without ignoring real value changes or ordered arguments                               | Done    |
-| 5     | A known secret stays secret wherever it reappears | Scrub configured credential values and credentials embedded in URLs from diagnostics                           | Planned |
+| 5     | A known secret stays secret wherever it reappears | Scrub configured credential values and credentials embedded in URLs from diagnostics                           | Done    |
 | 6     | Users should not manage the application's runtime | Build a standalone Helper, prefer it when bundled, and retain the Node.js compatibility path                   | Planned |
 
 ## Sources and Boundaries
@@ -119,3 +119,20 @@ Verified with `test/configEquality.node.ts`, `test/permissionManager.test.ts`,
 `test/runtimeEnvironment.test.ts`, `test/codexMcpConfig.test.ts`, and
 `test/deepseekRuntime.node.ts`: 28 passing tests. TypeScript and targeted ESLint
 pass. No live provider session or external credential is needed for these tests.
+
+### 5. Diagnostic Secret Memory
+
+Configured environment/MCP credentials and the Helper capability token seed an
+in-memory diagnostic-only registry (8-4096 characters per value, at most 128
+values and 64 Ki characters). Matching escapes regex metacharacters and prefers
+longer overlapping values. URL userinfo is removed even for short passwords;
+configured percent-encoded proxy passwords are remembered in both forms.
+Collection and export sanitize values again, including object keys and circular
+arrays. No prompt, research paragraph, or ordinary configuration string is learned
+as a secret, and provider inputs/outputs are not rewritten.
+
+Verified with privacy, Helper startup/lifecycle, and configuration regressions:
+20 passing tests, including an actual authenticated Helper diagnostics request
+whose workspace path repeats a configured opaque secret. TypeScript and targeted
+ESLint pass. Very short/oversized or evicted credentials are still field/URL/
+pattern-masked, but cannot be guaranteed masked as arbitrary unlabeled substrings.

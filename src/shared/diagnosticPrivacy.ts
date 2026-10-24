@@ -1,4 +1,8 @@
 import type { AgentEventPayload } from "./agentEvents";
+import { KnownDiagnosticSecrets } from "./knownDiagnosticSecrets";
+
+const knownSecrets = new KnownDiagnosticSecrets();
+const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/?#<>"']+)@/gi;
 
 const INLINE_SECRET_PATTERNS: RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi,
@@ -36,6 +40,7 @@ export function isSensitiveDiagnosticKey(key: string): boolean {
   ) {
     return true;
   }
+  if (/(?:password|secret|credentials?|cookie)$/.test(normalized)) return true;
   if (normalized.endsWith("token") && !normalized.endsWith("tokens")) {
     return true;
   }
@@ -45,8 +50,44 @@ export function isSensitiveDiagnosticKey(key: string): boolean {
   );
 }
 
+export function rememberDiagnosticConfiguration(configuration: unknown): void {
+  const seen = new WeakSet<object>();
+  let remaining = 2048;
+  const visit = (value: unknown, key: string, depth: number) => {
+    if (--remaining < 0 || depth > 12) return;
+    if (typeof value === "string") {
+      if (isSensitiveDiagnosticKey(key)) {
+        knownSecrets.remember(value);
+        knownSecrets.remember(value.replace(/^Bearer\s+/i, ""));
+      }
+      for (const match of value.matchAll(URL_CREDENTIALS)) {
+        const credentials = match[2];
+        const password = credentials.slice(credentials.indexOf(":") + 1);
+        for (const raw of [credentials, password]) {
+          knownSecrets.remember(raw);
+          try {
+            knownSecrets.remember(decodeURIComponent(raw));
+          } catch {
+            // Malformed URL escapes must not break diagnostics or setup.
+          }
+        }
+      }
+      return;
+    }
+    if (!value || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    for (const [childKey, childValue] of Object.entries(value)) {
+      if (remaining <= 0) break;
+      visit(childValue, childKey, depth + 1);
+    }
+  };
+  visit(configuration, "", 0);
+}
+
 export function redactSensitiveText(value: string): string {
-  let redacted = value;
+  let redacted = knownSecrets
+    .redact(value)
+    .replace(URL_CREDENTIALS, "$1[redacted]@");
   for (const pattern of INLINE_SECRET_PATTERNS) {
     redacted = redacted.replace(pattern, "[redacted]");
   }
@@ -64,17 +105,24 @@ function sanitizeValue(
       : "[redacted]";
   }
   if (typeof value === "string") return redactSensitiveText(value);
-  if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeValue(entry, key, seen));
-  }
   if (value && typeof value === "object") {
     if (seen.has(value)) return "[circular]";
     seen.add(value);
+    if (Array.isArray(value)) {
+      const output = value.map((entry) => sanitizeValue(entry, key, seen));
+      seen.delete(value);
+      return output;
+    }
     const output: Record<string, unknown> = {};
     for (const [childKey, childValue] of Object.entries(
       value as Record<string, unknown>,
     )) {
-      output[childKey] = sanitizeValue(childValue, childKey, seen);
+      Object.defineProperty(output, redactSensitiveText(childKey), {
+        value: sanitizeValue(childValue, childKey, seen),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     }
     seen.delete(value);
     return output;

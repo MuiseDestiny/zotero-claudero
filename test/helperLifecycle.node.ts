@@ -246,4 +246,30 @@ describe("helper process lifecycle", function () {
       }
     }
   });
+
+  it("scrubs configured opaque credentials from collected and exported diagnostics", async function () {
+    const helper = await start();
+    const secret = "fixture-opaque-diagnostic-value-012345";
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
+    const response = await fetch(`${helper.url}/init`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        workspacePath: path.join(root, secret),
+        environment: { CUSTOM_SECRET: secret },
+        mcpServers: { invalid: {} },
+      }),
+    });
+    assert.equal(response.status, 400);
+    await response.text();
+    const diagnostics = await fetch(`${helper.url}/diagnostics`, { headers });
+    assert.equal(diagnostics.status, 200);
+    const text = await diagnostics.text();
+    assert.notInclude(text, secret);
+    assert.include(text, "[redacted]");
+    assert.include(text, "CUSTOM_SECRET");
+  });
 });

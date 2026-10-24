@@ -32,6 +32,10 @@ import {
   buildRuntimeEnvironment,
   parseEnvironmentVariables,
 } from "../shared/runtimeEnvironment";
+import {
+  redactSensitiveText,
+  rememberDiagnosticConfiguration,
+} from "../shared/diagnosticPrivacy";
 
 export type ClauderoQueryEvent = AgentEventPayload;
 
@@ -106,7 +110,7 @@ function getHelperSignal(): AbortSignal {
 }
 
 function helperLog(message: string): void {
-  ztoolkit.log(`[AI Rename/helper] ${message}`);
+  ztoolkit.log(`[AI Rename/helper] ${redactSensitiveText(message)}`);
 }
 
 function errorMessage(error: unknown): string {
@@ -117,12 +121,14 @@ function errorMessage(error: unknown): string {
 }
 
 async function getClauderoEnvironment(): Promise<Record<string, string>> {
-  return buildRuntimeEnvironment(
+  const environment = buildRuntimeEnvironment(
     String(getPref("proxy") || ""),
     String(getPref("environmentVariables") || ""),
     "",
     (name) => Services.env.get(name),
   );
+  rememberDiagnosticConfiguration(environment);
+  return environment;
 }
 
 async function getProviderEnvironment(
@@ -130,12 +136,14 @@ async function getProviderEnvironment(
 ): Promise<Record<string, string>> {
   const runtime = getProviderRuntimePrefs(provider);
   const base = await getClauderoEnvironment();
-  return {
+  const environment = {
     ...base,
     ...parseEnvironmentVariables(runtime.environmentVariables, base, (name) =>
       Services.env.get(name),
     ),
   };
+  rememberDiagnosticConfiguration(environment);
+  return environment;
 }
 
 function normalizeProviderPref(): AiProvider {
@@ -175,6 +183,7 @@ function buildMcpPayload(provider: AiProvider, prompt = "") {
   } catch (error) {
     ztoolkit.log("[Claudero] Ignoring invalid MCP server config:", error);
   }
+  rememberDiagnosticConfiguration(mcpServers);
   return {
     enableZoteroMcp: isZoteroMcpEnabled(),
     zoteroEndpointUrl: isZoteroMcpEnabled()

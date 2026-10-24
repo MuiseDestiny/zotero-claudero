@@ -73,6 +73,8 @@ import type { AcademicToolPolicy } from "../shared/academicToolPolicy";
 import {
   isSensitiveDiagnosticKey,
   redactSensitiveText,
+  rememberDiagnosticConfiguration,
+  sanitizeDiagnosticData,
   summarizeAgentEventForDiagnostics,
 } from "../shared/diagnosticPrivacy";
 
@@ -245,6 +247,10 @@ async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
   if (!isConfigRecord(body)) {
     throw new HttpRequestError(400, "JSON request body must be an object");
   }
+  rememberDiagnosticConfiguration({
+    environment: body.environment,
+    mcpServers: body.mcpServers,
+  });
   return body as T;
 }
 
@@ -1024,7 +1030,10 @@ function helperDebugData(
   data: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   if (!data) return undefined;
-  return redactHelperValue("data", data) as Record<string, unknown>;
+  return redactHelperValue("data", sanitizeDiagnosticData(data)) as Record<
+    string,
+    unknown
+  >;
 }
 
 function recordHelperDebug(
@@ -1036,8 +1045,8 @@ function recordHelperDebug(
   helperDebugLog.push({
     ts: new Date().toISOString(),
     level,
-    scope,
-    message,
+    scope: redactSensitiveText(scope),
+    message: redactSensitiveText(message),
     data: helperDebugData(data),
   });
   while (helperDebugLog.length > MAX_HELPER_DEBUG_LOG) {
@@ -1120,21 +1129,24 @@ function traceSummary(trace: AgentEventTrace | null): unknown {
 
 function diagnosticsPayload(): unknown {
   const activeRuntime = activeQueryManager();
-  return redactHelperValue("diagnostics", {
-    helper: {
-      version: HELPER_VERSION,
-      activeProvider,
-      active: true,
-      runtimeActive: activeRuntime.isActive,
-    },
-    runtimes: {
-      claude: runtimeAdapters.claude.diagnostics(),
-      codex: runtimeAdapters.codex.diagnostics(),
-      deepseek: runtimeAdapters.deepseek.diagnostics(),
-    },
-    trace: traceSummary(latestAgentTrace?.snapshot() || null),
-    debugLog: helperDebugLog.slice(-180),
-  });
+  return redactHelperValue(
+    "diagnostics",
+    sanitizeDiagnosticData({
+      helper: {
+        version: HELPER_VERSION,
+        activeProvider,
+        active: true,
+        runtimeActive: activeRuntime.isActive,
+      },
+      runtimes: {
+        claude: runtimeAdapters.claude.diagnostics(),
+        codex: runtimeAdapters.codex.diagnostics(),
+        deepseek: runtimeAdapters.deepseek.diagnostics(),
+      },
+      trace: traceSummary(latestAgentTrace?.snapshot() || null),
+      debugLog: helperDebugLog.slice(-180),
+    }),
+  );
 }
 
 function runtimeRestartConfig(
@@ -2115,6 +2127,7 @@ async function route(
 
   if (req.method === "POST" && req.url === "/test-mcp") {
     const body = await readJsonBody<TestMcpPayload>(req);
+    rememberDiagnosticConfiguration(body.config);
     const error = validateMcpServerConfig(body.config);
     if (error) throw new HttpRequestError(400, error);
     const result = await testMcpServer(body.config);
@@ -2224,6 +2237,10 @@ function main(): void {
     throw new Error("Claudero helper must be started with --server");
   }
   const config = parseArgs(process.argv.slice(2));
+  rememberDiagnosticConfiguration({
+    environment: process.env,
+    helperToken: config.token,
+  });
   let shuttingDown = false;
   const server = createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {
     if (shutdownRequested || shuttingDown) {

@@ -36,6 +36,7 @@ async function loadOrCreateHelperToken(): Promise<string> {
   try {
     const existing = (await IOUtils.readUTF8(tokenPath)).trim();
     if (/^[0-9a-f]{64}$/i.test(existing)) {
+      rememberDiagnosticConfiguration({ helperToken: existing });
       await restrictTokenFilePermissions(tokenPath);
       return existing;
     }
@@ -44,6 +45,7 @@ async function loadOrCreateHelperToken(): Promise<string> {
   }
 
   const token = generateHelperToken();
+  rememberDiagnosticConfiguration({ helperToken: token });
   await IOUtils.makeDirectory(helperDir, { createAncestors: true });
   await IOUtils.writeUTF8(tokenPath, token);
   await restrictTokenFilePermissions(tokenPath);
@@ -59,3 +61,4 @@ export function getOrCreateHelperToken(): Promise<string> {
   }
   return helperTokenPromise;
 }
+import { rememberDiagnosticConfiguration } from "../shared/diagnosticPrivacy";

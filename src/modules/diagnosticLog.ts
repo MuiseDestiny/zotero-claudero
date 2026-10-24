@@ -5,6 +5,7 @@ import { withRequestDeadline, waitWithSignal } from "../shared/requestDeadline";
 import { throwIfAborted } from "../shared/helperStream";
 import {
   sanitizeDiagnosticData,
+  redactSensitiveText,
   stableDiagnosticHash,
 } from "../shared/diagnosticPrivacy";
 
@@ -125,7 +126,7 @@ export function logDiagnostic(
   push({
     ts: nowIso(),
     level,
-    event,
+    event: redactSensitiveText(event),
     data: sanitizeDiagnosticData(data) as Record<string, unknown>,
   });
 }
@@ -218,7 +219,7 @@ export function snapshotDiagnosticLog(extra: Record<string, unknown> = {}) {
       enableZoteroMcp: isZoteroMcpEnabled(),
     },
     ...safeExtra,
-    entries: entries.slice(),
+    entries: sanitizeDiagnosticData(entries) as DiagnosticLogEntry[],
   };
 }
 

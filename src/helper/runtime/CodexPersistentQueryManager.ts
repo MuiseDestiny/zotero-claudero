@@ -41,7 +41,10 @@ import {
   parseCodexReconnectStatus,
 } from "./codexTurnPolicy";
 import type { AcademicToolPolicy } from "../../shared/academicToolPolicy";
-import { redactSensitiveText } from "../../shared/diagnosticPrivacy";
+import {
+  redactSensitiveText,
+  sanitizeDiagnosticData,
+} from "../../shared/diagnosticPrivacy";
 
 export interface CodexConfig {
   workspacePath: string;
@@ -1455,7 +1458,7 @@ export class CodexPersistentQueryManager {
       ts: new Date().toISOString(),
       level,
       event,
-      data,
+      data: sanitizeDiagnosticData(data) as JsonRecord,
     });
     while (this.diagnosticEvents.length > MAX_CODEX_DIAGNOSTIC_EVENTS) {
       this.diagnosticEvents.shift();
