@@ -178,7 +178,7 @@ for a JavaScript engine. No standalone release is published as part of the study
 
 - `npm run test:runtime`: 203 Mocha cases pass.
 - `npm run lint:check` and `tsc --noEmit`: pass.
-- Portable `npm run check:release`, mock Helper communication, and all three
+- Portable package verification, mock Helper communication, and all three
   evidence contract/golden/PDF-audit smokes: pass.
 - `npm run build:standalone`, `node scripts/verify-release.mjs`, and
   `npm run test:helper:standalone`: pass on macOS arm64, including separate
@@ -187,3 +187,39 @@ for a JavaScript engine. No standalone release is published as part of the study
   The existing context-menu tests now use the same Mocha/Chai harness in Node and
   Gecko instead of importing Node-only modules into the browser. UTF-8 rejection
   asserts the error type rather than Node-specific decoder error wording.
+
+### Follow-Up: Make Node-Free Setup the Default
+
+The standalone implementation is now the default for production builds, not an
+opt-in that users must locate. Standard `npm run build` and `check:release` bundle
+all six OS/architecture targets in the existing single cross-platform XPI. npm
+installs the exact Bun 1.4.2 compiler as a development dependency; no global Bun
+installation is needed. Missing compilers fail clearly rather than silently
+reintroducing a user-facing Node requirement. Release verification rejects a
+portable or incomplete standard package; `check:portable` is the explicit
+lightweight compatibility option. Development and browser tests remain light.
+
+The standard package cross-build and hashes pass locally (approximately 204 MiB
+XPI). Native macOS arm64 execution passes with an empty PATH and isolated HOME,
+including the Claude SDK and Codex self-spawned MCP bridge. Cross-building the
+other five targets does not substitute for their runtime CI acceptance. Node-free
+setup UI integration tests ensure native users are not blocked by a missing Node,
+while script CLIs and DeepSeek retain their genuine prerequisites. No plugin is
+published by this follow-up.
+
+Existing custom Node paths remain available to provider subprocesses when Bun
+owns the Helper process. DeepSeek installation now receives the configured
+environment, validates the real Node before installing, and starts npm's script
+directly on Windows instead of routing a path with spaces through a command shell.
+An isolated fake-npm integration test verifies this without a network install.
+
+Follow-up local verification:
+
+- Build policy tests: 8 pass; runtime regressions: 206 pass.
+- Zotero 11 browser tests: 274 pass, including the Node-free setup UI cases.
+- Lint, main/test TypeScript, standard six-target XPI integrity verification,
+  actual standalone execution, portable/mock compatibility, and the three
+  evidence smokes pass. Normal verification also rejects a portable XPI.
+- `npm audit` still reports 7 pre-existing advisories (3 high, 2 moderate,
+  2 low); the affected versions predate this follow-up. The CI audit gate is
+  not green, and no unrelated dependency upgrades or public release are made.

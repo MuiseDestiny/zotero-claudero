@@ -25,6 +25,14 @@ import { buildRuntimeEnvironment } from "../shared/runtimeEnvironment";
 import { getPref, setPref } from "../utils/prefs";
 import { getString } from "../utils/locale";
 
+const setupServices = {
+  autoDetectSettings,
+  settingsFileExists,
+  hasStandaloneHelper,
+  providerCliNeedsNode,
+  requestHelperJson,
+};
+
 function syncDetectedPaths(
   doc: Document,
   detected: SettingsAutoDetectResult,
@@ -56,6 +64,7 @@ function syncDetectedPaths(
 export function bindSetupWizard(
   doc: Document,
   lifetime: PreferenceLifetime,
+  services = setupServices,
 ): void {
   const root = doc.querySelector<HTMLElement>(".claudero-pref-stack");
   const win = doc.defaultView;
@@ -200,7 +209,10 @@ export function bindSetupWizard(
     );
     details.replaceChildren();
     try {
-      const detected = await waitWithSignal(autoDetectSettings(), signal);
+      const detected = await waitWithSignal(
+        services.autoDetectSettings(),
+        signal,
+      );
       if (!isCurrent()) return;
       syncDetectedPaths(doc, detected);
       const providers = ["claude", "codex", "deepseek"] as const;
@@ -209,8 +221,10 @@ export function bindSetupWizard(
       );
       const [nodeOk, ...cliChecks] = await waitWithSignal(
         Promise.all([
-          settingsFileExists(String(getPref("nodePath") || "")),
-          ...providers.map((provider) => settingsFileExists(paths[provider])),
+          services.settingsFileExists(String(getPref("nodePath") || "")),
+          ...providers.map((provider) =>
+            services.settingsFileExists(paths[provider]),
+          ),
         ]),
         signal,
       );
@@ -237,13 +251,16 @@ export function bindSetupWizard(
         provider === "codex" && getCodexInstallationMethod() === "wsl";
       const cliOk = usesWsl || cliChecks[providers.indexOf(provider)];
       const standaloneReady = await waitWithSignal(
-        hasStandaloneHelper(),
+        services.hasStandaloneHelper(),
         signal,
       );
       const providerNeedsNode =
         provider === "deepseek" ||
         (!usesWsl &&
-          (await waitWithSignal(providerCliNeedsNode(cliPath), signal)));
+          (await waitWithSignal(
+            services.providerCliNeedsNode(cliPath),
+            signal,
+          )));
       const runtimeOk = nodeOk || (standaloneReady && !providerNeedsNode);
       if (!isCurrent()) return;
       const actions = setupActions(
@@ -318,7 +335,7 @@ export function bindSetupWizard(
       let helperReady = false;
       let helperError = "";
       try {
-        await requestHelperJson("/health", { signal });
+        await services.requestHelperJson("/health", { signal });
         helperReady = true;
       } catch (error) {
         helperError = error instanceof Error ? error.message : String(error);

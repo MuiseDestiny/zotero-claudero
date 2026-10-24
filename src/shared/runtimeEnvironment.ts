@@ -1,6 +1,28 @@
 type Environment = Record<string, string>;
 type Lookup = (name: string) => string | undefined;
 
+export function prependNodeRuntimePath(
+  nodePath: string,
+  inheritedPath: string,
+  windows = false,
+): string {
+  const match = nodePath.trim().match(/^(.*[\\/])[^\\/]+$/);
+  if (!match) return inheritedPath;
+  const directory =
+    match[1] === "/" || /^[A-Za-z]:[\\/]$/.test(match[1])
+      ? match[1]
+      : match[1].slice(0, -1);
+  const delimiter = windows ? ";" : ":";
+  const canonical = (value: string) =>
+    windows ? value.replace(/\//g, "\\").toLowerCase() : value;
+  return [
+    directory,
+    ...inheritedPath
+      .split(delimiter)
+      .filter((entry) => entry && canonical(entry) !== canonical(directory)),
+  ].join(delimiter);
+}
+
 export function parseEnvironmentVariables(
   raw: string,
   inherited: Environment = {},

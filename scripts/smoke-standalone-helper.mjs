@@ -6,6 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { standaloneCompilerPath } from "./helper-build-config.mjs";
 
 const root = process.cwd();
 const directory = path.join(
@@ -30,7 +31,7 @@ if (
 const temp = await mkdtemp(
   path.join(os.tmpdir(), "claudero-standalone-smoke-"),
 );
-const bun = process.env.CLAUDERO_BUN_PATH || "bun";
+const bun = standaloneCompilerPath();
 const fixture = path.join(
   temp,
   `native-agent${process.platform === "win32" ? ".exe" : ""}`,

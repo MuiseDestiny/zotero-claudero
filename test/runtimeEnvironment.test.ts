@@ -2,9 +2,47 @@ import { assert } from "chai";
 import {
   buildRuntimeEnvironment,
   parseEnvironmentVariables,
+  prependNodeRuntimePath,
 } from "../src/shared/runtimeEnvironment";
 
 describe("runtime environment", function () {
+  it("keeps an explicitly selected Node reachable when the Helper uses its bundled runtime", function () {
+    assert.equal(
+      prependNodeRuntimePath("/custom node/bin/node", "/usr/bin:/bin"),
+      "/custom node/bin:/usr/bin:/bin",
+    );
+    assert.equal(prependNodeRuntimePath("/custom/bin/node", ""), "/custom/bin");
+    assert.equal(
+      prependNodeRuntimePath("/custom/bin/node", "/usr/bin:/custom/bin"),
+      "/custom/bin:/usr/bin",
+    );
+    assert.equal(prependNodeRuntimePath("", "/usr/bin"), "/usr/bin");
+    assert.equal(prependNodeRuntimePath("node", "/usr/bin"), "/usr/bin");
+    assert.equal(prependNodeRuntimePath("/node", "/usr/bin"), "/:/usr/bin");
+  });
+
+  it("handles Windows runtime paths and preserves explicit provider PATH overrides", function () {
+    const PATH = prependNodeRuntimePath(
+      "D:\\Custom Node\\node.exe",
+      "C:\\Windows;d:/custom node",
+      true,
+    );
+    assert.equal(PATH, "D:\\Custom Node;C:\\Windows");
+    assert.equal(
+      prependNodeRuntimePath("D:\\node.exe", "C:\\Windows", true),
+      "D:\\;C:\\Windows",
+    );
+    const inherited = (name: string) => (name === "PATH" ? PATH : "");
+    assert.equal(
+      buildRuntimeEnvironment("", "PATH=extra;$PATH", "", inherited).PATH,
+      `extra;${PATH}`,
+    );
+    assert.equal(
+      buildRuntimeEnvironment("", "", "PATH=explicit", inherited).PATH,
+      "explicit",
+    );
+  });
+
   it("preserves explicitly configured CONNECT proxies without probing them", function () {
     const env = buildRuntimeEnvironment(" http://127.0.0.1:7890 ", "");
     assert.equal(env.HTTPS_PROXY, "http://127.0.0.1:7890");

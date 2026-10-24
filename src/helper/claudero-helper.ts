@@ -308,22 +308,23 @@ function findInPath(
   return null;
 }
 
-function findNpmPath(): string | null {
+function findNpmPath(env: Record<string, string | undefined>): string | null {
   const names =
     process.platform === "win32" ? ["npm.cmd", "npm.exe", "npm"] : ["npm"];
-  const entries = pathEntries(process.env.PATH);
+  const entries = pathEntries(environmentValue(env, "PATH"));
   const candidates = [
     ...entries.flatMap((entry) => names.map((name) => path.join(entry, name))),
     ...names.map((name) => path.join(path.dirname(process.execPath), name)),
     ...(process.platform === "win32"
       ? [
           path.join(
-            process.env.ProgramFiles || "C:\\Program Files",
+            environmentValue(env, "ProgramFiles") || "C:\\Program Files",
             "nodejs",
             "npm.cmd",
           ),
           path.join(
-            process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
+            environmentValue(env, "ProgramFiles(x86)") ||
+              "C:\\Program Files (x86)",
             "nodejs",
             "npm.cmd",
           ),
@@ -337,13 +338,14 @@ async function runCapturedProcess(
   command: string,
   args: string[],
   cwd: string,
+  env: Record<string, string | undefined>,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const child = spawn(command, args, {
     cwd,
-    env: process.env,
+    env,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
-    shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command),
+    shell: false,
   });
   let stdout = "";
   let stderr = "";
@@ -372,18 +374,39 @@ async function runCapturedProcess(
   });
 }
 
-async function installDeepSeekHarness(): Promise<DeepSeekInstallResult> {
-  const npmPath = findNpmPath();
+async function installDeepSeekHarness(
+  environment: Record<string, string>,
+): Promise<DeepSeekInstallResult> {
+  const env = { ...process.env, ...environment };
+  const nodePath = resolveDeepSeekNodePath(env);
+  const npmPath = findNpmPath(env);
   if (!npmPath) {
     throw new Error(
       "npm was not found. Install Node.js/npm first, then retry the DeepSeek Harness installation.",
     );
   }
+  const resolvedNpm = realpathSync(npmPath);
+  const npmScript = /\.(?:cjs|mjs|js)$/i.test(resolvedNpm)
+    ? resolvedNpm
+    : process.platform === "win32" && /\.(?:cmd|bat)$/i.test(npmPath)
+      ? path.join(
+          path.dirname(npmPath),
+          "node_modules",
+          "npm",
+          "bin",
+          "npm-cli.js",
+        )
+      : undefined;
+  if (npmScript && !isExecutableFile(npmScript))
+    throw new Error(
+      "npm's JavaScript entrypoint was not found. Repair the selected Node.js/npm installation.",
+    );
   const installRoot = path.join(homedir(), ".claudero", "deepseek");
   await mkdir(installRoot, { recursive: true });
   const result = await runCapturedProcess(
-    npmPath,
+    npmScript ? nodePath : npmPath,
     [
+      ...(npmScript ? [npmScript] : []),
       "install",
       "--prefix",
       installRoot,
@@ -392,6 +415,7 @@ async function installDeepSeekHarness(): Promise<DeepSeekInstallResult> {
       "--no-fund",
     ],
     installRoot,
+    env,
   );
   if (result.code !== 0) {
     const detail = `${result.stderr}\n${result.stdout}`.trim().slice(-4000);
@@ -412,13 +436,13 @@ async function installDeepSeekHarness(): Promise<DeepSeekInstallResult> {
       `DeepSeek Harness installation completed, but its CLI entrypoint was not found at ${cliPath}.`,
     );
   }
-  const nodePath = resolveDeepSeekNodePath(process.env);
   let version: string | undefined;
   try {
     const versionResult = await runCapturedProcess(
       nodePath,
       [cliPath, "--version"],
       installRoot,
+      env,
     );
     if (versionResult.code === 0) {
       version = versionResult.stdout.trim().split(/\s+/)[0] || undefined;
@@ -440,6 +464,7 @@ function environmentValue(
   env: Record<string, string | undefined>,
   name: string,
 ): string | undefined {
+  if (Object.hasOwn(env, name)) return env[name];
   const match = Object.entries(env).find(
     ([key]) => key.toLowerCase() === name.toLowerCase(),
   );
@@ -1924,9 +1949,24 @@ async function handleModels(
   );
 }
 
-async function handleInstallDeepSeek(res: ServerResponse): Promise<void> {
+async function handleInstallDeepSeek(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const payload = await readJsonBody<{ environment?: Record<string, string> }>(
+    req,
+  );
+  if (
+    payload.environment !== undefined &&
+    (!isConfigRecord(payload.environment) ||
+      Object.values(payload.environment).some(
+        (value) => typeof value !== "string",
+      ))
+  )
+    throw new HttpRequestError(400, "Invalid installation environment");
+  rememberDiagnosticConfiguration(payload.environment);
   try {
-    const result = await installDeepSeekHarness();
+    const result = await installDeepSeekHarness(payload.environment || {});
     recordHelperDebug("runtime", "deepseek harness installed", {
       cliPath: result.cliPath,
       installRoot: result.installRoot,
@@ -2106,7 +2146,7 @@ async function route(
   }
 
   if (req.method === "POST" && req.url === "/install-deepseek") {
-    await handleInstallDeepSeek(res);
+    await handleInstallDeepSeek(req, res);
     return;
   }
 

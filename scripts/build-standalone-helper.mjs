@@ -3,36 +3,33 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import {
+  helperBunVersion as bunVersion,
+  helperCompileTargets,
+  shouldBundleStandaloneHelper,
+  standaloneCompilerPath,
+  standaloneHelperTargets,
+} from "./helper-build-config.mjs";
 
-const bunVersion = "1.4.2";
-const targets = {
-  "darwin-arm64": "bun-darwin-arm64",
-  "darwin-x64": "bun-darwin-x64",
-  "linux-arm64": "bun-linux-arm64",
-  "linux-x64": "bun-linux-x64-baseline",
-  "win32-arm64": "bun-windows-arm64",
-  "win32-x64": "bun-windows-x64-baseline",
-};
-
-export async function buildStandaloneHelper(dist) {
-  if (process.env.CLAUDERO_STANDALONE_HELPER !== "1") return;
-  const bun = process.env.CLAUDERO_BUN_PATH || "bun";
-  const version = execFileSync(bun, ["--version"], { encoding: "utf8" }).trim();
+export async function buildStandaloneHelper(dist, environment = process.env) {
+  if (!shouldBundleStandaloneHelper(environment)) return;
+  const selected = standaloneHelperTargets(environment);
+  const bun = standaloneCompilerPath(environment);
+  let version;
+  try {
+    version = execFileSync(bun, ["--version"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    }).trim();
+  } catch {
+    throw new Error(
+      `Cannot run the Helper compiler. Run npm ci, or set CLAUDERO_BUN_PATH to Bun ${bunVersion}.`,
+    );
+  }
   if (version !== bunVersion)
     throw new Error(
       `Standalone Helper requires Bun ${bunVersion}, not ${version}`,
     );
-  const selected = (
-    process.env.CLAUDERO_HELPER_TARGETS || `${process.platform}-${process.arch}`
-  )
-    .split(",")
-    .map((target) => target.trim());
-  if (
-    !selected.length ||
-    new Set(selected).size !== selected.length ||
-    selected.some((target) => !Object.hasOwn(targets, target))
-  )
-    throw new Error("Unsupported or duplicate standalone Helper targets");
   const source = await readFile("src/shared/helperProtocol.ts", "utf8");
   const helperVersion = Number(
     source.match(/CLAUDERO_HELPER_VERSION\s*=\s*(\d+)/)?.[1],
@@ -52,7 +49,7 @@ export async function buildStandaloneHelper(dist) {
         "build",
         "src/helper/claudero-helper.ts",
         "--compile",
-        `--target=${targets[target]}`,
+        `--target=${helperCompileTargets[target]}`,
         `--outfile=${output}`,
         "--define=__CLAUDERO_STANDALONE__=true",
         "--env=disable",

@@ -32,6 +32,7 @@ import { ensureStandaloneHelper } from "./standaloneHelper";
 import {
   buildRuntimeEnvironment,
   parseEnvironmentVariables,
+  prependNodeRuntimePath,
 } from "../shared/runtimeEnvironment";
 import {
   redactSensitiveText,
@@ -122,12 +123,24 @@ function errorMessage(error: unknown): string {
 }
 
 async function getClauderoEnvironment(): Promise<Record<string, string>> {
-  const environment = buildRuntimeEnvironment(
-    String(getPref("proxy") || ""),
-    String(getPref("environmentVariables") || ""),
-    "",
-    (name) => Services.env.get(name),
-  );
+  const nodePath = String(getPref("nodePath") || "").trim();
+  // A bundled Helper's process.execPath is no longer the user's Node runtime.
+  const nodeEnvironment: Record<string, string> = Object.create(null);
+  if (nodePath && fileExists(nodePath))
+    nodeEnvironment.PATH = prependNodeRuntimePath(
+      nodePath,
+      Services.env.get("PATH"),
+      Zotero.isWin,
+    );
+  const environment = {
+    ...nodeEnvironment,
+    ...buildRuntimeEnvironment(
+      String(getPref("proxy") || ""),
+      String(getPref("environmentVariables") || ""),
+      "",
+      (name) => nodeEnvironment[name] ?? Services.env.get(name),
+    ),
+  };
   rememberDiagnosticConfiguration(environment);
   return environment;
 }
@@ -816,7 +829,9 @@ export async function installDeepSeekHarness(): Promise<DeepSeekInstallResult> {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: "{}",
+    body: JSON.stringify({
+      environment: await getProviderEnvironment("deepseek"),
+    }),
   });
   const body = await response.text();
   if (!response.ok) {

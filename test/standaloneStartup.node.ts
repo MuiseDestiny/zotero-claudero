@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   ensureClaudeHelper,
+  fetchProviderModels,
+  installDeepSeekHarness,
   shutdownClaudeHelper,
 } from "../src/modules/claudeHelperClient";
 import { CLAUDERO_HELPER_VERSION } from "../src/shared/helperProtocol";
@@ -31,6 +33,7 @@ describe("standalone Helper startup", function () {
     let healthy = false;
     let killed = 0;
     let mode: "success" | "throw" | "exit" | "shutdown" = "success";
+    let providerEnvironment: Record<string, string> | undefined;
     globals.Zotero = {
       isMac: true,
       Profile: { dir: "/home/fixture/.zotero/profile" },
@@ -116,7 +119,7 @@ describe("standalone Helper startup", function () {
       },
       interfaces: { nsIFile: {}, nsIProcess: {} },
     };
-    globals.fetch = async (url: string) => {
+    globals.fetch = async (url: string, init?: RequestInit) => {
       if (url.endsWith("/standalone/manifest.json"))
         return Response.json({
           schemaVersion: 1,
@@ -134,6 +137,19 @@ describe("standalone Helper startup", function () {
         });
       if (url.includes("/standalone/")) return new Response(bytes);
       if (url.startsWith("file:")) return new Response("// fixture bundle");
+      if (
+        healthy &&
+        (url.endsWith("/models") || url.endsWith("/install-deepseek"))
+      ) {
+        providerEnvironment = JSON.parse(String(init?.body)).environment;
+        if (url.endsWith("/install-deepseek"))
+          return Response.json({
+            cliPath: "/fixture/dsh.js",
+            installRoot: "/fixture/deepseek",
+            nodePath: "/fixture/node",
+          });
+        return Response.json({ models: [] });
+      }
       if (healthy)
         return Response.json({
           version: CLAUDERO_HELPER_VERSION,
@@ -148,6 +164,18 @@ describe("standalone Helper startup", function () {
 
       nodeAvailable = true;
       prefs.set("extensions.zotero.claudero.nodePath", "/fixture/node");
+      await fetchProviderModels("deepseek");
+      assert.equal(providerEnvironment?.PATH, "/fixture");
+      prefs.set(
+        "extensions.zotero.claudero.environmentVariables",
+        "PATH=/tools:$PATH",
+      );
+      await fetchProviderModels("codex");
+      assert.equal(providerEnvironment?.PATH, "/tools:/fixture");
+      prefs.set("extensions.zotero.claudero.environmentVariables", "");
+      const installed = await installDeepSeekHarness();
+      assert.equal(installed.nodePath, "/fixture/node");
+      assert.equal(providerEnvironment?.PATH, "/fixture");
       for (const failure of ["throw", "exit"] as const) {
         mode = failure;
         healthy = false;

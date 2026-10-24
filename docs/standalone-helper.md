@@ -1,6 +1,7 @@
 # Standalone Helper
 
-Claudero can bundle its Helper and Bun runtime into a platform-native executable.
+Standard production builds bundle the Helper and Bun runtime as platform-native
+executables for macOS, Windows, and Linux, each on arm64 and x64.
 This removes the separate Node.js installation requirement for the Helper and its
 host-native Zotero MCP bridge. It preserves the Claude Agent SDK, Codex app-server,
 permissions, and session behavior; it is not a rewrite of the provider runtimes.
@@ -9,14 +10,14 @@ permissions, and session behavior; it is not a rewrite of the provider runtimes.
 
 | Installation                                  | Separate Node.js required?                                                        |
 | --------------------------------------------- | --------------------------------------------------------------------------------- |
-| Matching standalone XPI + native Claude Code  | No, for the Helper and provider launch                                            |
-| Matching standalone XPI + native Codex        | No, including the built-in host MCP bridge                                        |
+| Standard XPI + native Claude Code             | No, for the Helper and provider launch                                            |
+| Standard XPI + native Codex                   | No, including the built-in host MCP bridge                                        |
 | Portable XPI or unsupported standalone target | Node.js 20+ for the Helper fallback                                               |
 | npm/JavaScript Claude or Codex CLI            | Yes; Node must also be available in the provider's PATH                           |
 | DeepSeek Harness                              | Yes, Node.js 24+ with the required TypeScript/Zstd APIs; install `dsh` separately |
 | Codex inside WSL with Zotero MCP              | Node.js inside the selected WSL distribution for the portable MCP bridge          |
 | Custom MCP server written for Node            | Whatever runtime that server requires                                             |
-| Developing/building Claudero                  | Node.js 20+ and npm; standalone compilation also needs Bun 1.4.2                  |
+| Developing/building Claudero                  | Node.js 20+ and npm; npm installs the pinned Bun 1.4.2 build tool automatically   |
 
 Native providers remain separate programs with their own authentication, model
 access, and dependencies. Bundling Bun does not make every external program
@@ -24,26 +25,31 @@ Node-free. Prefer the provider's native installer when avoiding Node.js.
 
 ## Build Locally
 
-The ordinary build stays portable and does not require Bun:
+The ordinary build includes all six targets. The pinned compiler is a development
+dependency, installed locally by npm; no global Bun installation is necessary:
 
 ```sh
 npm ci
 npm run check:release
 ```
 
-With Bun **1.4.2** installed, build a standalone package for the current host:
+`npm run build` also bundles all six targets; `build:standalone` is an explicit
+alias. Missing or incorrect compilers fail the build rather than silently
+producing a Node-dependent standard package. Verification requires the expected
+target set, both in build output and in the actual XPI.
+
+For a smaller local package containing only the current host, select `host`:
 
 ```sh
-npm run build:standalone
-node scripts/verify-release.mjs
+CLAUDERO_HELPER_TARGETS=host npm run check:release
 npm run test:helper:standalone
 ```
 
-`CLAUDERO_BUN_PATH` can select an isolated compiler without adding it to the
-project's dependencies or the user's PATH:
+`CLAUDERO_BUN_PATH` can override the local pinned compiler without changing the
+user's PATH (the override must also be Bun **1.4.2**):
 
 ```sh
-CLAUDERO_BUN_PATH=/absolute/path/to/bun npm run build:standalone
+CLAUDERO_BUN_PATH=/absolute/path/to/bun npm run build
 ```
 
 The result is `.scaffold/build/claudero.xpi`. These commands only build and test
@@ -52,21 +58,38 @@ local files; they do not publish a plugin, tag Git, or upload artifacts.
 `CLAUDERO_HELPER_TARGETS` selects comma-separated targets:
 
 ```sh
-CLAUDERO_HELPER_TARGETS=darwin-arm64,darwin-x64 npm run build:standalone
+CLAUDERO_HELPER_TARGETS=darwin-arm64,darwin-x64 npm run check:release
 ```
 
 Available targets are `darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`,
 `win32-arm64`, and `win32-x64`. Linux and Windows x64 use Bun's baseline builds
 rather than requiring AVX2. Cross-compilation can download the selected runtime
 at build time. Linux targets currently use glibc, not musl; platforms where the
-binary cannot start can still use the Node fallback. A successful cross-build
-does not establish runtime compatibility on that platform.
+binary cannot start can still use the Node fallback. When verifying a custom
+target package separately, pass the same `CLAUDERO_HELPER_TARGETS` value to the
+verifier. A successful cross-build does not establish runtime compatibility on
+that platform.
 
 One macOS arm64 Helper is approximately 62 MiB uncompressed; the corresponding
-XPI is approximately 28 MiB. Packing every target increases download and profile
-cache size substantially. Prefer target-specific packages or deliberately select
-the architectures to include. No new standalone package is published by this
-work; an older downloaded XPI does not acquire a bundled runtime automatically.
+XPI is approximately 28 MiB. The standard six-target XPI is approximately 204 MiB,
+keeping the existing single cross-platform download/update link
+usable without Node. Only the host's matching runtime is extracted into the
+profile cache. Targeted packages are suitable for local use, not the shared
+cross-platform update channel. No new package is published by this work; an older
+downloaded XPI does not acquire a bundled runtime automatically.
+
+For an intentional lightweight Node-dependent package, use:
+
+```sh
+npm run check:portable
+```
+
+This runs `build:portable` and the verifier's explicit `--portable` mode. Normal
+release verification rejects a portable package. `CLAUDERO_STANDALONE_HELPER=0`
+also opts out at build time; it does not bypass normal release verification.
+Development (`npm start`) and browser-test (`npm test`) builds skip native
+compilation by default. `CLAUDERO_STANDALONE_HELPER=1` explicitly enables it in
+those modes. Portable smoke tests deliberately use the lightweight build.
 
 ## Selection, Integrity, and Compatibility
 
@@ -90,6 +113,10 @@ work; an older downloaded XPI does not acquire a bundled runtime automatically.
 - Compiled Helpers disable automatic `.env`, `bunfig.toml`, `tsconfig.json`, and
   `package.json` loading at runtime. The build does not inline environment values.
   Provider environment values continue to come from the existing explicit setup.
+  An existing Node path preference stays on the child PATH for npm/script CLIs,
+  DeepSeek, login, and custom tools. Explicit general/provider PATH overrides
+  retain priority. DeepSeek installation uses that same configured environment
+  and validates a real compatible Node before installing anything.
 - Health and diagnostic responses identify the actual runtime kind, engine, and
   version. OS quarantine, library, or executable policy failures remain possible;
   Claudero does not bypass those policies or remove security attributes.
@@ -108,6 +135,16 @@ no Node present, Node fallback after launch/health failure, no redundant
 runtime-missing port loop, and shutdown during launch. Setup and Codex MCP tests
 retain Node prerequisites for scripts, DeepSeek, and WSL.
 
+`npm run test:build` checks the default six-target policy, explicit portable and
+host-only modes, development/test defaults, compiler pinning, and rejection of
+incomplete/duplicate target sets.
+
+`test/preferenceSetup.test.ts` runs the actual setup UI in Zotero with simulated
+local discovery and no Node available. It checks that native Claude/Codex need
+no Node-install actions, an explicit Helper check can succeed, and scripts,
+DeepSeek, and portable packages retain prerequisite repair guidance. Opening the
+pane never starts the Helper.
+
 `scripts/smoke-standalone-helper.mjs` builds native offline protocol fixtures and
 runs the real compiled Helper with an empty PATH and isolated HOME. It checks
 authentication/origins, the bundled Claude SDK, two persistent turns per provider,
@@ -117,6 +154,9 @@ shutdown. It separately verifies DeepSeek with an explicitly configured real
 Node runtime. No provider account or external AI request is used. This proves local
 protocol integration, not live provider authentication or model behavior.
 
-CI is configured to build, inspect, and smoke-test standalone packages on macOS,
-Linux, and Windows, after checking the portable path. Local execution during this
-study is on macOS arm64; other platforms still require their CI results.
+CI is configured to build, inspect, and smoke-test host-native packages on macOS,
+Linux, and Windows after checking the explicit portable path. Linux additionally
+builds and verifies the standard six-target XPI. npm provisions the pinned
+compiler in CI and the existing release build, without a separate global-tool
+setup step. Local execution is on macOS arm64; other platforms still require
+their CI results.

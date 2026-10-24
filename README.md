@@ -27,10 +27,11 @@ Claudero supports **Zotero 7–10** on macOS, Windows, and Linux.
    [GitHub Releases](https://github.com/MuiseDestiny/zotero-claudero/releases).
 2. In Zotero, open **Tools -> Plugins -> gear menu -> Install Plugin From File**
    and select the XPI.
-3. Install at least one provider below. Portable builds require **Node.js 20+**;
-   a matching [standalone build](docs/standalone-helper.md) does not require a
-   separate Node installation for native Claude/Codex. npm/script CLIs still
-   need Node; DeepSeek requires **Node.js 24+**.
+3. Install at least one provider below. Standard builds now bundle the Helper
+   runtime for macOS, Windows, and Linux (arm64/x64), so **native Claude Code
+   and Codex do not need a separate Node.js installation**. npm/script CLIs
+   still need Node; DeepSeek requires **Node.js 24+**. See the
+   [runtime requirements](docs/standalone-helper.md) for compatibility fallbacks.
 4. Open **Zotero Preferences -> Claudero**, choose a provider, and use
    **Check details** to complete setup. Existing programs are discovered
    automatically, so most users can leave executable paths empty.
@@ -46,6 +47,9 @@ Install and authenticate Claude Code or Codex using the provider's setup
 instructions. If DeepSeek is missing, use **Install DeepSeek Harness** in
 Claudero, or install it with `npm install -g @deepseek-ai/dsh@latest`.
 DeepSeek support is experimental.
+
+This applies to newly built standard packages; previously downloaded or
+explicitly portable packages still need **Node.js 20+** for the Helper.
 
 On Windows, Codex can also run in WSL. Select **WSL** in Codex settings and
 complete login inside the selected distribution. Its Zotero MCP bridge still

@@ -5,6 +5,16 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import AdmZip from "adm-zip";
+import {
+  helperBunVersion,
+  standaloneHelperTargets,
+  verifyStandaloneTargetCoverage,
+} from "./helper-build-config.mjs";
+
+const args = process.argv.slice(2);
+if (args.length && (args.length !== 1 || args[0] !== "--portable"))
+  throw new Error("Usage: node scripts/verify-release.mjs [--portable]");
+const portable = args.includes("--portable");
 
 const root = process.cwd();
 const buildRoot = path.join(root, ".scaffold", "build");
@@ -85,6 +95,10 @@ await check("package metadata", async () => {
   assert(packageJson.license === "AGPL-3.0-or-later", "unexpected license");
   assert(packageJson.engines?.node === ">=20", "Node.js engine must be >=20");
   assert(
+    packageJson.devDependencies?.bun === helperBunVersion,
+    "standalone compiler must be an exact pinned development dependency",
+  );
+  assert(
     packageJson.repository?.url === `git+${expectedRepository}.git`,
     "repository URL does not target zotero-claudero",
   );
@@ -107,6 +121,11 @@ await check("package lock consistency", async () => {
   assert(
     rootPackage?.engines?.node === packageJson.engines.node,
     "package-lock Node engine differs from package.json",
+  );
+  assert(
+    rootPackage?.devDependencies?.bun === helperBunVersion &&
+      packageLock.packages?.["node_modules/bun"]?.version === helperBunVersion,
+    "package-lock standalone compiler differs from the pinned version",
   );
 });
 
@@ -189,7 +208,7 @@ await check("XPI package and checksum", async () => {
   }
 });
 
-await check("optional standalone Helper integrity", async () => {
+await check("Helper runtime coverage and integrity", async () => {
   const prefix = "content/helper/standalone/";
   const directory = path.join(buildRoot, "addon", prefix);
   const archive = new AdmZip(xpiPath);
@@ -202,10 +221,18 @@ await check("optional standalone Helper integrity", async () => {
     if (error.code === "ENOENT") return [];
     throw error;
   });
-  if (!files.length && !packed.length) {
+  if (portable) {
+    assert(
+      !files.length && !packed.length,
+      "Portable packages must not contain standalone Helper binaries",
+    );
     console.log("[release] Portable build: external Node.js runtime required");
     return;
   }
+  assert(
+    files.length && packed.length,
+    "Standard packages must bundle standalone Helpers. Run npm run build; use check:portable only for an intentional Node-dependent package.",
+  );
   const source = await readFile(
     path.join(root, "src/shared/helperProtocol.ts"),
     "utf8",
@@ -242,10 +269,15 @@ await check("optional standalone Helper integrity", async () => {
     metadata.schemaVersion === 1 &&
       metadata.helperVersion === expectedVersion &&
       metadata.bunVersion === expectedBunVersion &&
+      metadata.bunVersion === helperBunVersion &&
       Array.isArray(metadata.binaries) &&
       metadata.binaries.length >= 1 &&
       metadata.binaries.length <= 6,
     "invalid standalone manifest or unpinned runtime version",
+  );
+  verifyStandaloneTargetCoverage(
+    metadata.binaries.map(({ platform, arch }) => `${platform}-${arch}`),
+    standaloneHelperTargets(),
   );
   const expectedFiles = new Set(["manifest.json"]);
   for (const binary of metadata.binaries) {

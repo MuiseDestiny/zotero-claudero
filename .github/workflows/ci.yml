@@ -38,8 +38,10 @@ jobs:
           node-version: 24
       - name: Run Lint
         run: npm run lint:check
-      - name: Build and verify release package
-        run: npm run check:release
+      - name: Check default and portable build policies
+        run: npm run test:build
+      - name: Build and verify explicit portable package
+        run: npm run check:portable
       - name: Audit all dependencies
         if: runner.os == 'Linux'
         run: npm run audit:all
@@ -49,16 +51,15 @@ jobs:
         run: npm run test:helper:mock
       - name: Run evidence contract smoke
         run: npm run test:evidence:ci
-      - name: Set up pinned standalone compiler
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.2
-      - name: Build standalone Helper package
-        run: npm run build:standalone
-      - name: Verify standalone package contents and hashes
-        run: node scripts/verify-release.mjs
+      - name: Build and verify standalone package for the test host
+        run: npm run check:release
+        env:
+          CLAUDERO_HELPER_TARGETS: host
       - name: Smoke standalone Helper without external Node or Bun
         run: npm run test:helper:standalone
+      - name: Build and verify standard package with all six native targets
+        if: runner.os == 'Linux'
+        run: npm run check:release
       - name: Upload build result
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4

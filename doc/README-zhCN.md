@@ -21,9 +21,10 @@ Claudero 支持 macOS、Windows 和 Linux 上的 **Zotero 7–10**。
 1. 从 [GitHub Releases](https://github.com/MuiseDestiny/zotero-claudero/releases)
    下载 `claudero.xpi`。
 2. 在 Zotero 中打开 **工具 -> 插件 -> 齿轮菜单 -> 从文件安装插件**，选择 XPI。
-3. 安装下表中的至少一种服务程序。便携脚本版需要 **Node.js 20+**；包含匹配架构的
-   [独立 Helper 构建](../docs/standalone-helper.md) 配合原生 Claude/Codex 时，无需
-   另装 Node。npm/脚本版 CLI 仍需要 Node；DeepSeek 需要 **Node.js 24+**。
+3. 安装下表中的至少一种服务程序。标准构建现在默认内置 macOS、Windows 和 Linux
+   的 arm64/x64 Helper，**原生 Claude Code 和 Codex 无需额外安装 Node.js**。
+   npm/脚本版 CLI 仍需要 Node；DeepSeek 需要 **Node.js 24+**。兼容回退条件见
+   [运行时要求](../docs/standalone-helper.md)。
 4. 打开 **Zotero 首选项 -> Claudero**，选择服务，在 **查看检测详情** 中完成配置。
    插件会自动发现已有程序，多数用户可以将程序路径留空。
 5. 选中论文或打开 PDF，打开 Claudero 面板并提问。
@@ -37,6 +38,9 @@ Claudero 支持 macOS、Windows 和 Linux 上的 **Zotero 7–10**。
 Claude Code 和 Codex 请按各自官方流程安装并完成认证。DeepSeek 未安装时，可以
 点击 Claudero 中的 **Install DeepSeek Harness**，也可以执行
 `npm install -g @deepseek-ai/dsh@latest`。DeepSeek 集成属于实验性功能。
+
+上述免 Node 行为适用于新构建的标准安装包；此前下载的旧包或明确选择的便携脚本版
+仍需 **Node.js 20+** 才能运行 Helper。本次本地开发不会自动更新已公开的安装包。
 
 Windows 上也可以在 WSL 中运行 Codex：在设置中选择 **WSL**，并在所选发行版内登录。
 Zotero MCP 桥仍需要 WSL 内的 Node.js；自定义 MCP 服务也保留其自身运行时要求。

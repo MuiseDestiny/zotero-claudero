@@ -1,7 +1,15 @@
 import { assert } from "chai";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire as createTestRequire } from "node:module";
-import { mkdtemp, rm, writeFile, readFile, access } from "node:fs/promises";
+import {
+  mkdtemp,
+  rm,
+  writeFile,
+  readFile,
+  access,
+  mkdir,
+  chmod,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { request } from "node:http";
 import path from "node:path";
@@ -66,7 +74,7 @@ describe("helper process lifecycle", function () {
     await rm(root, { recursive: true, force: true });
   });
 
-  async function start(parentPid = process.pid) {
+  async function start(parentPid = process.pid, env?: NodeJS.ProcessEnv) {
     const portServer = createServer();
     await new Promise<void>((resolve) =>
       portServer.listen(0, "127.0.0.1", resolve),
@@ -86,7 +94,7 @@ describe("helper process lifecycle", function () {
           "--parent-pid",
           String(parentPid),
         ],
-        { stdio: ["ignore", "pipe", "pipe"] },
+        { env, stdio: ["ignore", "pipe", "pipe"] },
       ),
     );
     let output = "";
@@ -169,6 +177,93 @@ describe("helper process lifecycle", function () {
     assert.equal(healthy.status, 200);
     assert.isNull(healthy.headers.get("Access-Control-Allow-Origin"));
     await healthy.text();
+  });
+
+  it("uses explicit installation environment with an isolated fake npm and rejects invalid values", async function () {
+    const home = await mkdtemp(path.join(root, "install-home-"));
+    const bin = path.join(home, "tools with spaces");
+    const marker = path.join(home, "installer-result.json");
+    const entrypoint = path.join(
+      home,
+      ".claudero",
+      "deepseek",
+      "node_modules",
+      "@deepseek-ai",
+      "dsh",
+      "lib",
+      "bin.js",
+    );
+    await mkdir(bin, { recursive: true });
+    const installer =
+      process.platform === "win32"
+        ? path.join(bin, "node_modules", "npm", "bin", "npm-cli.js")
+        : path.join(bin, "fake-npm.cjs");
+    await mkdir(path.dirname(installer), { recursive: true });
+    await writeFile(
+      installer,
+      [
+        'const { mkdirSync, writeFileSync } = require("node:fs");',
+        'const path = require("node:path");',
+        `const entrypoint = ${JSON.stringify(entrypoint)};`,
+        "mkdirSync(path.dirname(entrypoint), { recursive: true });",
+        `writeFileSync(entrypoint, ${JSON.stringify('console.log("fixture-dsh-version");\n')});`,
+        `writeFileSync(${JSON.stringify(marker)}, JSON.stringify({`,
+        "  value: process.env.CLAUDERO_INSTALL_FIXTURE, args: process.argv.slice(2)",
+        "}));",
+      ].join("\n"),
+    );
+    const npm = path.join(
+      bin,
+      process.platform === "win32" ? "npm.cmd" : "npm",
+    );
+    await writeFile(
+      npm,
+      process.platform === "win32"
+        ? `@echo off\r\n"${process.execPath}" "${installer}" %*\r\n`
+        : `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${installer.replace(/'/g, "'\\''")}' "$@"\n`,
+    );
+    if (process.platform !== "win32") await chmod(npm, 0o700);
+    const helper = await start(process.pid, {
+      Path: path.join(home, "missing inherited path"),
+      PATH: "",
+      HOME: home,
+      USERPROFILE: home,
+      npm_config_offline: "true",
+      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+    });
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
+    for (const environment of [null, [], { PATH: 42 }]) {
+      const response = await fetch(`${helper.url}/install-deepseek`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ environment }),
+      });
+      assert.equal(response.status, 400);
+      await response.text();
+    }
+    const response = await fetch(`${helper.url}/install-deepseek`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        environment: {
+          PATH: bin,
+          DSH_NODE_PATH: process.execPath,
+          CLAUDERO_INSTALL_FIXTURE: "explicit-provider-environment",
+        },
+      }),
+    });
+    const result = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(result));
+    assert.equal(result.nodePath, process.execPath);
+    assert.equal(result.cliPath, entrypoint);
+    assert.equal(result.version, "fixture-dsh-version");
+    const captured = JSON.parse(await readFile(marker, "utf8"));
+    assert.equal(captured.value, "explicit-provider-environment");
+    assert.equal(captured.args[0], "install");
+    assert.include(captured.args, "@deepseek-ai/dsh@latest");
   });
 
   it("terminates auxiliary subprocesses on HTTP cancellation and graceful helper shutdown", async function () {
