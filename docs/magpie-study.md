@@ -9,7 +9,7 @@ This is an architectural study, not a copy of Magpie's gateway or UI.
 | Order | Lesson                                            | Claudero improvement                                                                                           | Status  |
 | ----- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------- |
 | 1     | One security boundary for every local route       | Validate request authority and browser origin in addition to bearer authentication; bound HTTP request parsing | Done    |
-| 2     | Bound and validate streamed messages              | Validate event fields, limit each NDJSON frame, reject truncated or invalid streams                            | Planned |
+| 2     | Bound and validate streamed messages              | Validate event fields, limit each NDJSON frame, reject truncated or invalid streams                            | Done    |
 | 3     | Tie stream lifetime to its consumer               | Honor writable backpressure and release waits on disconnect, cancellation, or timeout                          | Planned |
 | 4     | Compare configuration by meaning                  | Ignore object-key order without ignoring real value changes or ordered arguments                               | Planned |
 | 5     | A known secret stays secret wherever it reappears | Scrub configured credential values and credentials embedded in URLs from diagnostics                           | Planned |
@@ -75,3 +75,18 @@ Verified with `test/helperServerSecurity.test.ts` and
 `test/helperLifecycle.node.ts`: 7 passing tests, including literal Host headers,
 foreign origins on health/diagnostics/shutdown, malformed bodies, parent death,
 and auxiliary-process cancellation. `tsc --noEmit` also passes.
+
+### 2. Bounded Event Protocol
+
+The client validates every event variant and its nested fields before yielding
+it to the UI. Each NDJSON frame is limited to 8 MiB of encoded UTF-8, using a
+bounded geometrically growing buffer rather than an unbounded string or list of
+tiny fragments. Invalid UTF-8 is rejected. A response can still contain many
+valid frames and exceed 8 MiB in total. Existing request-ID, terminal-outcome,
+truncation, and error-before-success checks remain in force.
+
+Verified with `test/helperStream.test.ts`, `test/agentEvents.test.ts`,
+`test/requestLifecycle.test.ts`, and `test/stream.test.ts`: 28 passing tests,
+including split UTF-8, CRLF, oversized frames, malformed fields, late events,
+reader cancellation, listener cleanup, and provider normalization. TypeScript
+and targeted ESLint pass. The two new protocol suites are in `test:runtime`.

@@ -1,4 +1,5 @@
 import { isAgentEventPayload, type AgentEventPayload } from "./agentEvents";
+import { MAX_HELPER_EVENT_BYTES } from "./helperProtocol";
 
 export function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -44,20 +45,56 @@ export async function* streamResponseEvents(
         "Helper connection ended before the response completed. Partial output may be incomplete.",
       );
   };
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let buffer = new Uint8Array(0);
+  let bufferedBytes = 0;
+  const append = (fragment: Uint8Array) => {
+    const required = bufferedBytes + fragment.byteLength;
+    if (required > MAX_HELPER_EVENT_BYTES) {
+      throw new Error("Helper event exceeds the 8 MiB frame limit");
+    }
+    if (required > buffer.byteLength) {
+      const grown = new Uint8Array(
+        Math.min(
+          MAX_HELPER_EVENT_BYTES,
+          Math.max(4096, buffer.byteLength * 2, required),
+        ),
+      );
+      grown.set(buffer.subarray(0, bufferedBytes));
+      buffer = grown;
+    }
+    buffer.set(fragment, bufferedBytes);
+    bufferedBytes = required;
+  };
+  const flush = (): AgentEventPayload | undefined => {
+    if (!bufferedBytes) return;
+    const line = decoder.decode(buffer.subarray(0, bufferedBytes)).trim();
+    bufferedBytes = 0;
+    return line ? parse(line) : undefined;
+  };
+  function* consume(chunk: Uint8Array): Generator<AgentEventPayload> {
+    let offset = 0;
+    while (offset < chunk.byteLength) {
+      throwIfAborted(signal);
+      const newline = chunk.indexOf(10, offset);
+      const end = newline < 0 ? chunk.byteLength : newline;
+      append(chunk.subarray(offset, end));
+      if (newline < 0) break;
+      const event = flush();
+      if (event) yield event;
+      offset = newline + 1;
+    }
+  }
   if (!response.body) {
     throwIfAborted(signal);
-    const text = await response.text();
-    for (const line of text.split(/\r?\n/)) {
-      throwIfAborted(signal);
-      if (line.trim()) yield parse(line.trim());
-    }
+    yield* consume(new TextEncoder().encode(await response.text()));
+    const event = flush();
+    if (event) yield event;
     ensureTerminal();
     return;
   }
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let naturalEnd = false;
   const abort = () => {
     void reader.cancel().catch(() => {});
@@ -72,18 +109,10 @@ export async function* streamResponseEvents(
         naturalEnd = true;
         break;
       }
-      buffer += decoder.decode(value, { stream: true });
-      let newline = buffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        if (line) yield parse(line);
-        throwIfAborted(signal);
-        newline = buffer.indexOf("\n");
-      }
+      yield* consume(value);
     }
-    buffer += decoder.decode();
-    if (buffer.trim()) yield parse(buffer.trim());
+    const event = flush();
+    if (event) yield event;
     ensureTerminal();
   } finally {
     signal?.removeEventListener("abort", abort);

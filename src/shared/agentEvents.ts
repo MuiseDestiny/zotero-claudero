@@ -112,39 +112,117 @@ export interface AgentEventTrace {
   };
 }
 
-const EVENT_TYPES = new Set<string>([
-  "ready",
-  "done",
-  "session",
-  "text",
-  "text_delta",
-  "text_snapshot",
-  "thinking",
-  "thinking_snapshot",
-  "context_compaction",
-  "connection_status",
-  "tool_use",
-  "tool_use_delta",
-  "tool_result",
-  "usage",
-  "thinking_tokens",
-  "tool_progress",
-  "error",
-  "commands_changed",
-]);
-
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object";
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function optionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function nonnegativeNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isToolUse(value: unknown): value is ToolUseEvent {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    optionalString(value.partialInput)
+  );
 }
 
 export function isAgentEventPayload(
   value: unknown,
 ): value is AgentEventPayload {
-  return (
-    isRecord(value) &&
-    typeof value.type === "string" &&
-    EVENT_TYPES.has(value.type)
-  );
+  if (!isRecord(value)) return false;
+  switch (value.type) {
+    case "ready":
+    case "done":
+      return (
+        typeof value.requestId === "string" &&
+        value.requestId.length > 0 &&
+        (value.type === "ready" ||
+          value.outcome === "success" ||
+          value.outcome === "error" ||
+          value.outcome === "cancelled")
+      );
+    case "session": {
+      const session = value.session;
+      return (
+        isRecord(session) &&
+        (session.provider === "claude" ||
+          session.provider === "codex" ||
+          session.provider === "deepseek") &&
+        ["sessionId", "threadId", "sessionFilePath", "turnId"].every((key) =>
+          optionalString(session[key]),
+        )
+      );
+    }
+    case "text":
+    case "text_delta":
+    case "text_snapshot":
+    case "thinking":
+    case "thinking_snapshot":
+      return typeof value.text === "string";
+    case "context_compaction":
+      return value.phase === "started" || value.phase === "completed";
+    case "connection_status":
+      return (
+        value.status === "reconnecting" &&
+        nonnegativeNumber(value.attempt) &&
+        Number.isSafeInteger(value.attempt) &&
+        nonnegativeNumber(value.maxAttempts) &&
+        Number.isSafeInteger(value.maxAttempts)
+      );
+    case "tool_use":
+      return isToolUse(value.tool);
+    case "tool_use_delta":
+      return (
+        optionalString(value.index) &&
+        optionalString(value.partialInput) &&
+        (value.tool === undefined || isToolUse(value.tool))
+      );
+    case "tool_result":
+      return (
+        isRecord(value.result) &&
+        typeof value.result.id === "string" &&
+        typeof value.result.content === "string" &&
+        typeof value.result.isError === "boolean"
+      );
+    case "usage":
+      return (
+        isRecord(value.usage) &&
+        nonnegativeNumber(value.usage.outputTokens) &&
+        typeof value.usage.final === "boolean" &&
+        (value.usage.durationMs === undefined ||
+          nonnegativeNumber(value.usage.durationMs))
+      );
+    case "thinking_tokens":
+      return nonnegativeNumber(value.estimatedTokens);
+    case "tool_progress":
+      return (
+        typeof value.toolUseId === "string" &&
+        typeof value.toolName === "string" &&
+        nonnegativeNumber(value.elapsedSeconds)
+      );
+    case "error":
+      return typeof value.error === "string";
+    case "commands_changed":
+      return (
+        Array.isArray(value.commands) &&
+        value.commands.every(
+          (command) =>
+            isRecord(command) &&
+            typeof command.name === "string" &&
+            typeof command.description === "string" &&
+            optionalString(command.argumentHint),
+        )
+      );
+    default:
+      return false;
+  }
 }
 
 export function createAgentEventEnvelope<T extends AgentEventPayload>(
