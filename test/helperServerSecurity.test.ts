@@ -1,6 +1,7 @@
 import { assert } from "chai";
 import {
   hasValidBearerAuthorization,
+  helperRequestRefusal,
   validateHelperServerConfig,
 } from "../src/helper/runtime/helperServerSecurity";
 
@@ -49,5 +50,41 @@ describe("helper server security", function () {
     assert.isFalse(hasValidBearerAuthorization(`bearer ${token}`, token));
     assert.isFalse(hasValidBearerAuthorization(`Bearer ${token}x`, token));
     assert.isFalse(hasValidBearerAuthorization(`Bearer ${token}`, `${token}x`));
+  });
+
+  it("refuses rebound authorities and foreign web origins on every route", function () {
+    const host = "127.0.0.1:38660";
+    for (const authority of [
+      undefined,
+      "evil.example:38660",
+      "evil.localhost:38660",
+      "127.0.0.1:38661",
+      "127.0.0.1:38660/",
+      "evil@127.0.0.1:38660",
+      "2130706433:38660",
+    ]) {
+      assert.isString(helperRequestRefusal({ host: authority }, 38660));
+    }
+    for (const origin of [
+      "https://evil.example",
+      "http://evil.localhost:38660",
+      "http://localhost:3000",
+      "http://127.0.0.1:38660/",
+      "file://",
+    ]) {
+      assert.isString(helperRequestRefusal({ host, origin }, 38660));
+    }
+    for (const origin of [
+      undefined,
+      "null",
+      "chrome://zotero",
+      "http://127.0.0.1:38660",
+      "http://localhost:38660",
+      "http://[::1]:38660",
+    ]) {
+      assert.isNull(helperRequestRefusal({ host, origin }, 38660));
+    }
+    assert.isNull(helperRequestRefusal({ host: "localhost" }, 80));
+    assert.isNull(helperRequestRefusal({ host: "[::1]:38660" }, 38660));
   });
 });

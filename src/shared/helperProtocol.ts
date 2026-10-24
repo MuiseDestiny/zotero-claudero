@@ -1,1 +1,1 @@
-export const CLAUDERO_HELPER_VERSION = 41;
+export const CLAUDERO_HELPER_VERSION = 42;

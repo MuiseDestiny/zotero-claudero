@@ -62,9 +62,11 @@ import {
 } from "./runtime/codexCompatibility";
 import {
   hasValidBearerAuthorization,
+  helperRequestRefusal,
   validateHelperServerConfig,
   type HelperServerConfig,
 } from "./runtime/helperServerSecurity";
+import { isConfigRecord } from "../shared/configValidation";
 import type { AcademicToolPolicy } from "../shared/academicToolPolicy";
 import {
   isSensitiveDiagnosticKey,
@@ -232,7 +234,16 @@ async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
     }
     chunks.push(buffer);
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
+  let body: unknown;
+  try {
+    body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new HttpRequestError(400, "Invalid JSON request body");
+  }
+  if (!isConfigRecord(body)) {
+    throw new HttpRequestError(400, "JSON request body must be an object");
+  }
+  return body as T;
 }
 
 class HttpRequestError extends Error {
@@ -1917,6 +1928,11 @@ async function route(
     sendJson(res, 401, { error: "unauthorized" });
     return;
   }
+  const refusal = helperRequestRefusal(req.headers, config.port);
+  if (refusal) {
+    sendJson(res, 403, { error: refusal });
+    return;
+  }
 
   const url = new URL(req.url || "/", "http://127.0.0.1");
   const endpoint = url.pathname;
@@ -2204,12 +2220,13 @@ function main(): void {
   }
   const config = parseArgs(process.argv.slice(2));
   let shuttingDown = false;
-  const server = createServer((req, res) => {
+  const server = createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {
     if (shutdownRequested || shuttingDown) {
       sendJson(res, 503, { error: "Helper is shutting down" });
       return;
     }
     route(req, res, config).catch((error) => {
+      if (res.destroyed || res.writableEnded) return;
       const status =
         error instanceof RequestBusyError
           ? 409
@@ -2225,6 +2242,9 @@ function main(): void {
       }
     });
   });
+  server.headersTimeout = 15_000;
+  server.requestTimeout = 60_000;
+  server.maxHeadersCount = 64;
 
   requestHelperShutdown = () => {
     if (shuttingDown) return;

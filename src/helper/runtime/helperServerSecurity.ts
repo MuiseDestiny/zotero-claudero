@@ -46,3 +46,30 @@ export function hasValidBearerAuthorization(
   }
   return difference === 0;
 }
+
+function isLocalAuthority(authority: string, port: number): boolean {
+  const match = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::(\d{1,5}))?$/i.exec(
+    authority,
+  );
+  return !!match && Number(match[1] || 80) === port;
+}
+
+/** Apply after authentication, including to health, diagnostics, and shutdown. */
+export function helperRequestRefusal(
+  headers: { host?: string; origin?: string },
+  port: number,
+): string | null {
+  if (!headers.host || !isLocalAuthority(headers.host, port)) {
+    return "Helper requests must name its loopback address and port.";
+  }
+  const origin = headers.origin;
+  // Privileged Gecko fetches may have an opaque origin. They still need the
+  // private bearer token; no origin receives CORS access to the helper.
+  if (!origin || origin === "null" || origin === "chrome://zotero") return null;
+  if (!origin.startsWith("http://")) {
+    return "Helper requests from web pages are not allowed.";
+  }
+  return isLocalAuthority(origin.slice("http://".length), port)
+    ? null
+    : "Helper requests from web pages are not allowed.";
+}

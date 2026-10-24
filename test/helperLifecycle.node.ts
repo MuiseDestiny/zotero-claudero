@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire as createTestRequire } from "node:module";
 import { mkdtemp, rm, writeFile, readFile, access } from "node:fs/promises";
 import { createServer } from "node:net";
+import { request } from "node:http";
 import path from "node:path";
 import os from "node:os";
 
@@ -117,6 +118,57 @@ describe("helper process lifecycle", function () {
       "helper exit after parent death",
     );
     assert.equal(helper.child.exitCode, 0);
+  });
+
+  it("authenticates and checks local authority before routing or parsing JSON", async function () {
+    const helper = await start();
+    const authorization = { Authorization: `Bearer ${token}` };
+    for (const endpoint of ["/health", "/diagnostics", "/shutdown"]) {
+      const method = endpoint === "/shutdown" ? "POST" : "GET";
+      const unauthorized = await fetch(`${helper.url}${endpoint}`, { method });
+      assert.equal(unauthorized.status, 401);
+      await unauthorized.text();
+      for (const extra of [
+        { Host: "rebound.example:38660" },
+        { Origin: "https://foreign.example" },
+      ]) {
+        // Fetch implementations can replace Host; exercise its literal bytes.
+        const status = await new Promise<number | undefined>(
+          (resolve, reject) => {
+            const req = request(
+              `${helper.url}${endpoint}`,
+              {
+                method,
+                headers: { ...authorization, ...extra },
+              },
+              (response) => {
+                response.resume();
+                response.once("end", () => resolve(response.statusCode));
+                response.once("error", reject);
+              },
+            );
+            req.once("error", reject);
+            req.end();
+          },
+        );
+        assert.equal(status, 403, `${endpoint}: ${JSON.stringify(extra)}`);
+      }
+    }
+    for (const body of ["{", "null", "[]", '"text"']) {
+      const response = await fetch(`${helper.url}/init`, {
+        method: "POST",
+        headers: { ...authorization, "Content-Type": "application/json" },
+        body,
+      });
+      assert.equal(response.status, 400);
+      await response.text();
+    }
+    const healthy = await fetch(`${helper.url}/health`, {
+      headers: { ...authorization, Origin: "null" },
+    });
+    assert.equal(healthy.status, 200);
+    assert.isNull(healthy.headers.get("Access-Control-Allow-Origin"));
+    await healthy.text();
   });
 
   it("terminates auxiliary subprocesses on HTTP cancellation and graceful helper shutdown", async function () {
