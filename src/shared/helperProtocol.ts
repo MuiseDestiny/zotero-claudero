@@ -1,3 +1,3 @@
-export const CLAUDERO_HELPER_VERSION = 42;
+export const CLAUDERO_HELPER_VERSION = 43;
 
 export const MAX_HELPER_EVENT_BYTES = 8 * 1024 * 1024;

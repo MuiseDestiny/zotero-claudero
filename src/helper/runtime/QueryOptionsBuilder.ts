@@ -1,7 +1,9 @@
 import type { EffortLevel, Options } from "@anthropic-ai/claude-agent-sdk";
+import { execFileSync } from "node:child_process";
 import process from "node:process";
 import type { PermissionManager } from "./PermissionManager";
 import { createZoteroMcpServer } from "./ZoteroMcpServer";
+import { isStandaloneHelper } from "./helperRuntime";
 
 export type ClauderoPermissionMode =
   | "auto"
@@ -75,6 +77,25 @@ export function buildQueryOptions(config: QueryOptionsConfig): Options {
     ...process.env,
     ...config.environment,
   };
+  if (
+    isStandaloneHelper() &&
+    /\.(?:js|mjs|tsx|ts|jsx)$/.test(config.claudePath)
+  ) {
+    try {
+      execFileSync(
+        "node",
+        [
+          "-e",
+          "if(Number(process.versions.node.split('.')[0])<20)process.exit(2)",
+        ],
+        { env, stdio: "ignore", timeout: 5000 },
+      );
+    } catch {
+      throw new Error(
+        "The npm/script version of Claude Code still requires Node.js 20+ in the provider PATH. Install Node.js or select a native Claude Code executable.",
+      );
+    }
+  }
 
   const pm = normalizePermissionMode(config.permissionMode);
   const options: Options = {
@@ -84,6 +105,8 @@ export function buildQueryOptions(config: QueryOptionsConfig): Options {
     includePartialMessages: true,
     env,
     pathToClaudeCodeExecutable: config.claudePath,
+    // Native CLIs run directly. npm scripts still need Node, not an external Bun.
+    ...(isStandaloneHelper() ? { executable: "node" as const } : {}),
     permissionMode:
       pm as import("@anthropic-ai/claude-agent-sdk").PermissionMode,
     allowDangerouslySkipPermissions: true,

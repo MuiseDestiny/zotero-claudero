@@ -28,6 +28,7 @@ import type { AcademicToolPolicy } from "../shared/academicToolPolicy";
 import { windowsClaudeCandidates } from "../shared/windowsExecutablePaths";
 import { getOrCreateHelperToken } from "./helperToken";
 import { autoDetectSettings } from "./settingsAutoDetect";
+import { ensureStandaloneHelper } from "./standaloneHelper";
 import {
   buildRuntimeEnvironment,
   parseEnvironmentVariables,
@@ -429,6 +430,7 @@ function getWorkspacePath(): string {
 async function waitForHelper(
   port: number,
   token: string,
+  process: nsIProcess,
   timeoutMs = 15000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -436,9 +438,14 @@ async function waitForHelper(
   let lastError: unknown;
   while (Date.now() < deadline) {
     throwIfAborted(getHelperSignal());
+    if (process.isRunning === false) {
+      throw new Error(
+        `Claudero helper exited before becoming ready (exit ${process.exitValue}).`,
+      );
+    }
     try {
       const response = await fetchLoopbackHealth(port, token);
-      if (response.ok) {
+      if (response.ok && response.version === EXPECTED_HELPER_VERSION) {
         helperLog(
           `helper ready port=${port} elapsedMs=${Date.now() - startedAt}`,
         );
@@ -471,6 +478,8 @@ async function probePort(
   }
 }
 
+class HelperRuntimeUnavailableError extends Error {}
+
 async function startHelperOnPort(port: number, token: string): Promise<void> {
   throwIfAborted(getHelperSignal());
   // Kill any helper process tracked in the current session before starting a new one.
@@ -479,49 +488,85 @@ async function startHelperOnPort(port: number, token: string): Promise<void> {
   if (hadProcess) await Zotero.Promise.delay(300);
   throwIfAborted(getHelperSignal());
 
-  const nodePath = resolveNodePath();
   const helperPath = await ensureHelperFile();
-  throwIfAborted(getHelperSignal());
-  helperLog(
-    `starting helper port=${port} node=${nodePath} bundle=${helperPath}`,
-  );
+  let standalone: string | undefined;
+  try {
+    standalone = await ensureStandaloneHelper(
+      getProfilePath(),
+      getHelperSignal(),
+    );
+  } catch (error) {
+    throwIfAborted(getHelperSignal());
+    helperLog(
+      `standalone Helper unavailable; trying Node.js: ${errorMessage(error)}`,
+    );
+  }
   await IOUtils.makeDirectory(getWorkspacePath(), { createAncestors: true });
   throwIfAborted(getHelperSignal());
 
-  const nodeFile = (Components.classes as any)[
-    "@mozilla.org/file/local;1"
-  ].createInstance(Components.interfaces.nsIFile) as nsIFile;
-  nodeFile.initWithPath(nodePath);
-
-  const processInstance = (Components.classes as any)[
-    "@mozilla.org/process/util;1"
-  ].createInstance(Components.interfaces.nsIProcess) as nsIProcess;
-  processInstance.init(nodeFile);
-
-  const args = [
-    helperPath,
-    "--server",
-    "--host",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--token",
-    token,
-  ];
-  const parentPid = Services.appinfo?.processID;
-  if (Number.isSafeInteger(parentPid) && parentPid > 1)
-    args.push("--parent-pid", String(parentPid));
-  processInstance.runwAsync(args, args.length);
-  helperProcess = processInstance;
-  try {
-    await waitForHelper(port, token, 15000);
+  const launch = async (executablePath: string, compiled: boolean) => {
     throwIfAborted(getHelperSignal());
-  } catch (error) {
-    if (helperProcess === processInstance) stopHelperProcess();
-    throw error;
+    helperLog(
+      `starting helper port=${port} runtime=${compiled ? "standalone" : "node"} executable=${executablePath}`,
+    );
+    const executableFile = (Components.classes as any)[
+      "@mozilla.org/file/local;1"
+    ].createInstance(Components.interfaces.nsIFile) as nsIFile;
+    executableFile.initWithPath(executablePath);
+
+    const processInstance = (Components.classes as any)[
+      "@mozilla.org/process/util;1"
+    ].createInstance(Components.interfaces.nsIProcess) as nsIProcess;
+    processInstance.init(executableFile);
+
+    const args = [
+      ...(compiled ? ["--script-path", helperPath] : [helperPath]),
+      "--server",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(port),
+      "--token",
+      token,
+    ];
+    const parentPid = Services.appinfo?.processID;
+    if (Number.isSafeInteger(parentPid) && parentPid > 1)
+      args.push("--parent-pid", String(parentPid));
+    helperProcess = processInstance;
+    try {
+      processInstance.runwAsync(args, args.length);
+      await waitForHelper(port, token, processInstance, 15000);
+      throwIfAborted(getHelperSignal());
+    } catch (error) {
+      if (helperProcess === processInstance) stopHelperProcess();
+      throw error;
+    }
+    helperConnection = { port, token };
+    persistentQueryInitialized = false;
+  };
+
+  let standaloneFailure = "";
+  if (standalone) {
+    try {
+      await launch(standalone, true);
+      return;
+    } catch (error) {
+      throwIfAborted(getHelperSignal());
+      standaloneFailure = errorMessage(error);
+      helperLog(
+        `standalone Helper failed; trying Node.js: ${standaloneFailure}`,
+      );
+    }
   }
-  helperConnection = { port, token };
-  persistentQueryInitialized = false;
+  let nodePath: string;
+  try {
+    nodePath = resolveNodePath();
+  } catch (error) {
+    throw new HelperRuntimeUnavailableError(
+      `${standaloneFailure ? `Bundled Helper could not start: ${standaloneFailure} ` : ""}${errorMessage(error)}`,
+    );
+  }
+  await launch(nodePath, false);
 }
 
 async function ensureClaudeHelperImpl(): Promise<void> {
@@ -604,6 +649,7 @@ async function ensureClaudeHelperImpl(): Promise<void> {
               return;
             } catch (error) {
               throwIfAborted(getHelperSignal());
+              if (error instanceof HelperRuntimeUnavailableError) throw error;
               helperLog(`restart failed port=${p}: ${errorMessage(error)}`);
               // Lost the bind race; fall through to scan the next port.
             }
@@ -626,6 +672,7 @@ async function ensureClaudeHelperImpl(): Promise<void> {
     // "occupied" → skip
   }
 
+  let lastStartError: unknown;
   for (const p of freePorts) {
     try {
       await startHelperOnPort(p, token);
@@ -633,13 +680,15 @@ async function ensureClaudeHelperImpl(): Promise<void> {
       return;
     } catch (error) {
       throwIfAborted(getHelperSignal());
+      lastStartError = error;
       helperLog(`start failed port=${p}: ${errorMessage(error)}`);
+      if (error instanceof HelperRuntimeUnavailableError) break;
       // Race: port may have been taken between probe and bind. Try the next.
     }
   }
 
   throw new Error(
-    "Claudero helper could not start. No available port in range 38660-38699.",
+    `Claudero helper could not start.${lastStartError ? ` ${errorMessage(lastStartError)}` : " No available port in range 38660-38699."}`,
   );
 }
 

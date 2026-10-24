@@ -68,6 +68,7 @@ export interface CodexConfig {
     port: number;
     token: string;
     bundlePath: string;
+    executablePath?: string;
   };
 }
 
@@ -502,7 +503,8 @@ function buildCodexMcpServers(
   if (
     config.enableZoteroMcp !== false &&
     config.zoteroEndpointUrl &&
-    config.helperBridge?.bundlePath
+    config.helperBridge &&
+    (config.helperBridge.bundlePath || config.helperBridge.executablePath)
   ) {
     servers.zotero = buildZoteroBridgeMcpServer({
       provider: "codex",
@@ -510,6 +512,7 @@ function buildCodexMcpServers(
       helperUrl: `http://${config.helperBridge.host}:${config.helperBridge.port}`,
       token: config.helperBridge.token,
       bundlePath: config.helperBridge.bundlePath,
+      executablePath: config.helperBridge.executablePath,
       nodeCommand: mapper.target.method === "wsl" ? "node" : process.execPath,
       mapper,
     });

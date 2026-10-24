@@ -49,6 +49,16 @@ jobs:
         run: npm run test:helper:mock
       - name: Run evidence contract smoke
         run: npm run test:evidence:ci
+      - name: Set up pinned standalone compiler
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Build standalone Helper package
+        run: npm run build:standalone
+      - name: Verify standalone package contents and hashes
+        run: node scripts/verify-release.mjs
+      - name: Smoke standalone Helper without external Node or Bun
+        run: npm run test:helper:standalone
       - name: Upload build result
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4

@@ -1,6 +1,7 @@
 import { defineConfig } from "zotero-plugin-scaffold";
 import { readFileSync } from "node:fs";
 import pkg from "./package.json";
+import { buildStandaloneHelper } from "./scripts/build-standalone-helper.mjs";
 
 export default defineConfig({
   source: ["src", "addon"],
@@ -49,6 +50,9 @@ export default defineConfig({
         outfile: `.scaffold/build/addon/content/helper/claudero-helper.mjs`,
       },
     ],
+    hooks: {
+      "build:bundle": async (ctx) => buildStandaloneHelper(ctx.dist),
+    },
   },
 
   test: {

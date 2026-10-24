@@ -18,6 +18,7 @@ import {
   type SettingsAutoDetectResult,
 } from "./settingsAutoDetect";
 import { setupActions, type SetupAction } from "./setupGuide";
+import { hasStandaloneHelper, providerCliNeedsNode } from "./standaloneHelper";
 import { PreferenceLifetime } from "./preferenceLifetime";
 import { waitWithSignal } from "../shared/requestDeadline";
 import { buildRuntimeEnvironment } from "../shared/runtimeEnvironment";
@@ -235,12 +236,37 @@ export function bindSetupWizard(
       const usesWsl =
         provider === "codex" && getCodexInstallationMethod() === "wsl";
       const cliOk = usesWsl || cliChecks[providers.indexOf(provider)];
-      const actions = setupActions(provider, nodeOk, cliOk, usesWsl);
+      const standaloneReady = await waitWithSignal(
+        hasStandaloneHelper(),
+        signal,
+      );
+      const providerNeedsNode =
+        provider === "deepseek" ||
+        (!usesWsl &&
+          (await waitWithSignal(providerCliNeedsNode(cliPath), signal)));
+      const runtimeOk = nodeOk || (standaloneReady && !providerNeedsNode);
+      if (!isCurrent()) return;
+      const actions = setupActions(
+        provider,
+        nodeOk,
+        cliOk,
+        usesWsl,
+        standaloneReady,
+        providerNeedsNode,
+      );
       details.append(
         createRow(
-          getString("pref-setup-node"),
-          nodeOk ? "success" : "error",
-          nodeOk ? nodePath : getString("pref-setup-node-missing"),
+          getString(
+            standaloneReady && !providerNeedsNode
+              ? "pref-setup-helper"
+              : "pref-setup-node",
+          ),
+          runtimeOk ? "success" : "error",
+          standaloneReady && !providerNeedsNode
+            ? getString("pref-setup-standalone-ready")
+            : nodeOk
+              ? nodePath
+              : getString("pref-setup-node-missing"),
           repairActions(actions.node, provider),
         ),
         createRow(
@@ -268,7 +294,7 @@ export function bindSetupWizard(
           repairActions(actions.auth, provider),
         ),
       );
-      const pathsOk = nodeOk && cliOk;
+      const pathsOk = runtimeOk && cliOk;
       if (disclosure && !pathsOk) disclosure.open = true;
       if (!checkRuntime || !pathsOk) {
         status.textContent = getString(
@@ -341,7 +367,7 @@ export function bindSetupWizard(
       }
       const allRuntimeChecksPassed =
         provider !== "deepseek" || runtimeState === "success";
-      const allOk = nodeOk && cliOk && helperReady && allRuntimeChecksPassed;
+      const allOk = runtimeOk && cliOk && helperReady && allRuntimeChecksPassed;
       status.textContent = allOk
         ? getString("pref-setup-complete")
         : getString("pref-setup-action-needed");

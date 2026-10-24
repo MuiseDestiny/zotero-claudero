@@ -23,6 +23,7 @@ export interface ZoteroBridgeMcpConfig {
   token: string;
   bundlePath: string;
   nodeCommand: string;
+  executablePath?: string;
   mapper: CodexMcpPathMapper;
 }
 
@@ -214,10 +215,16 @@ export function buildZoteroBridgeMcpServer(
     config.mapper.target.method === "wsl"
       ? config.mapper.toTargetPath(config.bundlePath) || config.bundlePath
       : config.bundlePath;
+  const standalone =
+    config.mapper.target.method !== "wsl" && config.executablePath;
+  if (!standalone && !bundlePath)
+    throw new Error(
+      "The WSL Zotero MCP bridge requires the portable Helper script and Node.js inside WSL.",
+    );
   return {
-    command: config.nodeCommand,
+    command: standalone || config.nodeCommand,
     args: [
-      bundlePath,
+      ...(standalone ? [] : [bundlePath]),
       "--zotero-mcp-stdio",
       "--endpoint",
       config.endpoint,

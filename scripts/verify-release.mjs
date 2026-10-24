@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import AdmZip from "adm-zip";
 
 const root = process.cwd();
 const buildRoot = path.join(root, ".scaffold", "build");
@@ -158,6 +159,7 @@ await check("release update metadata", async () => {
 
 await check("XPI package and checksum", async () => {
   const xpi = await readFile(xpiPath);
+  const archive = new AdmZip(xpi);
   const metadata = await stat(xpiPath);
   assert(metadata.size > 100_000, "XPI is unexpectedly small");
   assert(
@@ -179,6 +181,107 @@ await check("XPI package and checksum", async () => {
     assert(
       file.isFile() && file.size > 0,
       `missing build artifact: ${relativePath}`,
+    );
+    assert(
+      archive.getEntry(relativePath.replace(/^addon\//, ""))?.header.size > 0,
+      `missing XPI entry: ${relativePath}`,
+    );
+  }
+});
+
+await check("optional standalone Helper integrity", async () => {
+  const prefix = "content/helper/standalone/";
+  const directory = path.join(buildRoot, "addon", prefix);
+  const archive = new AdmZip(xpiPath);
+  const packed = archive
+    .getEntries()
+    .filter(
+      (entry) => entry.entryName.startsWith(prefix) && !entry.isDirectory,
+    );
+  const files = await readdir(directory).catch((error) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  if (!files.length && !packed.length) {
+    console.log("[release] Portable build: external Node.js runtime required");
+    return;
+  }
+  const source = await readFile(
+    path.join(root, "src/shared/helperProtocol.ts"),
+    "utf8",
+  );
+  const runtimeSource = await readFile(
+    path.join(root, "src/shared/standaloneHelper.ts"),
+    "utf8",
+  );
+  const expectedVersion = Number(
+    source.match(/CLAUDERO_HELPER_VERSION\s*=\s*(\d+)/)?.[1],
+  );
+  const expectedBunVersion = runtimeSource.match(
+    /HELPER_BUN_VERSION\s*=\s*"([^"]+)"/,
+  )?.[1];
+  const metadataBytes = await readFile(path.join(directory, "manifest.json"));
+  const metadata = JSON.parse(metadataBytes.toString("utf8"));
+  assert(
+    archive.getEntry(`${prefix}manifest.json`)?.getData().equals(metadataBytes),
+    "XPI standalone manifest differs from build output",
+  );
+  for (const file of ["BUN-LICENSE.md", "RUNTIME-NOTICE.txt"]) {
+    const notice = await readFile(
+      path.join(root, "addon/content/helper/licenses", file),
+    );
+    assert(
+      archive
+        .getEntry(`content/helper/licenses/${file}`)
+        ?.getData()
+        .equals(notice),
+      `missing or changed runtime notice: ${file}`,
+    );
+  }
+  assert(
+    metadata.schemaVersion === 1 &&
+      metadata.helperVersion === expectedVersion &&
+      metadata.bunVersion === expectedBunVersion &&
+      Array.isArray(metadata.binaries) &&
+      metadata.binaries.length >= 1 &&
+      metadata.binaries.length <= 6,
+    "invalid standalone manifest or unpinned runtime version",
+  );
+  const expectedFiles = new Set(["manifest.json"]);
+  for (const binary of metadata.binaries) {
+    const { platform, arch, file, bytes, sha256 } = binary;
+    assert(
+      ["darwin", "linux", "win32"].includes(platform) &&
+        ["arm64", "x64"].includes(arch) &&
+        file ===
+          `claudero-helper-${platform}-${arch}${platform === "win32" ? ".exe" : ""}` &&
+        !expectedFiles.has(file) &&
+        Number.isSafeInteger(bytes) &&
+        bytes >= 1024 * 1024 &&
+        bytes <= 200 * 1024 * 1024 &&
+        /^[a-f0-9]{64}$/.test(sha256),
+      "invalid standalone target metadata",
+    );
+    expectedFiles.add(file);
+    const built = await readFile(path.join(directory, file));
+    assert(built.length === bytes, `standalone size mismatch: ${file}`);
+    assert(
+      createHash("sha256").update(built).digest("hex") === sha256,
+      `standalone SHA-256 mismatch: ${file}`,
+    );
+    assert(
+      archive.getEntry(`${prefix}${file}`)?.getData().equals(built),
+      `standalone XPI entry missing or different: ${file}`,
+    );
+  }
+  for (const entries of [
+    files,
+    packed.map((entry) => entry.entryName.slice(prefix.length)),
+  ]) {
+    assert(
+      entries.length === expectedFiles.size &&
+        entries.every((file) => expectedFiles.has(file)),
+      "unmanifested or missing standalone Helper files",
     );
   }
 });

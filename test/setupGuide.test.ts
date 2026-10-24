@@ -38,4 +38,28 @@ describe("first-use setup actions", function () {
     ]);
     assert.deepEqual(setupActions("claude", true, true, true).auth, ["login"]);
   });
+
+  it("does not require host Node for native providers with a bundled Helper", function () {
+    for (const provider of ["claude", "codex"] as const) {
+      const actions = setupActions(provider, false, true, false, true);
+      assert.isEmpty(actions.node);
+      assert.deepEqual(actions.auth, ["login"]);
+      assert.isEmpty(setupActions(provider, false, false, false, true).auth);
+    }
+    assert.deepEqual(setupActions("codex", false, true, true, true).auth, [
+      "wsl-login",
+    ]);
+  });
+
+  it("keeps Node prerequisites for DeepSeek and npm-based provider scripts", function () {
+    for (const provider of ["claude", "codex", "deepseek"] as const) {
+      const actions = setupActions(provider, false, true, false, true, true);
+      assert.deepEqual(actions.node, ["install-node", "node-path"]);
+      assert.isEmpty(actions.auth);
+    }
+    assert.deepEqual(setupActions("deepseek", false, true, false, true).node, [
+      "install-node",
+      "node-path",
+    ]);
+  });
 });

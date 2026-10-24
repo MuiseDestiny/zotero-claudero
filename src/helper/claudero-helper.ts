@@ -20,6 +20,7 @@ import { PermissionManager } from "./runtime/PermissionManager";
 import { collectAuxiliaryRuntime } from "./runtime/AuxiliaryQuery";
 import { watchParentProcess } from "./runtime/ParentProcess";
 import { writeHelperEvent } from "./runtime/HelperEventWriter";
+import { isStandaloneHelper, helperRuntimeInfo } from "./runtime/helperRuntime";
 import { throwIfAborted } from "../shared/helperStream";
 import { randomUUID } from "node:crypto";
 import {
@@ -80,7 +81,10 @@ import {
 
 type HelperProvider = "claude" | "codex" | "deepseek";
 
-type HelperConfig = HelperServerConfig & { parentPid: number };
+type HelperConfig = HelperServerConfig & {
+  parentPid: number;
+  scriptPath?: string;
+};
 
 interface ImageInput {
   media_type: string;
@@ -208,6 +212,7 @@ function parseArgs(argv: string[]): HelperConfig {
       token: getArg("--token"),
     }),
     parentPid,
+    scriptPath: getArg("--script-path") || undefined,
   };
 }
 
@@ -666,7 +671,7 @@ function resolveDeepSeekNodePath(
   const executable = process.platform === "win32" ? "node.exe" : "node";
   const candidates = [
     environmentValue(env, "DSH_NODE_PATH") || "",
-    process.execPath,
+    ...(isStandaloneHelper() ? [] : [process.execPath]),
     findInPath(executable, pathValue) || "",
     ...(process.platform === "win32"
       ? [
@@ -1134,6 +1139,7 @@ function diagnosticsPayload(): unknown {
     sanitizeDiagnosticData({
       helper: {
         version: HELPER_VERSION,
+        runtime: helperRuntimeInfo(),
         activeProvider,
         active: true,
         runtimeActive: activeRuntime.isActive,
@@ -1308,7 +1314,12 @@ async function initializeProviderNow(
                   host: helperConfig.host,
                   port: helperConfig.port,
                   token: helperConfig.token,
-                  bundlePath: process.argv[1] || "",
+                  bundlePath: isStandaloneHelper()
+                    ? helperConfig.scriptPath || ""
+                    : process.argv[1] || "",
+                  executablePath: isStandaloneHelper()
+                    ? process.execPath
+                    : undefined,
                 }
               : undefined,
         },
@@ -2069,6 +2080,7 @@ async function route(
       active: activeQueryManager().isActive,
       provider: activeProvider,
       version: HELPER_VERSION,
+      runtime: helperRuntimeInfo(),
     });
     return;
   }

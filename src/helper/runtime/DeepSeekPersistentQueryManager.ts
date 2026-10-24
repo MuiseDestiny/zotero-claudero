@@ -4,6 +4,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { throwIfAborted } from "../../shared/helperStream";
 import { sameJsonValue } from "../../shared/canonicalJson";
+import { isStandaloneHelper } from "./helperRuntime";
 import type { ImageInput } from "./MessageChannel";
 import type { PermissionManager } from "./PermissionManager";
 import type { ClauderoPermissionMode } from "./QueryOptionsBuilder";
@@ -129,6 +130,11 @@ export function buildDeepSeekLaunchSpec(
   args: string[];
   shell: boolean;
 } {
+  if (!nodePath && isStandaloneHelper()) {
+    throw new Error(
+      "DeepSeek Harness still requires Node.js 24+. Set DSH_NODE_PATH to a real Node.js executable.",
+    );
+  }
   return {
     command: nodePath || process.execPath,
     args: [

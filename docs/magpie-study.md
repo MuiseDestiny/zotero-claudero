@@ -6,14 +6,14 @@ This is an architectural study, not a copy of Magpie's gateway or UI.
 
 ## Adoption Checklist
 
-| Order | Lesson                                            | Claudero improvement                                                                                           | Status  |
-| ----- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------- |
-| 1     | One security boundary for every local route       | Validate request authority and browser origin in addition to bearer authentication; bound HTTP request parsing | Done    |
-| 2     | Bound and validate streamed messages              | Validate event fields, limit each NDJSON frame, reject truncated or invalid streams                            | Done    |
-| 3     | Tie stream lifetime to its consumer               | Honor writable backpressure and release waits on disconnect, cancellation, or timeout                          | Done    |
-| 4     | Compare configuration by meaning                  | Ignore object-key order without ignoring real value changes or ordered arguments                               | Done    |
-| 5     | A known secret stays secret wherever it reappears | Scrub configured credential values and credentials embedded in URLs from diagnostics                           | Done    |
-| 6     | Users should not manage the application's runtime | Build a standalone Helper, prefer it when bundled, and retain the Node.js compatibility path                   | Planned |
+| Order | Lesson                                            | Claudero improvement                                                                                           | Status |
+| ----- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------ |
+| 1     | One security boundary for every local route       | Validate request authority and browser origin in addition to bearer authentication; bound HTTP request parsing | Done   |
+| 2     | Bound and validate streamed messages              | Validate event fields, limit each NDJSON frame, reject truncated or invalid streams                            | Done   |
+| 3     | Tie stream lifetime to its consumer               | Honor writable backpressure and release waits on disconnect, cancellation, or timeout                          | Done   |
+| 4     | Compare configuration by meaning                  | Ignore object-key order without ignoring real value changes or ordered arguments                               | Done   |
+| 5     | A known secret stays secret wherever it reappears | Scrub configured credential values and credentials embedded in URLs from diagnostics                           | Done   |
+| 6     | Users should not manage the application's runtime | Build a standalone Helper, prefer it when bundled, and retain the Node.js compatibility path                   | Done   |
 
 ## Sources and Boundaries
 
@@ -136,3 +136,53 @@ Verified with privacy, Helper startup/lifecycle, and configuration regressions:
 whose workspace path repeats a configured opaque secret. TypeScript and targeted
 ESLint pass. Very short/oversized or evicted credentials are still field/URL/
 pattern-masked, but cannot be guaranteed masked as arbitrary unlabeled substrings.
+
+### 6. Owned Standalone Runtime
+
+An optional build compiles the existing Helper plus Bun 1.4.2 into a native
+executable. The Gecko client selects its own OS/ABI, verifies a strict bundled
+size/hash/version manifest, extracts atomically, and prefers that executable.
+Failure to extract, launch, or become healthy retains the Node fallback without
+creating a new process after cancellation. Missing runtimes no longer cause a
+redundant 40-port launch loop. Health and diagnostics expose the runtime used.
+
+Host-native Codex self-spawns the executable for its Zotero MCP bridge. The WSL
+bridge retains its target Node script instead of trying to run a Windows binary
+as a Linux interpreter. Claude's native executable runs directly through the
+bundled SDK; JS/npm Claude gives an explicit remaining-Node prerequisite instead
+of silently requiring an external Bun. DeepSeek still resolves and verifies a
+real Node.js 24+ runtime. Setup distinguishes these cases.
+
+Verified locally on macOS arm64 with an empty PATH and isolated HOME: authenticated
+HTTP startup, two persistent Claude SDK turns, two persistent Codex turns, actual
+Codex-spawned MCP initialization/tools/authenticated reads, direct MCP stdio, JS
+CLI prerequisite guidance, ignored workspace config, and graceful shutdown. The
+providers in this smoke are native offline protocol fixtures, not live accounts.
+Packaging, Gecko launch/fallback/shutdown, setup, and WSL mapping have regression
+tests. The package verifier checks both unpacked and actual XPI binary contents
+against size and SHA-256; portable builds remain valid without Bun installed.
+
+The current native binary is approximately 62 MiB; its XPI is approximately
+28 MiB. CI adds standalone builds and offline smokes for macOS, Windows, and Linux;
+only macOS arm64 execution is established locally. Build choices, limitations,
+and the remaining dependencies are in [Standalone Helper](standalone-helper.md).
+
+**Node.js conclusion:** the Helper's external Node dependency is removable for
+a matching standalone package with native Claude/Codex. It is not honestly
+removable for all configurations: DeepSeek, npm/script CLIs, Node-based custom
+MCP servers, the WSL MCP bridge, and the development toolchain retain their own
+requirements. This ships a controlled Bun runtime instead of deleting the need
+for a JavaScript engine. No standalone release is published as part of the study.
+
+### Consolidated Local Checks
+
+- `npm run test:runtime`: 198 Mocha cases and 5 Node test cases pass.
+- `npm run lint:check` and `tsc --noEmit`: pass.
+- Portable `npm run check:release`, mock Helper communication, and all three
+  evidence contract/golden/PDF-audit smokes: pass.
+- `npm run build:standalone`, `node scripts/verify-release.mjs`, and
+  `npm run test:helper:standalone`: pass on macOS arm64, including separate
+  DeepSeek compatibility with an explicitly selected real Node runtime.
+- The Zotero browser runner initially stops before application launch because
+  the existing `contextMenu.test.ts` imports Node-only test modules. This is
+  distinct from the passing runtime suites and is not counted as browser success.

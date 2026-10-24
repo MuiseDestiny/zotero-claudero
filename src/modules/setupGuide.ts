@@ -16,9 +16,12 @@ export function setupActions(
   nodeReady: boolean,
   cliReady: boolean,
   usesWsl = false,
+  standaloneReady = false,
+  providerNeedsNode = provider === "deepseek",
 ): { node: SetupAction[]; cli: SetupAction[]; auth: SetupAction[] } {
+  const runtimeReady = nodeReady || (standaloneReady && !providerNeedsNode);
   return {
-    node: nodeReady ? [] : ["install-node", "node-path"],
+    node: runtimeReady ? [] : ["install-node", "node-path"],
     cli: cliReady
       ? []
       : [
@@ -28,7 +31,7 @@ export function setupActions(
           "cli-path",
         ],
     auth:
-      nodeReady && cliReady
+      runtimeReady && cliReady
         ? [
             provider === "deepseek"
               ? "provider-settings"

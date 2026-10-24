@@ -128,4 +128,37 @@ describe("Codex MCP config overrides", function () {
       default_tools_approval_mode: "approve",
     });
   });
+
+  it("self-spawns a standalone bridge without treating it as a script interpreter", function () {
+    const server = buildZoteroBridgeMcpServer({
+      provider: "codex",
+      endpoint: "http://127.0.0.1:23119/claudero",
+      helperUrl: "http://127.0.0.1:38660",
+      token: "fixture",
+      bundlePath: "/fixture/helper.mjs",
+      executablePath: "/fixture/claudero-helper",
+      nodeCommand: "node",
+      mapper: mapper(),
+    });
+    assert.equal(server.command, "/fixture/claudero-helper");
+    assert.equal((server.args as string[])[0], "--zotero-mcp-stdio");
+    assert.notInclude(server.args as string[], "/fixture/helper.mjs");
+  });
+
+  it("retains the target Node script bridge for WSL even with a host executable", function () {
+    const server = buildZoteroBridgeMcpServer({
+      endpoint: "http://127.0.0.1:23119/claudero",
+      helperUrl: "http://127.0.0.1:38660",
+      token: "fixture",
+      bundlePath: "C:\\fixture\\helper.mjs",
+      executablePath: "C:\\fixture\\helper.exe",
+      nodeCommand: "node",
+      mapper: mapper({
+        target: { method: "wsl", platformFamily: "unix", platformOs: "linux" },
+        toTargetPath: () => "/mnt/c/fixture/helper.mjs",
+      }),
+    });
+    assert.equal(server.command, "node");
+    assert.equal((server.args as string[])[0], "/mnt/c/fixture/helper.mjs");
+  });
 });

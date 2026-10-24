@@ -27,8 +27,10 @@ Claudero supports **Zotero 7–10** on macOS, Windows, and Linux.
    [GitHub Releases](https://github.com/MuiseDestiny/zotero-claudero/releases).
 2. In Zotero, open **Tools -> Plugins -> gear menu -> Install Plugin From File**
    and select the XPI.
-3. Install **Node.js 20+** and at least one provider below. Node.js 24 LTS is
-   recommended; DeepSeek requires Node.js 24+.
+3. Install at least one provider below. Portable builds require **Node.js 20+**;
+   a matching [standalone build](docs/standalone-helper.md) does not require a
+   separate Node installation for native Claude/Codex. npm/script CLIs still
+   need Node; DeepSeek requires **Node.js 24+**.
 4. Open **Zotero Preferences -> Claudero**, choose a provider, and use
    **Check details** to complete setup. Existing programs are discovered
    automatically, so most users can leave executable paths empty.
@@ -46,19 +48,21 @@ Claudero, or install it with `npm install -g @deepseek-ai/dsh@latest`.
 DeepSeek support is experimental.
 
 On Windows, Codex can also run in WSL. Select **WSL** in Codex settings and
-complete login inside the selected distribution.
+complete login inside the selected distribution. Its Zotero MCP bridge still
+requires Node.js inside WSL. Custom MCP servers keep their own runtime needs.
 
 Model access, usage limits, and charges depend on your provider. Claudero does
 not include provider credentials or model access.
 
 ## How It Works
 
-Claudero connects Zotero to a locally installed agent runtime through a
-separate Node.js helper. It does not train a model or operate its own AI backend.
+Claudero connects Zotero to a locally installed agent runtime through a separate
+local Helper: a bundled standalone executable when available, or a Node.js script
+for compatibility. It does not train a model or operate its own AI backend.
 
 ```text
 Zotero: your question + selected research context
-    -> local Node.js helper
+    -> local Helper (standalone or Node.js)
         -> Claude Agent SDK -> Claude Code
         -> Codex app-server
         -> DeepSeek Harness headless CLI

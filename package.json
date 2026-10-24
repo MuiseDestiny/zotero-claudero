@@ -33,7 +33,7 @@
     "test:helper": "npm run build && node scripts/smoke-helper-communication.mjs --full",
     "test:helper:quick": "npm run build && node scripts/smoke-helper-communication.mjs",
     "test:helper:mock": "npm run build && node scripts/smoke-helper-mock.mjs",
-    "test:runtime": "node scripts/run-node-tests.mjs test/deepseekRuntime.node.ts test/codexMcpConfig.test.ts test/windowsExecutablePaths.test.ts test/helperServerSecurity.test.ts test/diagnosticPrivacy.test.ts test/markdownSecurity.test.ts test/mcpTester.node.ts test/runtimeEnvironment.test.ts test/configEquality.node.ts test/providerSettings.node.ts test/settingsAutoDetect.node.ts test/permissionManager.test.ts test/requestLifecycle.test.ts test/helperStream.test.ts test/helperEventWriter.node.ts test/agentEvents.test.ts test/helperStartup.node.ts test/imageDraft.test.ts test/providerModelRequest.test.ts test/conversationRecovery.test.ts test/evidenceVerification.node.ts test/zoteroContext.node.ts test/conversationIndex.node.ts test/selectionContextValidation.test.ts test/auxiliaryQuery.test.ts test/helperLifecycle.node.ts test/requestFailure.test.ts test/setupGuide.test.ts test/paneStreamingState.node.ts test/paneArchitecture.node.ts test/contextMenu.test.ts",
+    "test:runtime": "node scripts/run-node-tests.mjs test/deepseekRuntime.node.ts test/codexMcpConfig.test.ts test/windowsExecutablePaths.test.ts test/helperServerSecurity.test.ts test/diagnosticPrivacy.test.ts test/markdownSecurity.test.ts test/mcpTester.node.ts test/runtimeEnvironment.test.ts test/configEquality.node.ts test/providerSettings.node.ts test/settingsAutoDetect.node.ts test/permissionManager.test.ts test/requestLifecycle.test.ts test/helperStream.test.ts test/helperEventWriter.node.ts test/agentEvents.test.ts test/standaloneHelper.node.ts test/standaloneStartup.node.ts test/helperStartup.node.ts test/imageDraft.test.ts test/providerModelRequest.test.ts test/conversationRecovery.test.ts test/evidenceVerification.node.ts test/zoteroContext.node.ts test/conversationIndex.node.ts test/selectionContextValidation.test.ts test/auxiliaryQuery.test.ts test/helperLifecycle.node.ts test/requestFailure.test.ts test/setupGuide.test.ts test/paneStreamingState.node.ts test/paneArchitecture.node.ts test/contextMenu.test.ts",
     "diagnose:codex-latency": "npm run build && node scripts/diagnose-codex-latency.mjs",
     "test:evidence": "npm run build && node scripts/smoke-evidence-contract.mjs && node scripts/smoke-evidence-golden.mjs && node scripts/smoke-pdf-visual-audit.mjs",
     "test:evidence:ci": "node scripts/smoke-evidence-contract.mjs && node scripts/smoke-evidence-golden.mjs && node scripts/smoke-pdf-visual-audit.mjs",
@@ -47,7 +47,9 @@
     "lint:fix": "prettier --write . && eslint . --fix",
     "release": "zotero-plugin release",
     "test": "zotero-plugin test",
-    "update-deps": "npm update --save"
+    "update-deps": "npm update --save",
+    "build:standalone": "node scripts/build-standalone.mjs",
+    "test:helper:standalone": "node scripts/smoke-standalone-helper.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.233",

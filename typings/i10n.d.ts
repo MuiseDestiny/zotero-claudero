@@ -303,6 +303,7 @@ export type FluentMessageId =
   | 'pref-setup-runtime'
   | 'pref-setup-runtime-not-checked'
   | 'pref-setup-runtime-ready'
+  | 'pref-setup-standalone-ready'
   | 'pref-setup-title'
   | 'pref-setup-wsl-cli'
   | 'pref-skills-import'

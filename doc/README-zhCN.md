@@ -21,8 +21,9 @@ Claudero 支持 macOS、Windows 和 Linux 上的 **Zotero 7–10**。
 1. 从 [GitHub Releases](https://github.com/MuiseDestiny/zotero-claudero/releases)
    下载 `claudero.xpi`。
 2. 在 Zotero 中打开 **工具 -> 插件 -> 齿轮菜单 -> 从文件安装插件**，选择 XPI。
-3. 安装 **Node.js 20+** 和下表中的至少一种服务程序。推荐 Node.js 24 LTS；
-   DeepSeek 需要 Node.js 24+。
+3. 安装下表中的至少一种服务程序。便携脚本版需要 **Node.js 20+**；包含匹配架构的
+   [独立 Helper 构建](../docs/standalone-helper.md) 配合原生 Claude/Codex 时，无需
+   另装 Node。npm/脚本版 CLI 仍需要 Node；DeepSeek 需要 **Node.js 24+**。
 4. 打开 **Zotero 首选项 -> Claudero**，选择服务，在 **查看检测详情** 中完成配置。
    插件会自动发现已有程序，多数用户可以将程序路径留空。
 5. 选中论文或打开 PDF，打开 Claudero 面板并提问。
@@ -38,17 +39,19 @@ Claude Code 和 Codex 请按各自官方流程安装并完成认证。DeepSeek �
 `npm install -g @deepseek-ai/dsh@latest`。DeepSeek 集成属于实验性功能。
 
 Windows 上也可以在 WSL 中运行 Codex：在设置中选择 **WSL**，并在所选发行版内登录。
+Zotero MCP 桥仍需要 WSL 内的 Node.js；自定义 MCP 服务也保留其自身运行时要求。
 
 模型权限、额度和费用取决于所选服务。Claudero 不附赠服务凭据或模型访问权限。
 
 ## 工作原理
 
-Claudero 通过独立的本地 Node.js Helper，将 Zotero 连接到本机安装的 Agent
-运行时。它不训练模型，也不运营独立的 AI 后端。
+Claudero 通过独立的本地 Helper，将 Zotero 连接到本机安装的 Agent 运行时。
+优先使用包内的独立可执行程序，也保留 Node.js 脚本兼容路径。它不训练模型，
+也不运营独立的 AI 后端。
 
 ```text
 Zotero：你的问题 + 当前选中的科研上下文
-    -> 本地 Node.js Helper
+    -> 本地 Helper（独立程序或 Node.js）
         -> Claude Agent SDK -> Claude Code
         -> Codex app-server
         -> DeepSeek Harness headless CLI

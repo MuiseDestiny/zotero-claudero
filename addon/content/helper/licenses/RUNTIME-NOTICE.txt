@@ -1,0 +1,16 @@
+Optional standalone runtime: Bun 1.4.2
+Upstream source: https://github.com/oven-sh/bun/tree/bun-v1.4.2
+Upstream notice: https://github.com/oven-sh/bun/blob/bun-v1.4.2/LICENSE.md
+
+BUN-LICENSE.md is an unmodified copy of that upstream notice, including its
+original typography. Bun itself is MIT-licensed. Linked JavaScriptCore/WebKit
+and other components have separate license and source/relink obligations;
+the upstream notice describes them. Claudero does not relicense those parts.
+
+Claudero build instructions: docs/standalone-helper.md in the source repository
+https://github.com/MuiseDestiny/zotero-claudero
+
+Before publicly distributing a compiled runtime, review the complete licenses,
+required notices, source availability, and relinking requirements for the exact
+platform binary. This local study does not publish a runtime or certify that
+those distribution obligations have been satisfied.
