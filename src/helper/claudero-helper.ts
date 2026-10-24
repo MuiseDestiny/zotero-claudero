@@ -19,6 +19,7 @@ import process from "node:process";
 import { PermissionManager } from "./runtime/PermissionManager";
 import { collectAuxiliaryRuntime } from "./runtime/AuxiliaryQuery";
 import { watchParentProcess } from "./runtime/ParentProcess";
+import { writeHelperEvent } from "./runtime/HelperEventWriter";
 import { throwIfAborted } from "../shared/helperStream";
 import { randomUUID } from "node:crypto";
 import {
@@ -48,7 +49,7 @@ import {
 } from "./runtime/QueryOptionsBuilder";
 import {
   AgentEventRecorder,
-  isAgentEventPayload,
+  type AgentEventPayload,
   type AgentEventTrace,
 } from "../shared/agentEvents";
 import { CLAUDERO_HELPER_VERSION as HELPER_VERSION } from "../shared/helperProtocol";
@@ -255,17 +256,17 @@ class HttpRequestError extends Error {
   }
 }
 
-function writeEvent(
+async function writeEvent(
   res: ServerResponse,
-  event: unknown,
+  event: AgentEventPayload,
   recorder?: AgentEventRecorder,
-): void {
-  if (recorder && isAgentEventPayload(event)) {
+  signal?: AbortSignal,
+): Promise<void> {
+  await writeHelperEvent(res, event, { signal });
+  if (recorder) {
     recorder.record(event);
     latestAgentTrace = recorder;
   }
-  if (!res.destroyed && !res.writableEnded)
-    res.write(`${JSON.stringify(event)}\n`);
 }
 
 function isExecutableFile(filePath: string | undefined): filePath is string {
@@ -1612,14 +1613,15 @@ async function handleOwnedSend(
     return type;
   };
   recordHelperDebug("http", "/send stream opened", { provider });
-  writeEvent(
-    res,
-    { type: "ready", requestId: payload.requestId },
-    traceRecorder,
-  );
-  countEvent({ type: "ready" });
 
   try {
+    await writeEvent(
+      res,
+      { type: "ready", requestId: payload.requestId },
+      traceRecorder,
+      execution.lease.signal,
+    );
+    countEvent({ type: "ready" });
     let firstAgentEvent = false;
     for await (const event of manager.sendMessageEvents(
       payload.prompt,
@@ -1636,7 +1638,7 @@ async function handleOwnedSend(
           elapsedMs: Date.now() - startedAt,
         });
       }
-      writeEvent(res, event, traceRecorder);
+      await writeEvent(res, event, traceRecorder, execution.lease.signal);
     }
     assertExecution(execution);
     if (outcome === "error") await manager.close();
@@ -1658,15 +1660,15 @@ async function handleOwnedSend(
       "error",
     );
     outcome = execution.lease.signal.aborted ? "cancelled" : "error";
-    if (outcome === "error") {
-      writeEvent(
+    if (outcome === "error" && !res.destroyed && !res.writableEnded) {
+      await writeEvent(
         res,
         {
           type: "error",
           error: error instanceof Error ? error.message : String(error),
         },
         traceRecorder,
-      );
+      ).catch(() => res.destroy());
     }
     await cancelExecution(execution).catch(() => {});
     await manager.close();
@@ -1676,12 +1678,14 @@ async function handleOwnedSend(
     await Promise.allSettled([...execution.bridgeCalls]);
     if (outcome === "success" && execution.lease.signal.aborted)
       outcome = "cancelled";
-    writeEvent(
-      res,
-      { type: "done", requestId: payload.requestId, outcome },
-      traceRecorder,
-    );
-    res.end();
+    if (!res.destroyed && !res.writableEnded) {
+      await writeEvent(
+        res,
+        { type: "done", requestId: payload.requestId, outcome },
+        traceRecorder,
+      ).catch(() => res.destroy());
+      if (!res.destroyed) res.end();
+    }
   }
 }
 

@@ -10,7 +10,7 @@ This is an architectural study, not a copy of Magpie's gateway or UI.
 | ----- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------- |
 | 1     | One security boundary for every local route       | Validate request authority and browser origin in addition to bearer authentication; bound HTTP request parsing | Done    |
 | 2     | Bound and validate streamed messages              | Validate event fields, limit each NDJSON frame, reject truncated or invalid streams                            | Done    |
-| 3     | Tie stream lifetime to its consumer               | Honor writable backpressure and release waits on disconnect, cancellation, or timeout                          | Planned |
+| 3     | Tie stream lifetime to its consumer               | Honor writable backpressure and release waits on disconnect, cancellation, or timeout                          | Done    |
 | 4     | Compare configuration by meaning                  | Ignore object-key order without ignoring real value changes or ordered arguments                               | Planned |
 | 5     | A known secret stays secret wherever it reappears | Scrub configured credential values and credentials embedded in URLs from diagnostics                           | Planned |
 | 6     | Users should not manage the application's runtime | Build a standalone Helper, prefer it when bundled, and retain the Node.js compatibility path                   | Planned |
@@ -90,3 +90,18 @@ Verified with `test/helperStream.test.ts`, `test/agentEvents.test.ts`,
 including split UTF-8, CRLF, oversized frames, malformed fields, late events,
 reader cancellation, listener cleanup, and provider normalization. TypeScript
 and targeted ESLint pass. The two new protocol suites are in `test:runtime`.
+
+### 3. Writable Backpressure
+
+Helper event writes are awaited. A full HTTP writable pauses consumption of the
+provider iterator until `drain`, instead of accumulating more socket output.
+Disconnects, cancellation, writable errors, and a 15-second drain timeout release
+the wait and detach all temporary listeners. A stalled response is destroyed so
+the existing request owner cancels its provider and permissions. Writers enforce
+the same event validation and 8 MiB frame limit as readers. Terminal writes cannot
+turn a failed/disconnected stream into success or skip provider cleanup.
+
+Verified with `test/helperEventWriter.node.ts`, `test/helperStream.test.ts`, and
+`test/helperLifecycle.node.ts`: 15 passing tests. TypeScript and targeted ESLint
+pass. This bounds the HTTP output path; it does not claim that third-party SDK
+internal queues obey transport-level backpressure.
