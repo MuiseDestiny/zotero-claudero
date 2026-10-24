@@ -2,6 +2,7 @@ import {
   toolPolicyDenialReason,
   type AcademicToolPolicy,
 } from "../../shared/academicToolPolicy";
+import { canonicalJson } from "../../shared/canonicalJson";
 
 export interface PermissionRequest {
   id: string;
@@ -41,17 +42,6 @@ export interface ToolOptions {
 
 const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000;
 
-function stableValue(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableValue).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${stableValue(entry)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? String(value);
-}
-
 export class PermissionManager {
   private pendingRequests = new Map<string, PendingPermissionRequest>();
   private requestQueue: string[] = [];
@@ -79,7 +69,7 @@ export class PermissionManager {
 
   private rememberKey(toolName: string, input: unknown): string {
     const normalizedTool = toolName.replace(/\s+/g, " ").trim().toLowerCase();
-    return `${normalizedTool}:${stableValue(input)}`;
+    return `${normalizedTool}:${canonicalJson(input)}`;
   }
 
   isRemembered(toolName: string, input: unknown): boolean {

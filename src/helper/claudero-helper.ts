@@ -68,6 +68,7 @@ import {
   type HelperServerConfig,
 } from "./runtime/helperServerSecurity";
 import { isConfigRecord } from "../shared/configValidation";
+import { canonicalJson } from "../shared/canonicalJson";
 import type { AcademicToolPolicy } from "../shared/academicToolPolicy";
 import {
   isSensitiveDiagnosticKey,
@@ -1575,7 +1576,7 @@ async function handleOwnedSend(
   execution.endpoint = payload.zoteroEndpointUrl;
   assertExecution(execution);
   permissionManagers[provider].setScope(
-    JSON.stringify({
+    canonicalJson({
       provider,
       conversationId: payload.conversationId,
       workspace: manager.workspacePath,

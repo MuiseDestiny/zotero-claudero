@@ -3,6 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { throwIfAborted } from "../../shared/helperStream";
+import { sameJsonValue } from "../../shared/canonicalJson";
 import type { ImageInput } from "./MessageChannel";
 import type { PermissionManager } from "./PermissionManager";
 import type { ClauderoPermissionMode } from "./QueryOptionsBuilder";
@@ -443,8 +444,7 @@ export class DeepSeekPersistentQueryManager {
       (newConfig.nodePath !== undefined &&
         newConfig.nodePath !== this.config.nodePath) ||
       (newConfig.environment !== undefined &&
-        JSON.stringify(newConfig.environment) !==
-          JSON.stringify(this.config.environment)) ||
+        !sameJsonValue(newConfig.environment, this.config.environment)) ||
       (newConfig.conversationId !== undefined &&
         newConfig.conversationId !== this.config.conversationId)
     );

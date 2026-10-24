@@ -1,4 +1,5 @@
 import { throwIfAborted } from "../../shared/helperStream";
+import { sameJsonValue } from "../../shared/canonicalJson";
 import {
   query,
   type Options,
@@ -787,8 +788,7 @@ export class PersistentQueryManager {
       (newConfig.enableZoteroMcp !== undefined &&
         newConfig.enableZoteroMcp !== currentEnableZoteroMcp) ||
       (newConfig.mcpServers !== undefined &&
-        JSON.stringify(newConfig.mcpServers) !==
-          JSON.stringify(currentMcpServers || {})) ||
+        !sameJsonValue(newConfig.mcpServers, currentMcpServers || {})) ||
       (newConfig.mcpDisabledTools !== undefined &&
         JSON.stringify([...(newConfig.mcpDisabledTools || [])].sort()) !==
           JSON.stringify([...(currentMcpDisabledTools || [])].sort())) ||

@@ -11,7 +11,7 @@ This is an architectural study, not a copy of Magpie's gateway or UI.
 | 1     | One security boundary for every local route       | Validate request authority and browser origin in addition to bearer authentication; bound HTTP request parsing | Done    |
 | 2     | Bound and validate streamed messages              | Validate event fields, limit each NDJSON frame, reject truncated or invalid streams                            | Done    |
 | 3     | Tie stream lifetime to its consumer               | Honor writable backpressure and release waits on disconnect, cancellation, or timeout                          | Done    |
-| 4     | Compare configuration by meaning                  | Ignore object-key order without ignoring real value changes or ordered arguments                               | Planned |
+| 4     | Compare configuration by meaning                  | Ignore object-key order without ignoring real value changes or ordered arguments                               | Done    |
 | 5     | A known secret stays secret wherever it reappears | Scrub configured credential values and credentials embedded in URLs from diagnostics                           | Planned |
 | 6     | Users should not manage the application's runtime | Build a standalone Helper, prefer it when bundled, and retain the Node.js compatibility path                   | Planned |
 
@@ -105,3 +105,17 @@ Verified with `test/helperEventWriter.node.ts`, `test/helperStream.test.ts`, and
 `test/helperLifecycle.node.ts`: 15 passing tests. TypeScript and targeted ESLint
 pass. This bounds the HTTP output path; it does not claim that third-party SDK
 internal queues obey transport-level backpressure.
+
+### 4. Semantic Configuration
+
+One canonical JSON utility compares nested object maps without depending on key
+insertion order. Claude MCP configuration, Codex environment/MCP/session state,
+DeepSeek environment, and permission scope/input keys use it. Ordered arrays
+(including MCP command arguments) remain ordered. Real environment, endpoint,
+session, CLI, or argument changes still trigger their existing restart or
+approval invalidation behavior. Codex model/effort live updates stay live updates.
+
+Verified with `test/configEquality.node.ts`, `test/permissionManager.test.ts`,
+`test/runtimeEnvironment.test.ts`, `test/codexMcpConfig.test.ts`, and
+`test/deepseekRuntime.node.ts`: 28 passing tests. TypeScript and targeted ESLint
+pass. No live provider session or external credential is needed for these tests.

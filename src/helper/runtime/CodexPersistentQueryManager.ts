@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { throwIfAborted } from "../../shared/helperStream";
+import { sameJsonValue } from "../../shared/canonicalJson";
 import type { ImageInput } from "./MessageChannel";
 import type {
   PermissionManager,
@@ -1406,11 +1407,12 @@ export class CodexPersistentQueryManager {
       (newConfig.codexPath !== undefined &&
         newConfig.codexPath !== this.config.codexPath) ||
       (newConfig.environment !== undefined &&
-        JSON.stringify(newConfig.environment) !==
-          JSON.stringify(this.config.environment)) ||
+        !sameJsonValue(newConfig.environment, this.config.environment)) ||
       (newConfig.mcpServers !== undefined &&
-        JSON.stringify(newConfig.mcpServers || {}) !==
-          JSON.stringify(this.config.mcpServers || {})) ||
+        !sameJsonValue(
+          newConfig.mcpServers || {},
+          this.config.mcpServers || {},
+        )) ||
       (newConfig.mcpDisabledTools !== undefined &&
         JSON.stringify([...(newConfig.mcpDisabledTools || [])].sort()) !==
           JSON.stringify([...(this.config.mcpDisabledTools || [])].sort())) ||
@@ -1424,8 +1426,10 @@ export class CodexPersistentQueryManager {
       (newConfig.codexWslDistro !== undefined &&
         newConfig.codexWslDistro !== this.config.codexWslDistro) ||
       (newConfig.providerState !== undefined &&
-        JSON.stringify(newConfig.providerState || {}) !==
-          JSON.stringify(this.getComparableProviderState()))
+        !sameJsonValue(
+          newConfig.providerState || {},
+          this.getComparableProviderState(),
+        ))
     );
   }
 
