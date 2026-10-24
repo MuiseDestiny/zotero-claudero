@@ -176,13 +176,14 @@ for a JavaScript engine. No standalone release is published as part of the study
 
 ### Consolidated Local Checks
 
-- `npm run test:runtime`: 198 Mocha cases and 5 Node test cases pass.
+- `npm run test:runtime`: 203 Mocha cases pass.
 - `npm run lint:check` and `tsc --noEmit`: pass.
 - Portable `npm run check:release`, mock Helper communication, and all three
   evidence contract/golden/PDF-audit smokes: pass.
 - `npm run build:standalone`, `node scripts/verify-release.mjs`, and
   `npm run test:helper:standalone`: pass on macOS arm64, including separate
   DeepSeek compatibility with an explicitly selected real Node runtime.
-- The Zotero browser runner initially stops before application launch because
-  the existing `contextMenu.test.ts` imports Node-only test modules. This is
-  distinct from the passing runtime suites and is not counted as browser success.
+- Zotero 11 browser tests with an isolated test profile/library: 266 pass.
+  The existing context-menu tests now use the same Mocha/Chai harness in Node and
+  Gecko instead of importing Node-only modules into the browser. UTF-8 rejection
+  asserts the error type rather than Node-specific decoder error wording.

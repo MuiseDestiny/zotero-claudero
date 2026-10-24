@@ -77,7 +77,10 @@ describe("bounded helper event stream", function () {
   it("rejects malformed fields, JSON, UTF-8, and invalid terminal sequences", async function () {
     await failure('{"type":"text","text":{}}\n', /Invalid helper event/);
     await failure('{"type":"text"\n', /SyntaxError/);
-    await failure(Uint8Array.of(0xff, 10), /encoded data|encoding/i);
+    const invalidUtf8 = await read(new Response(Uint8Array.of(0xff, 10))).catch(
+      (error) => error,
+    );
+    assert.instanceOf(invalidUtf8, TypeError);
     await failure(
       '{"type":"ready","requestId":"other"}\n',
       /request ID mismatch/,
