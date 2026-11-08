@@ -75,8 +75,8 @@ XPI is approximately 28 MiB. The standard six-target XPI is approximately 204 Mi
 keeping the existing single cross-platform download/update link
 usable without Node. Only the host's matching runtime is extracted into the
 profile cache. Targeted packages are suitable for local use, not the shared
-cross-platform update channel. No new package is published by this work; an older
-downloaded XPI does not acquire a bundled runtime automatically.
+cross-platform update channel. Standard releases starting with 0.1.0 include the
+bundled runtimes; an older downloaded XPI needs updating to gain them.
 
 For an intentional lightweight Node-dependent package, use:
 

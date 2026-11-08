@@ -61,7 +61,12 @@ export default defineConfig({
 
   release: {
     github: {
-      releaseNote: () => readFileSync("CHANGELOG.md", "utf8"),
+      releaseNote: () =>
+        readFileSync("CHANGELOG.md", "utf8")
+          .split(/^## /m)
+          .find((section) => section.startsWith(`${pkg.version}\n`))
+          ?.replace(/^/, "## ")
+          .trim() || `Release ${pkg.version}`,
     },
   },
 

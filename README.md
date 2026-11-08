@@ -48,8 +48,9 @@ instructions. If DeepSeek is missing, use **Install DeepSeek Harness** in
 Claudero, or install it with `npm install -g @deepseek-ai/dsh@latest`.
 DeepSeek support is experimental.
 
-This applies to newly built standard packages; previously downloaded or
-explicitly portable packages still need **Node.js 20+** for the Helper.
+This applies to standard packages starting with **0.1.0**; earlier release
+candidates or explicitly portable packages still need **Node.js 20+** for the
+Helper.
 
 On Windows, Codex can also run in WSL. Select **WSL** in Codex settings and
 complete login inside the selected distribution. Its Zotero MCP bridge still

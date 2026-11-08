@@ -39,8 +39,8 @@ Claude Code 和 Codex 请按各自官方流程安装并完成认证。DeepSeek �
 点击 Claudero 中的 **Install DeepSeek Harness**，也可以执行
 `npm install -g @deepseek-ai/dsh@latest`。DeepSeek 集成属于实验性功能。
 
-上述免 Node 行为适用于新构建的标准安装包；此前下载的旧包或明确选择的便携脚本版
-仍需 **Node.js 20+** 才能运行 Helper。本次本地开发不会自动更新已公开的安装包。
+上述免 Node 行为适用于 **0.1.0 起的标准安装包**；此前下载的候选版或明确选择的便携
+脚本版仍需 **Node.js 20+** 才能运行 Helper。
 
 Windows 上也可以在 WSL 中运行 Codex：在设置中选择 **WSL**，并在所选发行版内登录。
 Zotero MCP 桥仍需要 WSL 内的 Node.js；自定义 MCP 服务也保留其自身运行时要求。
