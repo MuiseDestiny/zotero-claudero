@@ -1,5 +1,6 @@
 import hljs from "highlight.js/lib/common";
 import MarkdownIt from "markdown-it";
+import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import { markdownItKatex } from "../shared/markdownKatexPlugin";
 import { normalizeMarkdownStrongSpacing } from "../shared/markdownNormalization";
 import {
@@ -33,9 +34,13 @@ const markdownRenderer = new MarkdownIt({
     }
     return `<pre class="hljs"><code>${escapeHtml(code)}</code></pre>`;
   },
-}).use(markdownItKatex, {
-  throwOnError: false,
-});
+})
+  // CommonMark will not close `**` after CJK punctuation when a CJK letter
+  // follows (e.g. `**结论：**后文`), which model output in Chinese does often.
+  .use(markdownItCjkFriendly)
+  .use(markdownItKatex, {
+    throwOnError: false,
+  });
 
 const evidenceScheme = "claudero-evidence:";
 

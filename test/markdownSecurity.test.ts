@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import MarkdownIt from "markdown-it";
+import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import katex from "katex";
 import { markdownItKatex } from "../src/shared/markdownKatexPlugin";
 import { normalizeMarkdownStrongSpacing } from "../src/shared/markdownNormalization";
@@ -8,7 +9,29 @@ describe("Markdown and KaTeX rendering security", function () {
   const renderer = new MarkdownIt({
     html: false,
     linkify: true,
-  }).use(markdownItKatex, { throwOnError: false });
+  })
+    .use(markdownItCjkFriendly)
+    .use(markdownItKatex, { throwOnError: false });
+
+  it("closes bold that ends in CJK punctuation before a CJK letter", function () {
+    const cases: Array<[string, string]> = [
+      ["**研究问题：**能否利用卫星数据？", "<strong>研究问题：</strong>能否"],
+      ["这是**“引号内容”**的测试", "<strong>“引号内容”</strong>的测试"],
+      ["数据**来自表 1。**下一句", "<strong>来自表 1。</strong>下一句"],
+      ["使用**PDF**文件", "<strong>PDF</strong>文件"],
+      ["结论**显著（$p<0.05$）**。", "</strong>。"],
+    ];
+    for (const [source, expected] of cases) {
+      const html = renderer.renderInline(source);
+      assert.include(html, expected, source);
+      assert.notInclude(html, "**", source);
+    }
+  });
+
+  it("keeps CommonMark emphasis rules for non-CJK text", function () {
+    assert.equal(renderer.renderInline("a**b**c"), "a<strong>b</strong>c");
+    assert.equal(renderer.renderInline("2 ** 3 ** 4"), "2 ** 3 ** 4");
+  });
 
   it("renders normal inline and block math", function () {
     const html = renderer.render(
